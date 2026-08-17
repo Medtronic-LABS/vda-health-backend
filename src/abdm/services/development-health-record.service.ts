@@ -18,7 +18,7 @@ import {
  *   - This service NEVER calls the internet or any ABDM endpoint.
  *   - It returns deterministic synthetic health records for testing.
  *   - It does NOT represent real ABDM consent, FHIR payloads, or HIE flows.
- *   - All data is clearly synthetic and must not be used in production.
+ *   - All data is clearly synthetic and marked with [SYNTHETIC-DEV-FIXTURE].
  *
  * Swapping this for AbdmHealthRecordService in production requires:
  *   DECISION_REQUIRED:
@@ -115,7 +115,7 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
       // --- MEDICATIONS ---
       {
         category: HealthRecordCategory.MEDICATION,
-        sourceRef: 'dev-src-med-001',
+        sourceRef: 'dev-src-med-001 [SYNTHETIC-DEV-FIXTURE]',
         fetchedAt: now,
         payload: {
           medicationName: 'Metformin',
@@ -130,7 +130,7 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
       },
       {
         category: HealthRecordCategory.MEDICATION,
-        sourceRef: 'dev-src-med-002',
+        sourceRef: 'dev-src-med-002 [SYNTHETIC-DEV-FIXTURE]',
         fetchedAt: now,
         payload: {
           medicationName: 'Amlodipine',
@@ -145,7 +145,7 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
       },
       {
         category: HealthRecordCategory.MEDICATION,
-        sourceRef: 'dev-src-med-003-old',
+        sourceRef: 'dev-src-med-003-old [SYNTHETIC-DEV-FIXTURE]',
         fetchedAt: now,
         payload: {
           medicationName: 'Paracetamol',
@@ -155,14 +155,14 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
           startDate: daysAgo(200),
           endDate: daysAgo(195),
           status: 'completed',
-          date: daysAgo(200), // used for staleness filtering
+          date: daysAgo(200),
         },
       },
 
       // --- PRESCRIPTIONS ---
       {
         category: HealthRecordCategory.PRESCRIPTION,
-        sourceRef: 'dev-src-presc-001',
+        sourceRef: 'dev-src-presc-001 [SYNTHETIC-DEV-FIXTURE]',
         fetchedAt: now,
         payload: {
           medicationName: 'Metformin',
@@ -175,7 +175,7 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
       },
       {
         category: HealthRecordCategory.PRESCRIPTION,
-        sourceRef: 'dev-src-presc-002',
+        sourceRef: 'dev-src-presc-002 [SYNTHETIC-DEV-FIXTURE]',
         fetchedAt: now,
         payload: {
           medicationName: 'Amlodipine',
@@ -190,7 +190,7 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
       // --- DIAGNOSES ---
       {
         category: HealthRecordCategory.DIAGNOSIS,
-        sourceRef: 'dev-src-diag-001',
+        sourceRef: 'dev-src-diag-001 [SYNTHETIC-DEV-FIXTURE]',
         fetchedAt: now,
         payload: {
           conditionName: 'Type 2 Diabetes Mellitus',
@@ -202,7 +202,7 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
       },
       {
         category: HealthRecordCategory.DIAGNOSIS,
-        sourceRef: 'dev-src-diag-002',
+        sourceRef: 'dev-src-diag-002 [SYNTHETIC-DEV-FIXTURE]',
         fetchedAt: now,
         payload: {
           conditionName: 'Essential Hypertension',
@@ -216,7 +216,7 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
       // --- LAB REPORTS ---
       {
         category: HealthRecordCategory.LAB_REPORT,
-        sourceRef: 'dev-src-lab-001',
+        sourceRef: 'dev-src-lab-001 [SYNTHETIC-DEV-FIXTURE]',
         fetchedAt: now,
         payload: {
           testName: 'HbA1c',
@@ -230,7 +230,7 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
       },
       {
         category: HealthRecordCategory.LAB_REPORT,
-        sourceRef: 'dev-src-lab-002',
+        sourceRef: 'dev-src-lab-002 [SYNTHETIC-DEV-FIXTURE]',
         fetchedAt: now,
         payload: {
           testName: 'Fasting Blood Glucose',
@@ -244,7 +244,21 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
       },
       {
         category: HealthRecordCategory.LAB_REPORT,
-        sourceRef: 'dev-src-lab-003-old',
+        sourceRef: 'dev-src-lab-003 [SYNTHETIC-DEV-FIXTURE]',
+        fetchedAt: now,
+        payload: {
+          testName: 'Hemoglobin',
+          value: '13.5',
+          unit: 'g/dL',
+          referenceRange: '12.0–15.5',
+          interpretation: 'normal',
+          observationDate: daysAgo(30),
+          date: daysAgo(30),
+        },
+      },
+      {
+        category: HealthRecordCategory.LAB_REPORT,
+        sourceRef: 'dev-src-lab-004-old [SYNTHETIC-DEV-FIXTURE]',
         fetchedAt: now,
         payload: {
           testName: 'Complete Blood Count',
@@ -260,7 +274,7 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
       // --- INVESTIGATIONS ---
       {
         category: HealthRecordCategory.INVESTIGATION,
-        sourceRef: 'dev-src-inv-001',
+        sourceRef: 'dev-src-inv-001 [SYNTHETIC-DEV-FIXTURE]',
         fetchedAt: now,
         payload: {
           testName: 'ECG',
@@ -276,7 +290,7 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
       // --- ALLERGIES ---
       {
         category: HealthRecordCategory.ALLERGY,
-        sourceRef: 'dev-src-allergy-001',
+        sourceRef: 'dev-src-allergy-001 [SYNTHETIC-DEV-FIXTURE]',
         fetchedAt: now,
         payload: {
           allergen: 'Penicillin',
@@ -288,7 +302,7 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
       },
       {
         category: HealthRecordCategory.ALLERGY,
-        sourceRef: 'dev-src-allergy-002',
+        sourceRef: 'dev-src-allergy-002 [SYNTHETIC-DEV-FIXTURE]',
         fetchedAt: now,
         payload: {
           allergen: 'Sulfonamides',

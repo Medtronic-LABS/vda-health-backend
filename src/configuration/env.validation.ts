@@ -55,30 +55,118 @@ export class EnvironmentVariables {
   @IsOptional()
   REDIS_PASSWORD?: string;
 
+  @IsOptional()
+  ABDM_ENABLED = false;
+
   @IsString()
-  SARVAM_API_KEY!: string;
+  @IsOptional()
+  ABDM_BASE_URL = 'https://dev.abdm.gov.in';
+
+  @IsString()
+  @IsOptional()
+  ABDM_CLIENT_ID?: string;
+
+  @IsString()
+  @IsOptional()
+  ABDM_CLIENT_SECRET?: string;
+
+  @IsString()
+  @IsOptional()
+  ABDM_HIU_ID?: string;
+
+  @IsString()
+  @IsOptional()
+  ABDM_X_CM_ID = 'sbx';
+
+  @IsString()
+  @IsOptional()
+  ABDM_CALLBACK_URL = 'http://localhost:3000';
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  ABDM_TIMEOUT_MS = 10000;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  ABDM_MAX_RETRIES = 2;
+
+  @IsString()
+  @IsOptional()
+  SARVAM_API_KEY?: string;
 
   @IsString()
   @IsOptional()
   SARVAM_BASE_URL = 'https://api.sarvam.ai';
 
   @IsString()
-  SARVAM_LLM_MODEL!: string;
+  @IsOptional()
+  SARVAM_LLM_MODEL = 'sarvam-llm-v1';
 
   @IsString()
-  SARVAM_TRANSLATION_MODEL!: string;
+  @IsOptional()
+  SARVAM_MODEL = 'mayura:v1';
 
   @IsString()
-  SARVAM_SAARAS_STT_MODEL!: string;
+  @IsOptional()
+  SARVAM_TRANSLATION_MODEL = 'sarvam-translate-v1';
 
   @IsString()
-  SARVAM_BULBUL_TTS_MODEL!: string;
+  @IsOptional()
+  SARVAM_SAARAS_STT_MODEL = 'sarvam-saaras-stt-v1';
 
   @IsString()
-  GEMINI_API_KEY!: string;
+  @IsOptional()
+  SARVAM_BULBUL_TTS_MODEL = 'sarvam-bulbul-tts-v1';
+
+  @IsOptional()
+  SARVAM_ENABLED = false;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  SARVAM_TIMEOUT_MS = 10000;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  SARVAM_MAX_RETRIES = 2;
 
   @IsString()
+  @IsOptional()
+  GEMINI_API_KEY?: string;
+
+  @IsString()
+  @IsOptional()
   GEMINI_MODEL_ID = 'gemini-3.5-flash';
+
+  @IsString()
+  @IsOptional()
+  GEMINI_MODEL = 'gemini-3.5-flash';
+
+  @IsOptional()
+  AI_PROVIDER_ENABLED = false;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  GEMINI_TIMEOUT_MS = 10000;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  GEMINI_MAX_RETRIES = 2;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  AI_MAX_INPUT_LENGTH = 2000;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  AI_MAX_OUTPUT_LENGTH = 2000;
 
   @Type(() => Number)
   @IsNumber()
@@ -139,15 +227,15 @@ export class EnvironmentVariables {
 
   @IsString()
   @IsOptional()
-  DEV_AUTH_CONTEXT_COMPLETENESS = 'COMPLETE';
+  DEV_AUTH_CONTEXT_COMPLETENESS?: string;
 
   @IsString()
   @IsOptional()
-  AUDIT_HMAC_KEY_ID = 'v1';
+  AUDIT_HMAC_KEY_ID?: string;
 
   @IsString()
   @IsOptional()
-  AUDIT_HMAC_SECRET = 'dev-hmac-secret-key-123';
+  AUDIT_HMAC_SECRET?: string;
 
   @Type(() => Number)
   @IsNumber()
@@ -160,16 +248,18 @@ export class EnvironmentVariables {
   SESSION_EXPIRED_HTTP_STATUS = 410;
 }
 
-export function validate(config: Record<string, any>) {
+export function validate(config: Record<string, unknown>) {
   const validatedConfig = plainToInstance(EnvironmentVariables, config, {
     enableImplicitConversion: true,
   });
+
   const errors = validateSync(validatedConfig, {
     skipMissingProperties: false,
   });
 
   if (errors.length > 0) {
-    throw new Error(`Config validation error: ${errors.toString()}`);
+    throw new Error(errors.toString());
   }
+
   return validatedConfig;
 }

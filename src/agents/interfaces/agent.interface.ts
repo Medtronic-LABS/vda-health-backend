@@ -1,28 +1,22 @@
-export interface AgentConfig {
+import { ClinicalContext } from '../../abdm/models/clinical-context.models';
+import { IntentMetadata } from '../../ai/intents/intent.types';
+
+export interface AgentProcessRequest {
+  sessionId: string;
+  inputText: string;
+  intentMetadata: IntentMetadata;
+  clinicalContext?: ClinicalContext | null;
+  correlationId: string;
+}
+
+export interface AgentProcessResult {
   agentId: string;
-  version: string;
-  purpose: string;
-  allowedTools: string[];
-  allowedKnowledgeDomains: string[];
-  systemInstructions: string;
-  outputContract: Record<string, any>;
-  safetyConstraints: Record<string, any>;
-}
-
-export interface AgentInput {
-  query: string;
-  context: Record<string, any>;
-  history: any[];
-}
-
-export interface AgentOutput {
   responseType: string;
-  payload: Record<string, any>;
-  confidence?: number;
-  metadata?: Record<string, any>;
+  content: Record<string, any>;
+  suggestedFollowUp?: string[];
 }
 
 export interface IAgent {
-  getConfig(): AgentConfig;
-  execute(input: AgentInput): Promise<AgentOutput>;
+  readonly agentId: string;
+  process(request: AgentProcessRequest): Promise<AgentProcessResult>;
 }
