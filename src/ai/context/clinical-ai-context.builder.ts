@@ -125,14 +125,28 @@ export class ClinicalAiContextBuilder {
   }
 
   /**
-   * Formats the minimized context into a system prompt string for Gemini/LLM.
+   * Formats the minimized context and optional knowledge context into prompt context string.
    */
-  static formatPromptContext(minContext: MinimizedAiContext): string {
-    return `[AUTHORIZED CLINICAL CONTEXT]
+  static formatPromptContext(
+    minContext: MinimizedAiContext,
+    knowledgePromptContext?: string,
+  ): string {
+    const patientBlock = `[AUTHORIZED PATIENT CLINICAL CONTEXT]
 Intent: ${minContext.intent}
 Language: ${minContext.language}
 Records Available: ${minContext.hasRecords ? 'YES' : 'NO (Empty or Unavailable)'}
 Unavailable Categories: ${minContext.unavailableCategories.join(', ') || 'None'}
-Context Payload: ${JSON.stringify(minContext, null, 2)}`;
+Context Payload: ${JSON.stringify(minContext, null, 2)}
+[/AUTHORIZED PATIENT CLINICAL CONTEXT]`;
+
+    if (!knowledgePromptContext || !knowledgePromptContext.trim()) {
+      return patientBlock;
+    }
+
+    const knowledgeBlock = `[AUTHORIZED GENERAL MEDICAL KNOWLEDGE]
+${knowledgePromptContext.trim()}
+[/AUTHORIZED GENERAL MEDICAL KNOWLEDGE]`;
+
+    return `${patientBlock}\n\n${knowledgeBlock}`;
   }
 }

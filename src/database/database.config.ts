@@ -8,6 +8,9 @@ import { ConsentEvent } from './entities/consent-event.entity';
 import { Session } from './entities/session.entity';
 import { ConversationTurn } from './entities/conversation-turn.entity';
 import { AuditEvent } from './entities/audit-event.entity';
+import { KnowledgeDocument } from './entities/knowledge-document.entity';
+import { KnowledgeChunk } from './entities/knowledge-chunk.entity';
+import { KnowledgeEmbedding } from './entities/knowledge-embedding.entity';
 
 @Injectable()
 export class DatabaseConfigService implements TypeOrmOptionsFactory {
@@ -30,6 +33,9 @@ export class DatabaseConfigService implements TypeOrmOptionsFactory {
         Session,
         ConversationTurn,
         AuditEvent,
+        KnowledgeDocument,
+        KnowledgeChunk,
+        KnowledgeEmbedding,
       ],
       synchronize: false,
       migrationsRun: false,

@@ -10,6 +10,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { AuthGuard } from '../auth/auth.guard';
+import { TenantRateLimiterGuard } from '../common/guards/tenant-rate-limiter.guard';
 import { IdempotencyInterceptor } from '../common/idempotency.interceptor';
 import { SessionsService } from './sessions.service';
 import { CreateSessionDto } from './dto/create-session.dto';
@@ -24,7 +25,7 @@ export class SessionsController {
   ) {}
 
   @Post()
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, TenantRateLimiterGuard)
   @UseInterceptors(IdempotencyInterceptor)
   async create(
     @Body() dto: CreateSessionDto,

@@ -63,7 +63,14 @@ jest.mock('@nestjs/typeorm', () => {
     static forFeature = jest.fn().mockImplementation((entities) => {
       const providers = (entities || []).map((entity: any) => ({
         provide: original.getRepositoryToken(entity),
-        useValue: {},
+        useValue: {
+          find: jest.fn().mockResolvedValue([]),
+          findOne: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockImplementation((dto) => dto),
+          save: jest.fn().mockImplementation((dto) => Promise.resolve({ id: 'mock-id', ...dto })),
+          delete: jest.fn().mockResolvedValue({ affected: 1 }),
+          remove: jest.fn().mockResolvedValue({}),
+        },
       }));
       return {
         module: class {},

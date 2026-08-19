@@ -4,6 +4,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
@@ -16,6 +17,8 @@ import { CreateTurnDto } from './dto/create-turn.dto';
 import { IPiiProtectionService } from '../pii/interfaces/pii-protection-service.interface';
 import { ISafetyGate } from '../safety/interfaces/safety-gate.interface';
 import { IConversationProcessor } from './interfaces/conversation-processor.interface';
+import { ConversationResponseFormatter } from './formatters/conversation-response.formatter';
+import { MetricsService } from '../observability/metrics.service';
 
 @Injectable()
 export class TurnsService {
@@ -29,6 +32,10 @@ export class TurnsService {
     private readonly safetyGate: ISafetyGate,
     @Inject('IConversationProcessor')
     private readonly processor: IConversationProcessor,
+    @Optional()
+    private readonly responseFormatter?: ConversationResponseFormatter,
+    @Optional()
+    private readonly metricsService?: MetricsService,
   ) {}
 
   async registerTurn(
@@ -450,6 +457,17 @@ export class TurnsService {
       });
     }
 
+    if (this.responseFormatter) {
+      const formatted = this.responseFormatter.formatResponse({
+        responseType,
+        content,
+        intent,
+        selectedAgent,
+        safetyStatus,
+      });
+      content = formatted.content;
+    }
+
     // 8. Resolve the turn inside Transaction 2
     const resolved = await this.resolveTurn(
       turn.id,
@@ -464,6 +482,22 @@ export class TurnsService {
       identity,
       finalStatus,
     );
+
+    if (this.metricsService) {
+      try {
+        this.metricsService.recordTurn({
+          intentCategory: intent || 'UNKNOWN',
+          responseType,
+          safetyStatus,
+          durationMs: resolved.latency,
+        });
+        if (safetyStatus === 'WITHHELD') {
+          this.metricsService.recordSafetyWithheld('MEDICAL_SAFETY');
+        }
+      } catch {
+        // Fail-safe: metrics collection never blocks patient response
+      }
+    }
 
     return {
       turn_number: resolved.turnNumber,

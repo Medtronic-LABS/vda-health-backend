@@ -15,6 +15,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { AuthGuard } from '../auth/auth.guard';
+import { TenantRateLimiterGuard } from '../common/guards/tenant-rate-limiter.guard';
 import { IdempotencyInterceptor } from '../common/idempotency.interceptor';
 import { HostIdentity } from '../auth/host-identity.context';
 import { CreateTurnDto } from './dto/create-turn.dto';
@@ -27,7 +28,7 @@ export class TurnsController {
   constructor(private readonly turnsService: TurnsService) {}
 
   @Post()
-  @UseGuards(AuthGuard)
+  @UseGuards(AuthGuard, TenantRateLimiterGuard)
   @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({ summary: 'Process a new conversation turn for a session' })
   @ApiHeader({

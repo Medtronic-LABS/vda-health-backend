@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { ConfigurationService } from './configuration/configuration.service';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -8,7 +9,13 @@ async function bootstrap() {
 
   const configService = app.get(ConfigurationService);
   const prefix = configService.apiPrefix.replace(/^\//, '');
-  app.setGlobalPrefix(prefix);
+  app.setGlobalPrefix(prefix, { exclude: ['metrics'] });
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+    }),
+  );
   app.enableCors();
 
   // Setup Swagger API Documentation dynamically from decorators

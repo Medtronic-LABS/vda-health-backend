@@ -54,6 +54,18 @@ export class RedisService implements OnApplicationShutdown {
     await this.redis.del(key);
   }
 
+  async incr(key: string): Promise<number> {
+    return this.redis.incr(key);
+  }
+
+  async ttl(key: string): Promise<number> {
+    return this.redis.ttl(key);
+  }
+
+  async expire(key: string, seconds: number): Promise<number> {
+    return this.redis.expire(key, seconds);
+  }
+
   /**
    * Acquires a distributed lock using NX (Not Exists) and EX (Expiration).
    * Ensures mutual exclusion for a specific TTL.
@@ -123,6 +135,10 @@ export class RedisService implements OnApplicationShutdown {
 
   async onApplicationShutdown() {
     this.logger.log('Disconnecting from Redis...');
-    await this.redis.quit();
+    try {
+      this.redis.disconnect();
+    } catch {
+      // Ignore shutdown errors
+    }
   }
 }

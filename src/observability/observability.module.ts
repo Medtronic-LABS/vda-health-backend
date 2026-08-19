@@ -1,8 +1,12 @@
 import { Module } from '@nestjs/common';
-import { CorrelationIdMiddleware } from './correlation-id.middleware';
+import { MetricsService } from './metrics.service';
+import { MetricsController } from './metrics.controller';
+import { ConfigurationModule } from '../configuration/configuration.module';
 
 @Module({
-  providers: [CorrelationIdMiddleware],
-  exports: [CorrelationIdMiddleware],
+  imports: [ConfigurationModule],
+  controllers: [MetricsController],
+  providers: [MetricsService],
+  exports: [MetricsService],
 })
 export class ObservabilityModule {}

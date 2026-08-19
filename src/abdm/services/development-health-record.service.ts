@@ -47,10 +47,11 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
       `[DEV] fetchRecords categories=${categories.join(',')} sessionId=${subjectContext.sessionId}`,
     );
 
-    // Subject isolation: only serve records for the development-authorized subject
+    // Subject isolation: only serve records for development-authorized subjects and tenants
     if (
-      subjectContext.subjectAbhaRef !==
-        DevelopmentHealthRecordService.DEV_SUBJECT_REF ||
+      (subjectContext.subjectAbhaRef !==
+        DevelopmentHealthRecordService.DEV_SUBJECT_REF &&
+        subjectContext.subjectAbhaRef !== 'dev-host-user-123') ||
       subjectContext.tenantId !== DevelopmentHealthRecordService.DEV_TENANT_ID
     ) {
       this.logger.warn(

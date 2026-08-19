@@ -264,4 +264,139 @@ export class ConfigurationService {
   get sessionExpiredHttpStatus(): number {
     return this.configService.get<number>('SESSION_EXPIRED_HTTP_STATUS') || 410;
   }
+
+  // ---------------------------------------------------------------------------
+  // Phase 9 Operationalization & Telemetry Configuration
+  // ---------------------------------------------------------------------------
+
+  get metricsEnabled(): boolean {
+    const val = this.configService.get<string | boolean>('METRICS_ENABLED');
+    if (val === undefined || val === null) return true;
+    return String(val).toLowerCase() !== 'false';
+  }
+
+  get rateLimitEnabled(): boolean {
+    const val = this.configService.get<string | boolean>('RATE_LIMIT_ENABLED');
+    if (val === undefined || val === null) return true;
+    return String(val).toLowerCase() !== 'false';
+  }
+
+  get rateLimitFailOpen(): boolean {
+    const val = this.configService.get<string | boolean>(
+      'RATE_LIMIT_FAIL_OPEN',
+    );
+    if (val === undefined || val === null) return true;
+    return String(val).toLowerCase() !== 'false';
+  }
+
+  get rateLimitTenantMaxRequests(): number {
+    return (
+      Number(
+        this.configService.get<number>('RATE_LIMIT_TENANT_MAX_REQUESTS'),
+      ) || 100
+    );
+  }
+
+  get rateLimitSessionMaxRequests(): number {
+    return (
+      Number(
+        this.configService.get<number>('RATE_LIMIT_SESSION_MAX_REQUESTS'),
+      ) || 20
+    );
+  }
+
+  get rateLimitWindowSeconds(): number {
+    return (
+      Number(this.configService.get<number>('RATE_LIMIT_WINDOW_SECONDS')) || 60
+    );
+  }
+
+  get healthCacheTtlMs(): number {
+    return (
+      Number(this.configService.get<number>('HEALTH_CACHE_TTL_MS')) || 2000
+    );
+  }
+
+  get auditExportEnabled(): boolean {
+    const val = this.configService.get<string | boolean>(
+      'AUDIT_EXPORT_ENABLED',
+    );
+    if (val === undefined || val === null) return true;
+    return String(val).toLowerCase() !== 'false';
+  }
+
+  get auditExportIntervalMs(): number {
+    return (
+      Number(this.configService.get<number>('AUDIT_EXPORT_INTERVAL_MS')) || 5000
+    );
+  }
+
+  get auditExportBatchSize(): number {
+    return (
+      Number(this.configService.get<number>('AUDIT_EXPORT_BATCH_SIZE')) || 50
+    );
+  }
+
+  get auditExportMaxRetries(): number {
+    return (
+      Number(this.configService.get<number>('AUDIT_EXPORT_MAX_RETRIES')) || 3
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Phase 11 Knowledge RAG & Agent Platform Configuration
+  // ---------------------------------------------------------------------------
+
+  get knowledgeRagEnabled(): boolean {
+    const val = this.configService.get<string | boolean>(
+      'KNOWLEDGE_RAG_ENABLED',
+    );
+    if (val === undefined || val === null) return true;
+    return String(val).toLowerCase() === 'true';
+  }
+
+  get knowledgeEmbeddingProvider(): string {
+    return (
+      this.configService.get<string>('KNOWLEDGE_EMBEDDING_PROVIDER') || 'local'
+    );
+  }
+
+  get knowledgeEmbeddingModel(): string {
+    return (
+      this.configService.get<string>('KNOWLEDGE_EMBEDDING_MODEL') ||
+      'all-MiniLM-L6-v2'
+    );
+  }
+
+  get knowledgeEmbeddingDimension(): number {
+    return (
+      Number(this.configService.get<number>('KNOWLEDGE_EMBEDDING_DIMENSION')) ||
+      384
+    );
+  }
+
+  get knowledgeMaxResults(): number {
+    return Number(this.configService.get<number>('KNOWLEDGE_MAX_RESULTS')) || 5;
+  }
+
+  get knowledgeMaxChunkLength(): number {
+    return (
+      Number(this.configService.get<number>('KNOWLEDGE_MAX_CHUNK_LENGTH')) ||
+      1200
+    );
+  }
+
+  get knowledgeMinRelevanceScore(): number {
+    return (
+      Number(this.configService.get<number>('KNOWLEDGE_MIN_RELEVANCE_SCORE')) ||
+      0.7
+    );
+  }
+
+  get knowledgeMaxContextLength(): number {
+    return (
+      Number(this.configService.get<number>('KNOWLEDGE_MAX_CONTEXT_LENGTH')) ||
+      5000
+    );
+  }
 }

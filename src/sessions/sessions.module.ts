@@ -8,6 +8,8 @@ import { AuthModule } from '../auth/auth.module';
 import { RedisModule } from '../redis/redis.module';
 import { ConfigurationModule } from '../configuration/configuration.module';
 
+import { TenantRateLimiterGuard } from '../common/guards/tenant-rate-limiter.guard';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([Session]),
@@ -16,7 +18,7 @@ import { ConfigurationModule } from '../configuration/configuration.module';
     RedisModule,
     ConfigurationModule,
   ],
-  providers: [SessionsService],
+  providers: [SessionsService, TenantRateLimiterGuard],
   controllers: [SessionsController],
   exports: [SessionsService],
 })

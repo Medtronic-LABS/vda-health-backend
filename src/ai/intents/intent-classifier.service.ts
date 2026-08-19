@@ -137,7 +137,7 @@ export class IntentClassifierService implements IIntentClassifier {
 
     // 2. MEDICATION_QUERY vs PRESCRIPTION_QUERY
     const hasMedKeyword =
-      /दवाई|दवा|दवाइयाँ|दवाइयो|medication|medicine|medicines|tablet|tablets|dose|dosage|dawa/i.test(
+      /दवाई|दवा|दवाइयां|दवाइया|दवाइयाँ|दवाइयों|दवाइयो|medication|medicine|medicines|tablet|tablets|dose|dosage|dawa/i.test(
         lower,
       );
     const hasPrescriptionKeyword =
@@ -177,12 +177,35 @@ export class IntentClassifierService implements IIntentClassifier {
       return { intent: IntentType.ALLERGY_QUERY, confidence: 0.95 };
     }
 
-    // 6. GENERAL_HEALTH_QUERY
+    // 6. GOVERNMENT_SCHEME_QUERY
+    if (
+      /योजना|आयुष्मान|पीएमजेएवाई|pmjay|pm-jay|ayushman|scheme|insurance|card|बीमा/i.test(
+        lower,
+      )
+    ) {
+      return { intent: IntentType.GOVERNMENT_SCHEME_QUERY, confidence: 0.95 };
+    }
+
+    // 7. FACILITY_QUERY
+    if (
+      /अस्पताल|क्लिनिक|अस्पतालों|phc|chc|facility|facilities|hospital|hospitals|clinic/i.test(
+        lower,
+      )
+    ) {
+      return { intent: IntentType.FACILITY_QUERY, confidence: 0.95 };
+    }
+
+    // 8. REFERRAL_QUERY
+    if (/रेफर|रेफरल|refer|referral|pathway/i.test(lower)) {
+      return { intent: IntentType.REFERRAL_QUERY, confidence: 0.95 };
+    }
+
+    // 9. GENERAL_HEALTH_QUERY
     if (/स्वास्थ्य|सेहत|health|fitness|wellness|general health/i.test(lower)) {
       return { intent: IntentType.GENERAL_HEALTH_QUERY, confidence: 0.88 };
     }
 
-    // 7. CLARIFICATION
+    // 10. CLARIFICATION
     if (
       /क्या मतलब|फिर से बताएं|समझ नहीं आया|repeat|explain|clarify|what do you mean/i.test(
         lower,

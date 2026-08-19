@@ -26,8 +26,14 @@ export class AgentRouterService {
       case IntentType.ALLERGY_QUERY:
         agentId = 'allergy-agent';
         break;
-      case IntentType.GREETING:
-        agentId = 'greeting-agent';
+      case IntentType.GOVERNMENT_SCHEME_QUERY:
+        agentId = 'scheme-agent';
+        break;
+      case IntentType.FACILITY_QUERY:
+        agentId = 'facility-agent';
+        break;
+      case IntentType.REFERRAL_QUERY:
+        agentId = 'referral-agent';
         break;
       case IntentType.GENERAL_HEALTH_QUERY:
       case IntentType.CLARIFICATION:

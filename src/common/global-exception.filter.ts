@@ -53,6 +53,8 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         'IDEMPOTENCY_CONFLICT',
         'INVALID_REQUEST',
         'UPSTREAM_TIMEOUT',
+        'TOO_MANY_REQUESTS',
+        'RATE_LIMITER_UNAVAILABLE',
       ];
 
       // If the message or error matches one of these public codes, use it
@@ -81,6 +83,10 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           code = 'INVALID_REQUEST';
         } else if (status === HttpStatus.GATEWAY_TIMEOUT) {
           code = 'UPSTREAM_TIMEOUT';
+        } else if (status === HttpStatus.TOO_MANY_REQUESTS) {
+          code = 'TOO_MANY_REQUESTS';
+        } else if (status === HttpStatus.SERVICE_UNAVAILABLE) {
+          code = 'RATE_LIMITER_UNAVAILABLE';
         }
       }
     } else if (exception instanceof Error) {
@@ -133,6 +139,14 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       UPSTREAM_TIMEOUT: {
         en: 'Request processing timed out. Please retry.',
         hi: 'अनुरोध प्रसंस्करण का समय समाप्त हो गया। कृपया पुनः प्रयास करें।',
+      },
+      TOO_MANY_REQUESTS: {
+        en: 'Too many requests. Please slow down and try again later.',
+        hi: 'बहुत अधिक अनुरोध। कृपया गति धीमी करें और बाद में पुनः प्रयास करें।',
+      },
+      RATE_LIMITER_UNAVAILABLE: {
+        en: 'Rate limiter service is currently unavailable. Please try again later.',
+        hi: 'दर सीमक सेवा वर्तमान में उपलब्ध नहीं है। कृपया बाद में पुनः प्रयास करें।',
       },
       INTERNAL_SERVER_ERROR: {
         en: 'A temporary system issue occurred. Please try again later.',

@@ -26,6 +26,7 @@ import { AbdmModule } from './abdm/abdm.module';
 import { EvaluationModule } from './evaluation/evaluation.module';
 import { AuditModule } from './audit/audit.module';
 import { ObservabilityModule } from './observability/observability.module';
+import { HealthModule } from './health/health.module';
 import { CommonModule } from './common/common.module';
 import { GlobalExceptionFilter } from './common/global-exception.filter';
 import { CorrelationIdMiddleware } from './observability/correlation-id.middleware';
@@ -56,6 +57,7 @@ import { CorrelationIdMiddleware } from './observability/correlation-id.middlewa
     EvaluationModule,
     AuditModule,
     ObservabilityModule,
+    HealthModule,
     CommonModule,
   ],
   controllers: [AppController],

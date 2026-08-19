@@ -14,6 +14,11 @@ import { SarvamProvider } from './providers/sarvam/sarvam.provider';
 import { IntentClassifierService } from './intents/intent-classifier.service';
 import { AiOrchestratorService } from './orchestration/ai-orchestrator.service';
 
+import { ConversationResponseFormatter } from '../conversations/formatters/conversation-response.formatter';
+import { ConversationHistoryService } from '../conversations/services/conversation-history.service';
+
+import { PiiModule } from '../pii/pii.module';
+
 @Module({
   imports: [
     ConfigurationModule,
@@ -21,12 +26,15 @@ import { AiOrchestratorService } from './orchestration/ai-orchestrator.service';
     AbdmModule,
     SafetyModule,
     AgentsModule,
+    PiiModule,
   ],
   providers: [
     DevelopmentAiProvider,
     GeminiProvider,
     DevelopmentLanguageProvider,
     SarvamProvider,
+    ConversationResponseFormatter,
+    ConversationHistoryService,
     {
       provide: 'IAiProvider',
       useFactory: (
@@ -77,6 +85,8 @@ import { AiOrchestratorService } from './orchestration/ai-orchestrator.service';
     'IAiOrchestrator',
     AiOrchestratorService,
     IntentClassifierService,
+    ConversationResponseFormatter,
+    ConversationHistoryService,
   ],
 })
 export class AiModule {}

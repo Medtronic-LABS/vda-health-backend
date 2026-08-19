@@ -8,6 +8,10 @@ import { GreetingAgent } from './domain/greeting.agent';
 import { AgentRegistryService } from './agent-registry.service';
 import { AgentRouterService } from './agent-router.service';
 
+import { SchemeAgent } from '../ai/agents/scheme.agent';
+import { FacilityAgent } from '../ai/agents/facility.agent';
+import { ReferralAgent } from '../ai/agents/referral.agent';
+
 @Module({
   providers: [
     MedicationAgent,
@@ -16,9 +20,18 @@ import { AgentRouterService } from './agent-router.service';
     AllergyAgent,
     GeneralHealthAgent,
     GreetingAgent,
+    SchemeAgent,
+    FacilityAgent,
+    ReferralAgent,
     AgentRegistryService,
     AgentRouterService,
   ],
-  exports: [AgentRegistryService, AgentRouterService],
+  exports: [
+    AgentRegistryService,
+    AgentRouterService,
+    SchemeAgent,
+    FacilityAgent,
+    ReferralAgent,
+  ],
 })
 export class AgentsModule {}
