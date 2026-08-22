@@ -12,6 +12,7 @@ import {
   UseInterceptors,
   UploadedFile,
   Req,
+  BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '../../auth/auth.guard';
@@ -33,6 +34,14 @@ export class AdminKnowledgeController {
     @Body() dto: Record<string, any>,
     @UploadedFile() file?: any, @Req() request?: any,
   ) {
+    if (typeof dto.metadata === 'string') {
+      try {
+        dto.metadata = JSON.parse(dto.metadata);
+      } catch {
+        throw new BadRequestException('metadata must be valid JSON.');
+      }
+    }
+
     const filePayload = file
       ? {
           filename: file.originalname || 'uploaded-document',
@@ -105,11 +114,26 @@ export class AdminKnowledgeController {
     @Query('domain') domain?: string,
     @Query('language') language?: string,
     @Query('limit') limit?: string, @Req() request?: any,
+    @Query('minRelevanceScore') minRelevanceScore?: string,
   ) {
+    const parsedMinRelevanceScore = minRelevanceScore
+      ? Number(minRelevanceScore)
+      : undefined;
+    if (
+      parsedMinRelevanceScore !== undefined &&
+      (!Number.isFinite(parsedMinRelevanceScore) ||
+        parsedMinRelevanceScore < 0 ||
+        parsedMinRelevanceScore > 1)
+    ) {
+      throw new BadRequestException(
+        'minRelevanceScore must be a number between 0 and 1.',
+      );
+    }
     return this.retrievalService.retrieve(query, {
       domain,
       language,
       maxResults: limit ? parseInt(limit, 10) : 5,
+      minRelevanceScore: parsedMinRelevanceScore,
       tenantId: request.user.tenantId,
     });
   }

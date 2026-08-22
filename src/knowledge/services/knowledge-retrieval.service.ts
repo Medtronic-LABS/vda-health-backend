@@ -89,12 +89,12 @@ export class KnowledgeRetrievalService implements IKnowledgeRetrievalService {
       const vectorStr = `[${queryEmbedding.join(',')}]`;
 
       const maxResults =
-        options?.maxResults || this.configService.knowledgeMaxResults;
+        options?.maxResults ?? this.configService.knowledgeMaxResults;
       const minScore =
-        options?.minRelevanceScore ||
+        options?.minRelevanceScore ??
         this.configService.knowledgeMinRelevanceScore;
       const maxContextLen =
-        options?.maxContextLength ||
+        options?.maxContextLength ??
         this.configService.knowledgeMaxContextLength;
 
       // 2. Query PostgreSQL pgvector cosine similarity search (<=> operator)

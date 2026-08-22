@@ -75,7 +75,7 @@ export class KnowledgeAdminService {
       description: dto.description || null,
       source: dto.source || 'Admin Upload',
       sourceUrl: dto.sourceUrl || null,
-      version: dto.version || '1.0',
+      version: dto.version || 'unspecified',
       language: dto.language || 'hi',
       domain: dto.domain || 'clinical',
       category: dto.category || 'general_education',
@@ -84,9 +84,7 @@ export class KnowledgeAdminService {
       district: dto.district || null,
       status: 'UPLOADED',
       checksum,
-      effectiveDate: dto.effectiveDate
-        ? new Date(dto.effectiveDate)
-        : new Date(),
+      effectiveDate: dto.effectiveDate ? new Date(dto.effectiveDate) : null,
       reviewDate: dto.reviewDate ? new Date(dto.reviewDate) : null,
       metadata: {
         ...(dto.metadata || {}),
