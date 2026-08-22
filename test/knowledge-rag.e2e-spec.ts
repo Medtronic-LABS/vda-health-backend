@@ -438,15 +438,22 @@ describe('Phase 11 — Knowledge Management, Local PostgreSQL pgvector RAG & Age
         domain: 'referral_protocols',
         category: 'referral_protocols',
         language: 'hi',
-      });
+    });
 
     const docId = createRes.body.id;
+    const processRes = await request(app.getHttpServer())
+      .post(`/api/v1/admin/knowledge/documents/${docId}/process`)
+      .set('Authorization', 'Bearer dev-token');
+    expect(processRes.status).toBe(201);
+    await request(app.getHttpServer())
+      .post(`/api/v1/admin/knowledge/documents/${docId}/approve`)
+      .set('Authorization', 'Bearer dev-token');
     const pubRes = await request(app.getHttpServer())
       .post(`/api/v1/admin/knowledge/documents/${docId}/publish`)
       .set('Authorization', 'Bearer dev-token');
 
     expect(pubRes.status).toBe(201);
-    expect(pubRes.body.status).toBe('PUBLISHED');
+    expect(pubRes.body.status).toBe('ACTIVE');
   });
 
   it('15. POST /api/v1/admin/knowledge/documents/:id/supersede should mark superseded', async () => {
@@ -459,9 +466,19 @@ describe('Phase 11 — Knowledge Management, Local PostgreSQL pgvector RAG & Age
         source: 'Health Dept',
         domain: 'clinical',
         category: 'general',
-      });
+    });
 
     const docId = createRes.body.id;
+    const processRes = await request(app.getHttpServer())
+      .post(`/api/v1/admin/knowledge/documents/${docId}/process`)
+      .set('Authorization', 'Bearer dev-token');
+    expect(processRes.status).toBe(201);
+    await request(app.getHttpServer())
+      .post(`/api/v1/admin/knowledge/documents/${docId}/approve`)
+      .set('Authorization', 'Bearer dev-token');
+    await request(app.getHttpServer())
+      .post(`/api/v1/admin/knowledge/documents/${docId}/publish`)
+      .set('Authorization', 'Bearer dev-token');
     const supRes = await request(app.getHttpServer())
       .post(`/api/v1/admin/knowledge/documents/${docId}/supersede`)
       .set('Authorization', 'Bearer dev-token')

@@ -317,6 +317,13 @@ export class TurnsService {
       safetyStatus,
     );
 
+    const session = await this.dataSource.getRepository(Session).findOne({
+      where: { id: sessionId },
+    });
+    if (!session) {
+      throw new NotFoundException('SESSION_NOT_FOUND');
+    }
+
     // 5. If it was already completed (idempotency DB hit), parse and return it immediately
     if (turn.status === 'COMPLETED' || turn.status === 'WITHHELD') {
       let contentObj = {};
@@ -393,6 +400,8 @@ export class TurnsService {
           sessionId,
           piiResult.sanitizedText,
           correlationId,
+          identity,
+          session.consentArtifactId,
         );
         responseType = result.responseType;
         content = result.content;

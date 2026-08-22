@@ -4,7 +4,8 @@ export class CreatePgVectorKnowledgeTables1710000000000 implements MigrationInte
   name = 'CreatePgVectorKnowledgeTables1710000000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    // 1. Enable pgvector extension if available
+    // pgvector is required for Phase 11; migration must fail rather than
+    // creating a non-semantic text fallback table.
     await queryRunner.query(`CREATE EXTENSION IF NOT EXISTS vector;`);
 
     // 2. Create knowledge_documents table
@@ -57,9 +58,6 @@ export class CreatePgVectorKnowledgeTables1710000000000 implements MigrationInte
 
     // 4. Create knowledge_embeddings table with vector(384) column
     await queryRunner.query(`
-      DO $$
-      BEGIN
-        IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'vector') THEN
           CREATE TABLE IF NOT EXISTS "knowledge_embeddings" (
             "id" uuid NOT NULL DEFAULT gen_random_uuid(),
             "chunkId" uuid NOT NULL,
@@ -70,25 +68,9 @@ export class CreatePgVectorKnowledgeTables1710000000000 implements MigrationInte
             CONSTRAINT "PK_knowledge_embeddings" PRIMARY KEY ("id"),
             CONSTRAINT "FK_knowledge_embeddings_chunk" FOREIGN KEY ("chunkId") REFERENCES "knowledge_chunks"("id") ON DELETE CASCADE
           );
-
-          -- Create HNSW Cosine Similarity Index
-          CREATE INDEX IF NOT EXISTS "idx_embeddings_hnsw_cosine"
-            ON "knowledge_embeddings" USING hnsw ("embedding" vector_cosine_ops);
-        ELSE
-          -- Fallback text representation if pgvector extension is not pre-installed in DB
-          CREATE TABLE IF NOT EXISTS "knowledge_embeddings" (
-            "id" uuid NOT NULL DEFAULT gen_random_uuid(),
-            "chunkId" uuid NOT NULL,
-            "embedding" text NOT NULL,
-            "embeddingModel" character varying(100) NOT NULL DEFAULT 'all-MiniLM-L6-v2',
-            "embeddingDimension" integer NOT NULL DEFAULT 384,
-            "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
-            CONSTRAINT "PK_knowledge_embeddings" PRIMARY KEY ("id"),
-            CONSTRAINT "FK_knowledge_embeddings_chunk" FOREIGN KEY ("chunkId") REFERENCES "knowledge_chunks"("id") ON DELETE CASCADE
-          );
-        END IF;
-      END $$;
     `);
+    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "idx_embeddings_hnsw_cosine"
+      ON "knowledge_embeddings" USING hnsw ("embedding" vector_cosine_ops);`);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {

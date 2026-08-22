@@ -35,6 +35,9 @@ export class AgentRouterService {
       case IntentType.REFERRAL_QUERY:
         agentId = 'referral-agent';
         break;
+      case IntentType.GREETING:
+        agentId = 'greeting-agent';
+        break;
       case IntentType.GENERAL_HEALTH_QUERY:
       case IntentType.CLARIFICATION:
       case IntentType.UNKNOWN:

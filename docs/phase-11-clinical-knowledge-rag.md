@@ -1,5 +1,7 @@
 # Phase 11 — Production Knowledge Management, Local PostgreSQL + pgvector RAG & Agent Knowledge Platform
 
+> Implementation audit: see `phase-11-gap-report.md` and `phase-11-walkthrough.md`. This design document describes the intended architecture; operational verification is reported separately and must not be inferred from this document alone.
+
 ## 1. Overview & Architecture
 
 Phase 11 extends the VDA Health Backend with a production-oriented Knowledge Management & RAG Platform using **PostgreSQL + `pgvector`** as the local vector store and a **Real Semantic Embedding Model (`all-MiniLM-L6-v2`)** producing dense 384-dimensional semantic vectors.

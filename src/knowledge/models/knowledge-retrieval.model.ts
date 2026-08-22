@@ -1,4 +1,5 @@
 export interface KnowledgeRetrievalOptions {
+  tenantId?: string;
   query?: string;
   intent?: string;
   language?: string;

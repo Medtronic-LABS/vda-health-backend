@@ -60,6 +60,7 @@ export class GeminiProvider implements IAiProvider {
 
     let attempt = 0;
     let lastError: Error | null = null;
+    const requestStartedAt = Date.now();
 
     while (attempt < maxRetries) {
       attempt++;
@@ -102,6 +103,10 @@ export class GeminiProvider implements IAiProvider {
         const usageMeta =
           (data['usageMetadata'] as Record<string, number>) || {};
 
+        const durationMs = Date.now() - requestStartedAt;
+        this.logger.log(
+          `[GeminiTelemetry] status=success model=${model} attempts=${attempt} duration_ms=${durationMs} prompt_chars=${prompt.length} system_chars=${options?.systemPrompt?.length || 0}`,
+        );
         return {
           text: textContent,
           json: jsonObj,
@@ -118,7 +123,7 @@ export class GeminiProvider implements IAiProvider {
         const errMsg = err instanceof Error ? err.message : String(err);
         lastError = err instanceof Error ? err : new Error(errMsg);
         this.logger.warn(
-          `Gemini attempt ${attempt}/${maxRetries} failed: ${lastError.message}`,
+          `[GeminiTelemetry] status=failed model=${model} attempt=${attempt}/${maxRetries} duration_ms=${Date.now() - requestStartedAt} prompt_chars=${prompt.length} system_chars=${options?.systemPrompt?.length || 0} error=${lastError.message}`,
         );
         if (attempt < maxRetries) {
           await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 200));

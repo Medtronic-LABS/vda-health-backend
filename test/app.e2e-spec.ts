@@ -66,8 +66,14 @@ jest.mock('@nestjs/typeorm', () => {
         useValue: {
           find: jest.fn().mockResolvedValue([]),
           findOne: jest.fn().mockResolvedValue(null),
-          create: jest.fn().mockImplementation((dto) => dto),
-          save: jest.fn().mockImplementation((dto) => Promise.resolve({ id: 'mock-id', ...dto })),
+          create: jest
+            .fn()
+            .mockImplementation((dto: Record<string, unknown>) => dto),
+          save: jest
+            .fn()
+            .mockImplementation((dto) =>
+              Promise.resolve({ id: 'mock-id', ...dto }),
+            ),
           delete: jest.fn().mockResolvedValue({ affected: 1 }),
           remove: jest.fn().mockResolvedValue({}),
         },

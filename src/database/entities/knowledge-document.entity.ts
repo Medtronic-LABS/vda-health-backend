@@ -24,6 +24,9 @@ export class KnowledgeDocument {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
+  @Column({ type: 'uuid' })
+  tenantId!: string;
+
   @Column({ type: 'varchar', length: 255 })
   title!: string;
 

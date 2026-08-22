@@ -20,11 +20,11 @@ export class FacilityAgent implements IAgent {
     const fallbackContent =
       lang === 'hi'
         ? {
-            hi: 'प्राथमिक स्वास्थ्य केंद्र (PHC), सामुदायिक स्वास्थ्य केंद्र (CHC) और सरकारी अस्पतालों की जानकारी उपलब्ध है।',
-            en: 'Primary Healthcare Centers (PHC), Community Healthcare Centers (CHC), and District Hospital services information is available.',
+            hi: 'इस स्थान के लिए अनुमोदित सुविधा ज्ञान उपलब्ध नहीं है। मैं अस्पताल या क्लिनिक का नाम नहीं बना सकता।',
+            en: 'Approved facility knowledge is not available for this location. I cannot invent a hospital or clinic.',
           }
         : {
-            en: 'Primary Healthcare Centers (PHC), Community Healthcare Centers (CHC), and District Hospital services information is available.',
+            en: 'Approved facility knowledge is not available for this location. I cannot invent a hospital or clinic.',
           };
 
     return {

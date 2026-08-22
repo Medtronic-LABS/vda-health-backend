@@ -5,6 +5,7 @@ import { AuditModule } from '../audit/audit.module';
 import { AbdmModule } from '../abdm/abdm.module';
 import { SafetyModule } from '../safety/safety.module';
 import { AgentsModule } from '../agents/agents.module';
+import { KnowledgeModule } from '../knowledge/knowledge.module';
 
 import { DevelopmentAiProvider } from './providers/development/development-ai.provider';
 import { GeminiProvider } from './providers/gemini/gemini.provider';
@@ -26,6 +27,7 @@ import { PiiModule } from '../pii/pii.module';
     AbdmModule,
     SafetyModule,
     AgentsModule,
+    KnowledgeModule,
     PiiModule,
   ],
   providers: [

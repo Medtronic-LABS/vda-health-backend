@@ -5,6 +5,12 @@ import { ConfigService } from '@nestjs/config';
 export class ConfigurationService {
   constructor(private readonly configService: ConfigService) {}
 
+  private getBoolean(name: string, defaultValue = false): boolean {
+    const value = this.configService.get<string | boolean>(name);
+    if (value === undefined || value === null) return defaultValue;
+    return String(value).toLowerCase() === 'true';
+  }
+
   get port(): number {
     return this.configService.get<number>('PORT', 3000);
   }
@@ -50,7 +56,7 @@ export class ConfigurationService {
   }
 
   get abdmEnabled(): boolean {
-    return Boolean(this.configService.get<boolean>('ABDM_ENABLED'));
+    return this.getBoolean('ABDM_ENABLED');
   }
 
   get abdmBaseUrl(): string | undefined {
@@ -126,7 +132,7 @@ export class ConfigurationService {
   }
 
   get sarvamEnabled(): boolean {
-    return Boolean(this.configService.get<boolean>('SARVAM_ENABLED'));
+    return this.getBoolean('SARVAM_ENABLED');
   }
 
   get sarvamTimeoutMs(): number {
@@ -154,7 +160,7 @@ export class ConfigurationService {
   }
 
   get aiProviderEnabled(): boolean {
-    return Boolean(this.configService.get<boolean>('AI_PROVIDER_ENABLED'));
+    return this.getBoolean('AI_PROVIDER_ENABLED');
   }
 
   get geminiTimeoutMs(): number {
@@ -216,7 +222,7 @@ export class ConfigurationService {
   }
 
   get devAuthEnabled(): boolean {
-    return Boolean(this.configService.get<boolean>('DEV_AUTH_ENABLED'));
+    return this.getBoolean('DEV_AUTH_ENABLED');
   }
 
   get devAuthPartnerId(): string | undefined {

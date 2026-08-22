@@ -18,6 +18,7 @@ import { ConversationResponseFormatter } from '../../conversations/formatters/co
 import { KnowledgeRetrievalService } from '../../knowledge/services/knowledge-retrieval.service';
 import { AgentKnowledgeMapper } from '../agents/agent-knowledge-mapper';
 import { IntentType } from '../intents/intent.types';
+import { ConfigurationService } from '../../configuration/configuration.service';
 
 @Injectable()
 export class AiOrchestratorService implements IAiOrchestrator {
@@ -39,6 +40,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
     private readonly responseFormatter?: ConversationResponseFormatter,
     @Optional()
     private readonly knowledgeRetrievalService?: KnowledgeRetrievalService,
+    private readonly configService?: ConfigurationService,
   ) {}
 
   async orchestrateTurn(
@@ -85,9 +87,42 @@ export class AiOrchestratorService implements IAiOrchestrator {
 
     // ─── Step 3: Fetch Clinical Context (If Required) ────────────────────────
     let clinicalContext: ClinicalContext | null = null;
-    let formattedContext =
-      '[AUTHORIZED CLINICAL CONTEXT]\nAvailable Categories: None';
     let knowledgeSources: any[] = [];
+    let knowledgePrompt = '';
+
+    // General knowledge is independent of patient-record availability. It is
+    // always retrieved through the selected agent's constrained domain, never
+    // used as a substitute for missing clinical records.
+    if (
+      this.knowledgeRetrievalService &&
+      intentMeta.intent !== IntentType.GREETING
+    ) {
+      try {
+        const targetDomain = AgentKnowledgeMapper.getTargetDomain(
+          selectedAgent.agentId,
+          intentMeta.intent,
+        );
+        const ragRes = await this.knowledgeRetrievalService.retrieve(
+          inputText,
+          {
+          domain: targetDomain,
+          intent: intentMeta.intent,
+          language: intentMeta.language,
+          tenantId: identity.tenantId,
+          },
+        );
+        knowledgePrompt = ragRes.formattedKnowledgePrompt;
+        knowledgeSources = ragRes.sources;
+      } catch (kErr: unknown) {
+        const kMsg = kErr instanceof Error ? kErr.message : String(kErr);
+        this.logger.warn(`Knowledge retrieval failed: ${kMsg}`);
+      }
+    }
+
+    let formattedContext = ClinicalAiContextBuilder.formatPromptContext(
+      ClinicalAiContextBuilder.buildMinimizedContext(null, intentMeta.language),
+      knowledgePrompt,
+    );
 
     const consentId = vdaConsentArtifactId || 'dev-consent-001';
     if (intentMeta.requiresClinicalContext && consentId) {
@@ -127,33 +162,6 @@ export class AiOrchestratorService implements IAiOrchestrator {
           retrievalTimestamp: clinicalContext.retrievalTimestamp || new Date(),
           consentVersion: clinicalContext.consentVersion || 'v1.0',
         });
-
-        // Step 3b: Knowledge Retrieval (RAG)
-        let knowledgePrompt = '';
-        if (
-          this.knowledgeRetrievalService &&
-          intentMeta.intent !== IntentType.GREETING
-        ) {
-          try {
-            const targetDomain = AgentKnowledgeMapper.getTargetDomain(
-              selectedAgent.agentId,
-              intentMeta.intent,
-            );
-            const ragRes = await this.knowledgeRetrievalService.retrieve(
-              inputText,
-              {
-                domain: targetDomain,
-                intent: intentMeta.intent,
-                language: intentMeta.language,
-              },
-            );
-            knowledgePrompt = ragRes.formattedKnowledgePrompt;
-            knowledgeSources = ragRes.sources;
-          } catch (kErr: unknown) {
-            const kMsg = kErr instanceof Error ? kErr.message : String(kErr);
-            this.logger.warn(`Knowledge retrieval failed: ${kMsg}`);
-          }
-        }
 
         formattedContext = ClinicalAiContextBuilder.formatPromptContext(
           minimized,
@@ -214,6 +222,9 @@ STRICT BOUNDARIES & GROUNDING POLICY:
           : 'Please consult your prescribing clinician or pharmacist before stopping or changing any medication dosage.';
     } else {
       try {
+        this.logger.log(
+          `[RagPromptTelemetry] intent=${intentMeta.intent} agent=${selectedAgent.agentId} domain=${AgentKnowledgeMapper.getTargetDomain(selectedAgent.agentId, intentMeta.intent) || 'NONE'} chunks=${knowledgeSources.length} knowledge_chars=${knowledgePrompt.length} clinical_context_chars=${formattedContext.length - knowledgePrompt.length} history_chars=${historyPrompt.length} patient_query_chars=${inputText.length} total_prompt_chars=${userPrompt.length}`,
+        );
         const aiResponse = await this.aiProvider.generate(userPrompt, {
           systemPrompt,
           correlationId,
@@ -223,6 +234,9 @@ STRICT BOUNDARIES & GROUNDING POLICY:
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
         this.logger.warn(`AI Provider execution failed: ${errMsg}`);
+        if (this.configService?.aiProviderEnabled) {
+          throw err;
+        }
         // Fallback to domain agent result
         const agentRes = await selectedAgent.process({
           sessionId,

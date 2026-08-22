@@ -133,7 +133,7 @@ export class RedisService implements OnApplicationShutdown {
     return Number(result);
   }
 
-  async onApplicationShutdown() {
+  onApplicationShutdown() {
     this.logger.log('Disconnecting from Redis...');
     try {
       this.redis.disconnect();

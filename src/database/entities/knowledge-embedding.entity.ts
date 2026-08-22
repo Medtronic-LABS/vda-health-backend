@@ -16,7 +16,9 @@ export class KnowledgeEmbedding {
   @Column({ type: 'uuid' })
   chunkId!: string;
 
-  @Column({ type: 'text', name: 'embedding' })
+  // TypeORM does not currently expose pgvector in its ColumnType union. The
+  // database migration is authoritative and creates vector(384).
+  @Column('vector' as any, { name: 'embedding', length: 384 })
   embedding!: string;
 
   @Column({ type: 'varchar', length: 100, default: 'all-MiniLM-L6-v2' })

@@ -11,6 +11,7 @@ import {
   UseGuards,
   UseInterceptors,
   UploadedFile,
+  Req,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '../../auth/auth.guard';
@@ -30,7 +31,7 @@ export class AdminKnowledgeController {
   @UseInterceptors(FileInterceptor('file'))
   async createDocument(
     @Body() dto: Record<string, any>,
-    @UploadedFile() file?: any,
+    @UploadedFile() file?: any, @Req() request?: any,
   ) {
     const filePayload = file
       ? {
@@ -40,62 +41,62 @@ export class AdminKnowledgeController {
         }
       : undefined;
 
-    return this.adminService.createDocument(dto, filePayload);
+    return this.adminService.createDocument(dto, filePayload, request.user.tenantId, request.user.externalId);
   }
 
   @Get('documents')
   async listDocuments(
     @Query('domain') domain?: string,
-    @Query('status') status?: KnowledgeStatus,
+    @Query('status') status?: KnowledgeStatus, @Req() request?: any,
   ) {
-    return this.adminService.findAll({ domain, status });
+    return this.adminService.findAll({ domain, status, tenantId: request.user.tenantId });
   }
 
   @Get('documents/:id')
-  async getDocument(@Param('id') id: string) {
-    return this.adminService.findOne(id);
+  async getDocument(@Param('id') id: string, @Req() request?: any) {
+    return this.adminService.findOne(id, request.user.tenantId);
   }
 
   @Patch('documents/:id')
   async updateDocument(
     @Param('id') id: string,
-    @Body() dto: Record<string, any>,
+    @Body() dto: Record<string, any>, @Req() request?: any,
   ) {
-    return this.adminService.updateDocument(id, dto);
+    return this.adminService.updateDocument(id, request.user.tenantId, dto);
   }
 
   @Delete('documents/:id')
-  async deleteDocument(@Param('id') id: string) {
-    await this.adminService.deleteDocument(id);
+  async deleteDocument(@Param('id') id: string, @Req() request?: any) {
+    await this.adminService.deleteDocument(id, request.user.tenantId);
     return { status: 'DELETED', id };
   }
 
   @Post('documents/:id/process')
-  async processDocument(@Param('id') id: string) {
-    return this.adminService.processDocument(id);
+  async processDocument(@Param('id') id: string, @Req() request?: any) {
+    return this.adminService.processDocument(id, undefined, request.user.tenantId, request.user.externalId);
   }
 
   @Post('documents/:id/approve')
-  async approveDocument(@Param('id') id: string) {
-    return this.adminService.approveDocument(id);
+  async approveDocument(@Param('id') id: string, @Req() request?: any) {
+    return this.adminService.approveDocument(id, request.user.tenantId, request.user.externalId);
   }
 
   @Post('documents/:id/publish')
-  async publishDocument(@Param('id') id: string) {
-    return this.adminService.publishDocument(id);
+  async publishDocument(@Param('id') id: string, @Req() request?: any) {
+    return this.adminService.publishDocument(id, request.user.tenantId, request.user.externalId);
   }
 
   @Post('documents/:id/supersede')
   async supersedeDocument(
     @Param('id') id: string,
-    @Body('newVersionId') newVersionId?: string,
+    @Body('newVersionId') newVersionId?: string, @Req() request?: any,
   ) {
-    return this.adminService.supersedeDocument(id, newVersionId);
+    return this.adminService.supersedeDocument(id, request.user.tenantId, newVersionId, request.user.externalId);
   }
 
   @Post('reindex')
-  async reindexAll() {
-    return this.adminService.reindexAll();
+  async reindexAll(@Req() request?: any) {
+    return this.adminService.reindexAll(request.user.tenantId, request.user.externalId);
   }
 
   @Get('search')
@@ -103,12 +104,13 @@ export class AdminKnowledgeController {
     @Query('query') query: string,
     @Query('domain') domain?: string,
     @Query('language') language?: string,
-    @Query('limit') limit?: string,
+    @Query('limit') limit?: string, @Req() request?: any,
   ) {
     return this.retrievalService.retrieve(query, {
       domain,
       language,
       maxResults: limit ? parseInt(limit, 10) : 5,
+      tenantId: request.user.tenantId,
     });
   }
 }

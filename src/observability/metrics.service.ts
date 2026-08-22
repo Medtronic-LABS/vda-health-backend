@@ -17,6 +17,10 @@ export class MetricsService {
   private safetyWithheldCounters: Map<string, number> = new Map();
   private aiRequestCounters: Map<string, number> = new Map();
   private abdmRequestCounters: Map<string, number> = new Map();
+  private knowledgeRequestCounters: Map<string, number> = new Map();
+  private documentIngestionCounters: Map<string, number> = new Map();
+  private knowledgeDurationSum: Map<string, number> = new Map();
+  private knowledgeDurationCount: Map<string, number> = new Map();
   private durationSum: Map<string, number> = new Map();
   private durationCount: Map<string, number> = new Map();
 
@@ -96,6 +100,15 @@ export class MetricsService {
     }
   }
 
+  recordDocumentIngestion(status: 'processed' | 'failed'): void {
+    if (!this.configService.metricsEnabled) return;
+    const key = `status="${status}"`;
+    this.documentIngestionCounters.set(
+      key,
+      (this.documentIngestionCounters.get(key) || 0) + 1,
+    );
+  }
+
   /**
    * Records ABDM record retrieval requests.
    */
@@ -133,10 +146,22 @@ export class MetricsService {
       const provider = this.sanitizeLabel(options.providerType, 'DEV');
       const status = this.sanitizeLabel(options.status, 'SUCCESS');
       const key = `intent="${intent}",provider="${provider}",status="${status}"`;
-      this.aiRequestCounters.set(
+      this.knowledgeRequestCounters.set(
         key,
-        (this.aiRequestCounters.get(key) || 0) + 1,
+        (this.knowledgeRequestCounters.get(key) || 0) + 1,
       );
+      if (options.durationMs !== undefined && options.durationMs >= 0) {
+        const durationKey = `provider="${provider}",status="${status}"`;
+        this.knowledgeDurationSum.set(
+          durationKey,
+          (this.knowledgeDurationSum.get(durationKey) || 0) +
+            options.durationMs / 1000,
+        );
+        this.knowledgeDurationCount.set(
+          durationKey,
+          (this.knowledgeDurationCount.get(durationKey) || 0) + 1,
+        );
+      }
     } catch {
       // Ignore
     }
@@ -158,6 +183,48 @@ export class MetricsService {
     } else {
       for (const [labels, val] of this.turnCounters.entries()) {
         lines.push(`vda_turns_total{${labels}} ${val}`);
+      }
+    }
+
+    lines.push('');
+    lines.push(
+      '# HELP vda_knowledge_requests_total Total knowledge retrieval requests.',
+    );
+    lines.push('# TYPE vda_knowledge_requests_total counter');
+    if (this.knowledgeRequestCounters.size === 0) {
+      lines.push(
+        'vda_knowledge_requests_total{intent="UNKNOWN",provider="DEV",status="SUCCESS"} 0',
+      );
+    } else {
+      for (const [labels, val] of this.knowledgeRequestCounters.entries()) {
+        lines.push(`vda_knowledge_requests_total{${labels}} ${val}`);
+      }
+    }
+
+    lines.push('');
+    lines.push(
+      '# HELP vda_knowledge_retrieval_duration_seconds Knowledge retrieval duration.',
+    );
+    lines.push('# TYPE vda_knowledge_retrieval_duration_seconds summary');
+    for (const [labels, sum] of this.knowledgeDurationSum.entries()) {
+      lines.push(
+        `vda_knowledge_retrieval_duration_seconds_sum{${labels}} ${sum.toFixed(4)}`,
+      );
+      lines.push(
+        `vda_knowledge_retrieval_duration_seconds_count{${labels}} ${this.knowledgeDurationCount.get(labels) || 0}`,
+      );
+    }
+
+    lines.push('');
+    lines.push(
+      '# HELP vda_document_ingestion_total Total document ingestion attempts.',
+    );
+    lines.push('# TYPE vda_document_ingestion_total counter');
+    if (this.documentIngestionCounters.size === 0) {
+      lines.push('vda_document_ingestion_total{status="processed"} 0');
+    } else {
+      for (const [labels, val] of this.documentIngestionCounters.entries()) {
+        lines.push(`vda_document_ingestion_total{${labels}} ${val}`);
       }
     }
 

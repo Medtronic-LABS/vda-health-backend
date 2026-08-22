@@ -1,49 +1,79 @@
 /* eslint-disable */
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationShutdown, ServiceUnavailableException } from '@nestjs/common';
+import { Worker } from 'worker_threads';
 import {
   IEmbeddingProvider,
   ModelInfo,
 } from '../../interfaces/embedding-provider.interface';
-import { createHash } from 'crypto';
 
 @Injectable()
-export class LocalSemanticEmbeddingProvider implements IEmbeddingProvider {
+export class LocalSemanticEmbeddingProvider
+  implements IEmbeddingProvider, OnApplicationShutdown
+{
   private readonly logger = new Logger(LocalSemanticEmbeddingProvider.name);
-  private pipelineInstance: any = null;
-  private isInitializing = false;
+  private worker?: Worker;
+  private workerReady?: Promise<void>;
+  private nextRequestId = 0;
+  private readonly pending = new Map<
+    number,
+    { resolve: (vectors: number[][]) => void; reject: (error: Error) => void }
+  >();
   private readonly modelName = 'all-MiniLM-L6-v2';
   private readonly dimension = 384;
 
   constructor() {
-    void this.initPipeline();
+    this.workerReady = this.startWorker();
   }
 
-  private async initPipeline(): Promise<void> {
-    if (this.pipelineInstance || this.isInitializing) return;
-    this.isInitializing = true;
-    try {
-      // Dynamically import @xenova/transformers ONNX local feature-extraction pipeline
-      const transformers = await import('@xenova/transformers');
-      const pipelineFn =
-        transformers.pipeline || (transformers as any).default?.pipeline;
-      if (pipelineFn) {
-        this.pipelineInstance = await pipelineFn(
-          'feature-extraction',
-          'Xenova/all-MiniLM-L6-v2',
-          { quantized: true },
-        );
-        this.logger.log(
-          `Local ONNX Embedding Model Xenova/all-MiniLM-L6-v2 initialized successfully (384-dim)`,
-        );
+  private startWorker(): Promise<void> {
+    const workerCode = `
+      const { parentPort } = require('worker_threads');
+      let pipeline;
+      let initializing;
+      async function getPipeline() {
+        if (pipeline) return pipeline;
+        if (!initializing) initializing = (async () => {
+          const transformers = await import('@xenova/transformers');
+          pipeline = await transformers.pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { quantized: true });
+          return pipeline;
+        })();
+        return initializing;
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.logger.warn(
-        `Local ONNX pipeline init note (${msg}). Using fallback 384-dim semantic vector encoder.`,
-      );
-    } finally {
-      this.isInitializing = false;
-    }
+      parentPort.on('message', async ({ id, texts }) => {
+        try {
+          const embedder = await getPipeline();
+          const embeddings = [];
+          for (const text of texts) {
+            const output = await embedder(text, { pooling: 'mean', normalize: true });
+            const vector = Array.from(output.data);
+            if (vector.length !== 384) throw new Error('Model returned unexpected embedding dimension: ' + vector.length);
+            embeddings.push(vector);
+          }
+          parentPort.postMessage({ id, embeddings });
+        } catch (error) {
+          parentPort.postMessage({ id, error: error instanceof Error ? error.message : String(error) });
+        }
+      });
+      parentPort.postMessage({ ready: true });
+    `;
+    return new Promise((resolve, reject) => {
+      this.worker = new Worker(workerCode, { eval: true });
+      this.worker.once('error', (error) => {
+        reject(error);
+      });
+      this.worker.on('message', (message: any) => {
+        if (message.ready) {
+          this.logger.log('Local ONNX embedding worker initialized (all-MiniLM-L6-v2, 384-dim)');
+          resolve();
+          return;
+        }
+        const request = this.pending.get(message.id);
+        if (!request) return;
+        this.pending.delete(message.id);
+        if (message.error) request.reject(new Error(message.error));
+        else request.resolve(message.embeddings);
+      });
+    });
   }
 
   getModelInfo(): ModelInfo {
@@ -65,58 +95,36 @@ export class LocalSemanticEmbeddingProvider implements IEmbeddingProvider {
 
   async generateEmbedding(text: string): Promise<number[]> {
     if (!text || text.trim().length === 0) {
-      return new Array(this.dimension).fill(0);
+      throw new ServiceUnavailableException('Embedding input is empty.');
     }
 
-    if (this.pipelineInstance) {
-      try {
-        const output = await this.pipelineInstance(text, {
-          pooling: 'mean',
-          normalize: true,
-        });
-        const arr = Array.from(output.data as Float32Array | number[]);
-        if (arr.length === this.dimension) {
-          return arr;
-        }
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.logger.warn(`Transformers feature extraction failed: ${msg}`);
-      }
-    }
-
-    // High-fidelity 384-dimensional dense semantic feature encoder fallback
-    return this.encodeSemanticVector384(text);
+    const vectors = await this.requestEmbeddings([text]);
+    return vectors[0];
   }
 
   async generateEmbeddings(texts: string[]): Promise<number[][]> {
-    const results: number[][] = [];
-    for (const t of texts) {
-      results.push(await this.generateEmbedding(t));
+    if (texts.some((text) => !text || !text.trim())) {
+      throw new ServiceUnavailableException('Embedding input is empty.');
     }
-    return results;
+    return this.requestEmbeddings(texts);
   }
 
-  /**
-   * Generates a 384-dimensional dense L2-normalized vector based on semantic features.
-   */
-  private encodeSemanticVector384(text: string): number[] {
-    const normText = text.toLowerCase().trim();
-    const vec = new Array<number>(384).fill(0);
+  private async requestEmbeddings(texts: string[]): Promise<number[][]> {
+    try {
+      await this.workerReady;
+      if (!this.worker) throw new Error('Embedding worker is unavailable.');
+      const id = ++this.nextRequestId;
+      return await new Promise<number[][]>((resolve, reject) => {
+        this.pending.set(id, { resolve, reject });
+        this.worker!.postMessage({ id, texts });
+      });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      throw new ServiceUnavailableException(`Local semantic embedding inference failed: ${msg}`);
+    }
+  }
 
-    // Hash tokens and character n-grams into 384 sub-space dimensions
-    const words = normText.split(/\s+/);
-    words.forEach((word, idx) => {
-      const hash = createHash('sha256').update(`${word}:${idx}`).digest();
-      for (let i = 0; i < 384; i++) {
-        const byte = hash[i % hash.length];
-        const val = (byte / 255) * 2 - 1;
-        vec[i] += val;
-      }
-    });
-
-    // L2 Normalize
-    let norm = Math.sqrt(vec.reduce((sum, val) => sum + val * val, 0));
-    if (norm === 0) norm = 1;
-    return vec.map((val) => val / norm);
+  async onApplicationShutdown(): Promise<void> {
+    await this.worker?.terminate();
   }
 }

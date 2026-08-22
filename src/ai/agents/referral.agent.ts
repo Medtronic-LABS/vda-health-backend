@@ -20,11 +20,11 @@ export class ReferralAgent implements IAgent {
     const fallbackContent =
       lang === 'hi'
         ? {
-            hi: 'रेफरल प्रक्रियाओं और उच्च स्वास्थ्य केंद्रों (जिला अस्पताल/मेडिकल कॉलेज) में जाने के दिशा-निर्देश उपलब्ध हैं। आपातकालीन स्थिति में 108 पर संपर्क करें।',
-            en: 'Referral protocols and guidance for secondary/tertiary care centers are available. Call 108 for emergency ambulance services.',
+            hi: 'इस समय अनुमोदित रेफरल ज्ञान उपलब्ध नहीं है। लक्षण गंभीर या आपातकालीन हों तो स्थानीय आपातकालीन सेवा से संपर्क करें।',
+            en: 'Approved referral knowledge is not available right now. Contact local emergency services for severe or emergency symptoms.',
           }
         : {
-            en: 'Referral protocols and guidance for secondary/tertiary care centers are available. Call 108 for emergency ambulance services.',
+            en: 'Approved referral knowledge is not available right now. Contact local emergency services for severe or emergency symptoms.',
           };
 
     return {

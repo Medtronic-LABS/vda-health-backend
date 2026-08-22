@@ -1,4 +1,3 @@
-/* eslint-disable */
 import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { IAgent } from './interfaces/agent.interface';
 import { MedicationAgent } from './domain/medication.agent';

@@ -4,6 +4,7 @@ import {
   Logger,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -19,6 +20,7 @@ import { DocumentChunkerService } from '../ingestion/document-chunker.service';
 import { LocalSemanticEmbeddingProvider } from '../providers/local/local-semantic-embedding.provider';
 import { AuditService } from '../../audit/audit.service';
 import { IngestionFilePayload } from '../interfaces/knowledge-ingestion.interface';
+import { ConfigurationService } from '../../configuration/configuration.service';
 
 @Injectable()
 export class KnowledgeAdminService {
@@ -34,6 +36,7 @@ export class KnowledgeAdminService {
     private readonly parserService: MultiFormatParserService,
     private readonly chunkerService: DocumentChunkerService,
     private readonly embeddingProvider: LocalSemanticEmbeddingProvider,
+    private readonly configService: ConfigurationService,
     @Optional() private readonly auditService?: AuditService,
     @Optional() private readonly dataSource?: DataSource,
   ) {}
@@ -41,7 +44,10 @@ export class KnowledgeAdminService {
   async createDocument(
     dto: Partial<KnowledgeDocument>,
     filePayload?: IngestionFilePayload,
+    tenantId?: string,
+    actor = 'admin',
   ): Promise<KnowledgeDocument> {
+    if (!tenantId) throw new BadRequestException('Authenticated tenant is required.');
     let parsedContent = dto.description || '';
     let checksum = dto.checksum || null;
 
@@ -57,15 +63,14 @@ export class KnowledgeAdminService {
     }
 
     if (checksum) {
-      const existing = await this.docRepo.findOne({ where: { checksum } });
+      const existing = await this.docRepo.findOne({ where: { checksum, tenantId } });
       if (existing) {
-        this.logger.warn(
-          `Duplicate checksum detected for document ${checksum}`,
-        );
+        throw new ConflictException('An identical knowledge document already exists.');
       }
     }
 
     const doc = this.docRepo.create({
+      tenantId,
       title: dto.title || 'Untitled Document',
       description: dto.description || null,
       source: dto.source || 'Admin Upload',
@@ -86,6 +91,9 @@ export class KnowledgeAdminService {
       metadata: {
         ...(dto.metadata || {}),
         contentSnippet: parsedContent.substring(0, 200),
+        // Retained only to support explicit, auditable reindexing. It is never
+        // returned in patient provenance and is not patient clinical data.
+        rawContent: parsedContent,
       },
     });
 
@@ -93,14 +101,14 @@ export class KnowledgeAdminService {
 
     if (parsedContent) {
       // Auto-trigger ingestion workflow
-      await this.processDocument(saved.id, parsedContent);
+      await this.processDocument(saved.id, parsedContent, tenantId, actor);
     }
 
     if (this.auditService) {
       await this.auditService.logEvent({
-        tenantId: '00000000-0000-0000-0000-000000000000',
+        tenantId,
         subjectAbhaRef: 'system_admin',
-        actingPrincipal: 'admin',
+        actingPrincipal: actor,
         correlationId: 'admin-action',
         action: 'knowledge_document_uploaded',
         entityName: 'knowledge_document',
@@ -115,8 +123,10 @@ export class KnowledgeAdminService {
   async processDocument(
     documentId: string,
     rawContentText?: string,
+    tenantId?: string,
+    actor = 'admin',
   ): Promise<KnowledgeDocument> {
-    const doc = await this.docRepo.findOne({ where: { id: documentId } });
+    const doc = await this.docRepo.findOne({ where: { id: documentId, tenantId } });
     if (!doc) throw new NotFoundException('Document not found');
 
     doc.status = 'PROCESSING';
@@ -126,9 +136,21 @@ export class KnowledgeAdminService {
       // 1. Chunk document
       const tempDoc = {
         ...doc,
-        content: rawContentText || doc.description || '',
+      content:
+        rawContentText ||
+        (doc.metadata && typeof doc.metadata.rawContent === 'string'
+          ? doc.metadata.rawContent
+          : doc.description) ||
+        '',
       } as unknown as KnowledgeDocument;
-      const chunksPayloads = this.chunkerService.chunkDocument(tempDoc, 1200);
+      const chunksPayloads = this.chunkerService.chunkDocument(
+        tempDoc,
+        this.configService.knowledgeMaxChunkLength,
+      );
+
+      if (chunksPayloads.length === 0) {
+        throw new BadRequestException('Document contains no indexable text.');
+      }
 
       // Delete existing chunks if re-processing
       await this.chunkRepo.delete({ documentId: doc.id });
@@ -137,6 +159,7 @@ export class KnowledgeAdminService {
       for (const payload of chunksPayloads) {
         const chunk = this.chunkRepo.create({
           documentId: doc.id,
+          tenantId: doc.tenantId,
           documentVersion: doc.version,
           content: payload.content,
           chunkIndex: payload.chunkIndex,
@@ -167,8 +190,10 @@ export class KnowledgeAdminService {
                VALUES ($1, $2::vector, $3, $4);`,
               [savedChunk.id, vectorStr, 'all-MiniLM-L6-v2', 384],
             );
-          } catch {
-            // Text fallback if DB pgvector extension not present
+          } catch (error: unknown) {
+            if (this.configService.knowledgeRagEnabled) {
+              throw error;
+            }
             const emb = this.embeddingRepo.create({
               chunkId: savedChunk.id,
               embedding: vectorStr,
@@ -193,9 +218,9 @@ export class KnowledgeAdminService {
 
       if (this.auditService) {
         await this.auditService.logEvent({
-          tenantId: '00000000-0000-0000-0000-000000000000',
+          tenantId: doc.tenantId,
           subjectAbhaRef: 'system_admin',
-          actingPrincipal: 'admin',
+          actingPrincipal: actor,
           correlationId: 'admin-action',
           action: 'knowledge_document_processed',
           entityName: 'knowledge_document',
@@ -214,18 +239,21 @@ export class KnowledgeAdminService {
     }
   }
 
-  async approveDocument(id: string): Promise<KnowledgeDocument> {
-    const doc = await this.docRepo.findOne({ where: { id } });
+  async approveDocument(id: string, tenantId: string, actor = 'admin'): Promise<KnowledgeDocument> {
+    const doc = await this.docRepo.findOne({ where: { id, tenantId } });
     if (!doc) throw new NotFoundException('Document not found');
 
+    if (doc.status !== 'REVIEW_REQUIRED') {
+      throw new BadRequestException('Only processed documents can be approved.');
+    }
     doc.status = 'APPROVED';
     const updated = await this.docRepo.save(doc);
 
     if (this.auditService) {
       await this.auditService.logEvent({
-        tenantId: '00000000-0000-0000-0000-000000000000',
+        tenantId,
         subjectAbhaRef: 'system_admin',
-        actingPrincipal: 'admin',
+        actingPrincipal: actor,
         correlationId: 'admin-action',
         action: 'knowledge_document_approved',
         entityName: 'knowledge_document',
@@ -237,18 +265,21 @@ export class KnowledgeAdminService {
     return updated;
   }
 
-  async publishDocument(id: string): Promise<KnowledgeDocument> {
-    const doc = await this.docRepo.findOne({ where: { id } });
+  async publishDocument(id: string, tenantId: string, actor = 'admin'): Promise<KnowledgeDocument> {
+    const doc = await this.docRepo.findOne({ where: { id, tenantId } });
     if (!doc) throw new NotFoundException('Document not found');
 
-    doc.status = 'PUBLISHED';
+    if (doc.status !== 'APPROVED') {
+      throw new BadRequestException('Only approved documents can be published.');
+    }
+    doc.status = 'ACTIVE';
     const updated = await this.docRepo.save(doc);
 
     if (this.auditService) {
       await this.auditService.logEvent({
-        tenantId: '00000000-0000-0000-0000-000000000000',
+        tenantId,
         subjectAbhaRef: 'system_admin',
-        actingPrincipal: 'admin',
+        actingPrincipal: actor,
         correlationId: 'admin-action',
         action: 'knowledge_document_published',
         entityName: 'knowledge_document',
@@ -261,12 +292,15 @@ export class KnowledgeAdminService {
   }
 
   async supersedeDocument(
-    id: string,
-    newVersionId?: string,
+    id: string, tenantId: string,
+    newVersionId?: string, actor = 'admin',
   ): Promise<KnowledgeDocument> {
-    const doc = await this.docRepo.findOne({ where: { id } });
+    const doc = await this.docRepo.findOne({ where: { id, tenantId } });
     if (!doc) throw new NotFoundException('Document not found');
 
+    if (!['PUBLISHED', 'ACTIVE', 'APPROVED'].includes(doc.status)) {
+      throw new BadRequestException('Only approved or published documents can be superseded.');
+    }
     doc.status = 'SUPERSEDED';
     if (newVersionId) {
       doc.metadata = { ...(doc.metadata || {}), supersededBy: newVersionId };
@@ -275,9 +309,9 @@ export class KnowledgeAdminService {
 
     if (this.auditService) {
       await this.auditService.logEvent({
-        tenantId: '00000000-0000-0000-0000-000000000000',
+        tenantId,
         subjectAbhaRef: 'system_admin',
-        actingPrincipal: 'admin',
+        actingPrincipal: actor,
         correlationId: 'admin-action',
         action: 'knowledge_document_superseded',
         entityName: 'knowledge_document',
@@ -290,18 +324,19 @@ export class KnowledgeAdminService {
   }
 
   async findAll(query?: {
+    tenantId: string;
     domain?: string;
     status?: KnowledgeStatus;
   }): Promise<KnowledgeDocument[]> {
-    const where: any = {};
+    const where: any = { tenantId: query?.tenantId };
     if (query?.domain) where.domain = query.domain;
     if (query?.status) where.status = query.status;
     return this.docRepo.find({ where, order: { createdAt: 'DESC' } });
   }
 
-  async findOne(id: string): Promise<KnowledgeDocument> {
+  async findOne(id: string, tenantId: string): Promise<KnowledgeDocument> {
     const doc = await this.docRepo.findOne({
-      where: { id },
+      where: { id, tenantId },
       relations: { chunks: true },
     });
     if (!doc) throw new NotFoundException('Document not found');
@@ -310,24 +345,27 @@ export class KnowledgeAdminService {
 
   async updateDocument(
     id: string,
+    tenantId: string,
     dto: Partial<KnowledgeDocument>,
   ): Promise<KnowledgeDocument> {
-    const doc = await this.findOne(id);
+    const doc = await this.findOne(id, tenantId);
+    const immutable = ['id', 'checksum', 'status', 'createdAt', 'updatedAt', 'chunks'];
+    for (const key of immutable) delete (dto as Record<string, unknown>)[key];
     Object.assign(doc, dto);
     return this.docRepo.save(doc);
   }
 
-  async deleteDocument(id: string): Promise<void> {
-    const doc = await this.findOne(id);
+  async deleteDocument(id: string, tenantId: string): Promise<void> {
+    const doc = await this.findOne(id, tenantId);
     await this.docRepo.remove(doc);
   }
 
-  async reindexAll(): Promise<{ reindexedCount: number }> {
-    const docs = await this.docRepo.find();
+  async reindexAll(tenantId: string, actor = 'admin'): Promise<{ reindexedCount: number }> {
+    const docs = await this.docRepo.find({ where: { tenantId } });
     let reindexedCount = 0;
     for (const doc of docs) {
       if (doc.status === 'PUBLISHED' || doc.status === 'APPROVED') {
-        await this.processDocument(doc.id);
+        await this.processDocument(doc.id, undefined, tenantId, actor);
         reindexedCount++;
       }
     }

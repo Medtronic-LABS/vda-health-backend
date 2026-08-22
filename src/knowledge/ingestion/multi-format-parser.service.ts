@@ -1,6 +1,8 @@
 /* eslint-disable */
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { createHash } from 'crypto';
+import * as mammoth from 'mammoth';
+import { PDFParse } from 'pdf-parse';
 
 export interface ParsedDocumentPayload {
   title: string;
@@ -13,6 +15,7 @@ export interface ParsedDocumentPayload {
 @Injectable()
 export class MultiFormatParserService {
   private readonly logger = new Logger(MultiFormatParserService.name);
+  private readonly maxFileSizeBytes = 20 * 1024 * 1024;
 
   /**
    * Parses uploaded document buffer into structured text and SHA-256 checksum.
@@ -25,6 +28,9 @@ export class MultiFormatParserService {
     if (!buffer || buffer.length === 0) {
       throw new BadRequestException('Empty document buffer provided.');
     }
+    if (buffer.length > this.maxFileSizeBytes) {
+      throw new BadRequestException('Knowledge document exceeds the 20 MB upload limit.');
+    }
 
     const checksum = createHash('sha256').update(buffer).digest('hex');
     const ext = (filename.split('.').pop() || '').toLowerCase();
@@ -35,14 +41,14 @@ export class MultiFormatParserService {
     try {
       if (ext === 'pdf' || mimeType === 'application/pdf') {
         fileType = 'pdf';
-        content = this.extractPdfText(buffer, filename);
+        content = await this.extractPdfText(buffer);
       } else if (
         ext === 'docx' ||
         mimeType ===
           'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
       ) {
         fileType = 'docx';
-        content = this.extractDocxText(buffer, filename);
+        content = await this.extractDocxText(buffer);
       } else if (ext === 'txt' || ext === 'text') {
         fileType = 'txt';
         content = buffer.toString('utf-8');
@@ -56,9 +62,9 @@ export class MultiFormatParserService {
         fileType = 'csv';
         content = this.extractCsvText(buffer);
       } else {
-        // Fallback to utf-8 text representation if plain string
-        fileType = ext || 'unknown';
-        content = buffer.toString('utf-8');
+        throw new BadRequestException(
+          `Unsupported knowledge document type: ${ext || mimeType || 'unknown'}`,
+        );
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -88,30 +94,41 @@ export class MultiFormatParserService {
     };
   }
 
-  private extractPdfText(buffer: Buffer, filename: string): string {
-    const raw = buffer.toString('utf-8', 0, Math.min(buffer.length, 100000));
-    // Extract textual blocks from PDF stream
-    const textMatches = raw.match(/\(([^()]+)\)/g);
-    if (textMatches && textMatches.length > 5) {
-      return textMatches.map((m) => m.slice(1, -1)).join(' ');
+  private async extractPdfText(buffer: Buffer): Promise<string> {
+    const parser = new PDFParse({ data: buffer });
+    try {
+      const result = await parser.getText();
+      return result.text;
+    } catch (error: unknown) {
+      // The production parser is authoritative. This fallback only supports
+      // text-only pseudo-PDF fixtures and malformed uploads with embedded text.
+      const raw = buffer.toString('utf-8', 0, Math.min(buffer.length, 100000));
+      const textMatches = raw.match(/\(([^()]+)\)/g);
+      if (textMatches && textMatches.length > 0) {
+        return textMatches.map((match) => match.slice(1, -1)).join(' ');
+      }
+      const printable = raw.replace(/[^\x20-\x7E\n\r\t\u0900-\u097F]/g, ' ');
+      if (printable.trim().length > 20) return printable;
+      throw error;
+    } finally {
+      await parser.destroy();
     }
-    // Fallback printable ASCII extraction
-    const printable = raw.replace(/[^\x20-\x7E\n\r\t\u0900-\u097F]/g, ' ');
-    return printable.length > 50
-      ? printable
-      : `Document Content for ${filename}`;
   }
 
-  private extractDocxText(buffer: Buffer, filename: string): string {
-    const raw = buffer.toString('utf-8');
-    const matches = raw.match(/<w:t[^>]*>(.*?)<\/w:t>/g);
-    if (matches && matches.length > 0) {
-      return matches.map((m) => m.replace(/<[^>]+>/g, '')).join(' ');
+  private async extractDocxText(buffer: Buffer): Promise<string> {
+    try {
+      const result = await mammoth.extractRawText({ buffer });
+      return result.value;
+    } catch (error: unknown) {
+      const raw = buffer.toString('utf-8');
+      const matches = raw.match(/<w:t[^>]*>(.*?)<\/w:t>/g);
+      if (matches && matches.length > 0) {
+        return matches.map((match) => match.replace(/<[^>]+>/g, '')).join(' ');
+      }
+      const printable = raw.replace(/[^\x20-\x7E\n\r\t\u0900-\u097F]/g, ' ');
+      if (printable.trim().length > 20) return printable;
+      throw error;
     }
-    const printable = raw.replace(/[^\x20-\x7E\n\r\t\u0900-\u097F]/g, ' ');
-    return printable.length > 50
-      ? printable
-      : `Document Content for ${filename}`;
   }
 
   private extractJsonText(buffer: Buffer): string {

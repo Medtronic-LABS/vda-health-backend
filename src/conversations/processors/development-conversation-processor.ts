@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { IConversationProcessor } from '../interfaces/conversation-processor.interface';
+import { HostIdentity } from '../../auth/host-identity.context';
 
 @Injectable()
 export class DevelopmentConversationProcessor implements IConversationProcessor {
@@ -7,6 +8,8 @@ export class DevelopmentConversationProcessor implements IConversationProcessor 
     sessionId: string,
     inputText: string,
     correlationId: string,
+    _identity: HostIdentity,
+    _consentArtifactId: string,
   ): Promise<{
     responseType: string;
     content: Record<string, any>;

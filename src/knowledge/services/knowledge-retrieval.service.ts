@@ -49,17 +49,26 @@ export class KnowledgeRetrievalService implements IKnowledgeRetrievalService {
     const startTime = Date.now();
     const isRagEnabled = this.configService.knowledgeRagEnabled;
 
-    if (!isRagEnabled || !this.dataSource || !this.dataSource.isInitialized) {
+    if (!isRagEnabled) {
       this.logger.log(
         `[RAG] Using DevelopmentKnowledgeService (KNOWLEDGE_RAG_ENABLED=${isRagEnabled})`,
       );
       return this.devKnowledgeService.retrieve(query, options);
     }
 
+    if (!this.dataSource || !this.dataSource.isInitialized) {
+      this.logger.error('[RAG] PostgreSQL is unavailable while KNOWLEDGE_RAG_ENABLED=true');
+      return this.emptyResult(options, 'postgres_pgvector_unavailable', startTime);
+    }
+    if (!options?.tenantId) {
+      this.logger.error('[RAG] Authenticated tenant is required for enabled RAG retrieval');
+      return this.emptyResult(options, 'postgres_pgvector_tenant_required', startTime);
+    }
+
     try {
       if (this.auditService) {
         await this.auditService.logEvent({
-          tenantId: '00000000-0000-0000-0000-000000000000',
+          tenantId: options.tenantId,
           subjectAbhaRef: 'anonymous',
           actingPrincipal: 'system',
           correlationId: 'rag-query-action',
@@ -89,6 +98,28 @@ export class KnowledgeRetrievalService implements IKnowledgeRetrievalService {
         this.configService.knowledgeMaxContextLength;
 
       // 2. Query PostgreSQL pgvector cosine similarity search (<=> operator)
+      const predicates = ["d.status IN ('ACTIVE', 'PUBLISHED')"];
+      const parameters: unknown[] = [vectorStr];
+      parameters.push(options.tenantId);
+      predicates.push(`c."tenantId" = $${parameters.length}`);
+      const addFilter = (column: string, value?: string, allowGlobal = false) => {
+        if (!value) return;
+        parameters.push(value);
+        const position = `$${parameters.length}`;
+        predicates.push(
+          allowGlobal
+            ? `(c.${column} = ${position} OR c.${column} IS NULL)`
+            : `c.${column} = ${position}`,
+        );
+      };
+      addFilter('domain', options?.domain);
+      addFilter('category', options?.category);
+      addFilter('role', options?.role, true);
+      addFilter('language', options?.language);
+      addFilter('state', options?.state, true);
+      addFilter('district', options?.district, true);
+      parameters.push(maxResults * 2);
+
       const rawQuery = `
         SELECT 
           c.id AS "chunkId",
@@ -105,19 +136,12 @@ export class KnowledgeRetrievalService implements IKnowledgeRetrievalService {
         FROM knowledge_embeddings e
         JOIN knowledge_chunks c ON e."chunkId" = c.id
         JOIN knowledge_documents d ON c."documentId" = d.id
-        WHERE d.status IN ('ACTIVE', 'PUBLISHED', 'APPROVED')
-          ${options?.domain ? `AND c.domain = '${options.domain}'` : ''}
-          ${options?.language ? `AND c.language = '${options.language}'` : ''}
-          ${options?.state ? `AND (c.state = '${options.state}' OR c.state IS NULL)` : ''}
-          ${options?.district ? `AND (c.district = '${options.district}' OR c.district IS NULL)` : ''}
+        WHERE ${predicates.join('\n          AND ')}
         ORDER BY "cosineDistance" ASC
-        LIMIT $2;
+        LIMIT $${parameters.length};
       `;
 
-      const rows: any[] = await this.dataSource.query(rawQuery, [
-        vectorStr,
-        maxResults * 2,
-      ]);
+      const rows: any[] = await this.dataSource.query(rawQuery, parameters);
 
       const matchedChunks: KnowledgeMatchChunk[] = [];
       let totalLen = 0;
@@ -149,12 +173,11 @@ export class KnowledgeRetrievalService implements IKnowledgeRetrievalService {
         if (matchedChunks.length >= maxResults) break;
       }
 
-      // If no pgvector matches met threshold, fall back to DevelopmentKnowledgeService
+      // An enabled RAG environment must never substitute synthetic knowledge for
+      // an absent/low-relevance result. The caller can safely answer that no
+      // approved general knowledge matched the question.
       if (matchedChunks.length === 0) {
-        this.logger.warn(
-          `[RAG] No pgvector chunks met minRelevanceScore (${minScore}). Falling back to synthetic fixtures.`,
-        );
-        return this.devKnowledgeService.retrieve(query, options);
+        return this.emptyResult(options, 'postgres_pgvector', startTime);
       }
 
       const sources: KnowledgeSourceCitation[] = Array.from(
@@ -180,7 +203,7 @@ export class KnowledgeRetrievalService implements IKnowledgeRetrievalService {
 
       if (this.auditService) {
         await this.auditService.logEvent({
-          tenantId: '00000000-0000-0000-0000-000000000000',
+          tenantId: options.tenantId,
           subjectAbhaRef: 'anonymous',
           actingPrincipal: 'system',
           correlationId: 'rag-query-action',
@@ -220,10 +243,24 @@ export class KnowledgeRetrievalService implements IKnowledgeRetrievalService {
       };
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      this.logger.error(
-        `[RAG] pgvector retrieval error (${errMsg}). Falling back to Dev service.`,
-      );
-      return this.devKnowledgeService.retrieve(query, options);
+      this.logger.error(`[RAG] pgvector retrieval error: ${errMsg}`);
+      return this.emptyResult(options, 'postgres_pgvector_error', startTime);
     }
+  }
+
+  private emptyResult(
+    options: KnowledgeRetrievalOptions | undefined,
+    providerType: string,
+    startTime: number,
+  ): KnowledgeRetrievalResult {
+    return {
+      matchedChunks: [],
+      sources: [],
+      formattedKnowledgePrompt: '',
+      retrievedCount: 0,
+      intent: options?.intent || 'GENERAL_HEALTH_QUERY',
+      providerType,
+      latencyMs: Date.now() - startTime,
+    };
   }
 }

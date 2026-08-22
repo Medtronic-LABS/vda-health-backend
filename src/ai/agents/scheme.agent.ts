@@ -20,11 +20,11 @@ export class SchemeAgent implements IAgent {
     const fallbackContent =
       lang === 'hi'
         ? {
-            hi: 'आयुष्मान भारत और सरकारी स्वास्थ्य योजनाओं के बारे में जानकारी उपलब्ध है। आप पात्रता, मुफ्त इलाज सीमा और आवश्यक दस्तावेजों के बारे में पूछ सकते हैं।',
-            en: 'Ayushman Bharat and Government Health Schemes information is available. You can ask about eligibility, treatment coverage, and required documents.',
+            hi: 'इस समय अनुमोदित योजना ज्ञान उपलब्ध नहीं है। कृपया वर्तमान आधिकारिक पात्रता मानदंड से सत्यापन करें।',
+            en: 'Approved scheme knowledge is not available right now. Please verify eligibility against current official criteria.',
           }
         : {
-            en: 'Ayushman Bharat and Government Health Schemes information is available. You can ask about eligibility, treatment coverage, and required documents.',
+            en: 'Approved scheme knowledge is not available right now. Please verify eligibility against current official criteria.',
           };
 
     return {

@@ -18,6 +18,9 @@ export class KnowledgeChunk {
   @Column({ type: 'uuid' })
   documentId!: string;
 
+  @Column({ type: 'uuid' })
+  tenantId!: string;
+
   @Column({ type: 'varchar', length: 50, default: '1.0' })
   documentVersion!: string;
 
