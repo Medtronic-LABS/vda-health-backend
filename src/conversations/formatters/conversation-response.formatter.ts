@@ -37,7 +37,9 @@ export class ConversationResponseFormatter {
     // Embed structured cards based on ClinicalContext when available
     if (clinicalContext) {
       if (
-        (intent?.includes('MEDICATION') || intent === 'MEDICATION_QUERY') &&
+        (intent?.includes('MEDICATION') ||
+          intent === 'MEDICATION_QUERY' ||
+          intent === 'ADHERENCE_QUERY') &&
         clinicalContext.medications &&
         clinicalContext.medications.length > 0
       ) {

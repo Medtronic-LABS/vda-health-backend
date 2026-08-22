@@ -82,7 +82,55 @@ export class AiOrchestratorService implements IAiOrchestrator {
       correlationId,
     );
 
-    // ─── Step 2: Agent Routing ──────────────────────────────────────────────
+    // ─── Step 2: Deterministic pre-generation safety gate ───────────────────
+    // Emergency and unsafe medication requests must never reach RAG or Gemini.
+    const preSafetyResult = await this.safetyGate.evaluateSafety(
+      inputText,
+      correlationId,
+      intentMeta.language,
+    );
+    if (preSafetyResult.status !== 'SAFE') {
+      const safetyStatus =
+        preSafetyResult.status === 'ESCALATION_REQUIRED'
+          ? 'ESCALATED_BY_RULE'
+          : 'WITHHELD_BY_RULE';
+      const responseType =
+        preSafetyResult.status === 'ESCALATION_REQUIRED' ? 'escalation' : 'text';
+      const safeMessage =
+        preSafetyResult.patientSafeMessage ||
+        (intentMeta.language === 'hi'
+          ? 'सुरक्षा कारणों से इस अनुरोध पर सामान्य उत्तर उपलब्ध नहीं है।'
+          : 'A normal response is not available for this request because of safety policy.');
+
+      await this.auditService.logEvent({
+        tenantId: identity.tenantId,
+        subjectAbhaRef: identity.externalId,
+        actingPrincipal: identity.externalId,
+        correlationId,
+        action: 'ai_pre_generation_safety_blocked',
+        entityName: 'turn',
+        entityId: sessionId,
+        details: { intent: intentMeta.intent, ruleId: preSafetyResult.ruleId },
+      });
+
+      return {
+        responseType,
+        content:
+          responseType === 'escalation'
+            ? {
+                escalation_id: preSafetyResult.ruleId || 'SAFETY_ESCALATION',
+                reason: safeMessage,
+                assigned_role: 'CLINICIAN',
+              }
+            : { en: safeMessage, hi: safeMessage },
+        intent: intentMeta.intent,
+        selectedAgent: 'safety-gate',
+        safetyStatus,
+        latencyMs: Date.now() - startTime,
+      };
+    }
+
+    // ─── Step 3: Agent Routing ──────────────────────────────────────────────
     const selectedAgent = this.agentRouter.selectAgent(intentMeta.intent);
 
     // ─── Step 3: Fetch Clinical Context (If Required) ────────────────────────
@@ -190,7 +238,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
     }
 
     // ─── Step 5: System Prompt & Safety Directives ───────────────────────────
-    const systemPrompt = `You are VDA Health Assistant, an empathetic, grounded, medical-safety-compliant virtual doctor assistant for patients.
+    const systemPrompt = `You are VDA Health Assistant, an empathetic, grounded, medical-safety-compliant health navigation assistant for patients.
 STRICT BOUNDARIES & GROUNDING POLICY:
 1. Grounding: You MUST ONLY use clinical facts explicitly present in [AUTHORIZED CLINICAL CONTEXT] or [CONVERSATION HISTORY]. You MUST NEVER fabricate clinical records, medications, lab values, or diagnoses.
 2. Missing Information: If the patient's requested health record or information is absent or empty in [AUTHORIZED CLINICAL CONTEXT], explicitly state in the patient's language that the requested information is not available in their available health records (e.g. "मुझे उपलब्ध स्वास्थ्य रिकॉर्ड में इसकी जानकारी नहीं मिली।").

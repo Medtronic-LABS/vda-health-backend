@@ -6,6 +6,11 @@ export interface AgentDomainMapping {
 
 export class AgentKnowledgeMapper {
   private static readonly MAPPINGS: Record<string, AgentDomainMapping> = {
+    'adherence-agent': {
+      agentName: 'adherence-agent',
+      allowedDomains: ['medication_education', 'preventive_health', 'public_health'],
+      defaultDomain: 'preventive_health',
+    },
     'medication-agent': {
       agentName: 'medication-agent',
       allowedDomains: ['medication', 'medication_education'],
@@ -46,6 +51,11 @@ export class AgentKnowledgeMapper {
       agentName: 'referral-agent',
       allowedDomains: ['referral_protocols', 'healthcare_facilities'],
       defaultDomain: 'referral_protocols',
+    },
+    'teleconsultation-agent': {
+      agentName: 'teleconsultation-agent',
+      allowedDomains: ['telemedicine', 'teleconsultation', 'referral_protocols'],
+      defaultDomain: 'telemedicine',
     },
   };
 

@@ -11,6 +11,8 @@ import { AgentRouterService } from './agent-router.service';
 import { SchemeAgent } from '../ai/agents/scheme.agent';
 import { FacilityAgent } from '../ai/agents/facility.agent';
 import { ReferralAgent } from '../ai/agents/referral.agent';
+import { AdherenceAgent } from '../ai/agents/adherence.agent';
+import { TeleconsultationAgent } from '../ai/agents/teleconsultation.agent';
 
 @Module({
   providers: [
@@ -23,6 +25,8 @@ import { ReferralAgent } from '../ai/agents/referral.agent';
     SchemeAgent,
     FacilityAgent,
     ReferralAgent,
+    AdherenceAgent,
+    TeleconsultationAgent,
     AgentRegistryService,
     AgentRouterService,
   ],
@@ -32,6 +36,8 @@ import { ReferralAgent } from '../ai/agents/referral.agent';
     SchemeAgent,
     FacilityAgent,
     ReferralAgent,
+    AdherenceAgent,
+    TeleconsultationAgent,
   ],
 })
 export class AgentsModule {}

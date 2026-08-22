@@ -18,6 +18,7 @@ import { HealthRecordCategory } from '../interfaces/health-record-service.interf
  */
 export class IntentToRecordCategoryMapper {
   private static readonly MAPPING: Record<string, HealthRecordCategory[]> = {
+    ADHERENCE_QUERY: [HealthRecordCategory.MEDICATION],
     MEDICATION_QUERY: [
       HealthRecordCategory.MEDICATION,
       HealthRecordCategory.PRESCRIPTION,

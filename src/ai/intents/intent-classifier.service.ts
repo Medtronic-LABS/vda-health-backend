@@ -135,7 +135,18 @@ export class IntentClassifierService implements IIntentClassifier {
       return { intent: IntentType.GREETING, confidence: 0.98 };
     }
 
-    // 2. MEDICATION_QUERY vs PRESCRIPTION_QUERY
+    // 2. ADHERENCE_QUERY: a presentation-facing care-navigation intent. It
+    // deliberately precedes medication lookup so only adherence questions are
+    // routed to AdherenceAgent; medication facts still come from ClinicalContext.
+    if (
+      /दवाई.*(भूल|नियमित|समय)|दवा.*(भूल|नियमित|समय)|दवाई लेना भूल|medicines?.*(forget|regular|on time)|forget.*medicin|adherence|missed dose|treatment.*regular/i.test(
+        lower,
+      )
+    ) {
+      return { intent: IntentType.ADHERENCE_QUERY, confidence: 0.95 };
+    }
+
+    // 3. MEDICATION_QUERY vs PRESCRIPTION_QUERY
     const hasMedKeyword =
       /दवाई|दवा|दवाइयां|दवाइया|दवाइयाँ|दवाइयों|दवाइयो|medication|medicine|medicines|tablet|tablets|dose|dosage|dawa/i.test(
         lower,
@@ -152,7 +163,7 @@ export class IntentClassifierService implements IIntentClassifier {
       return { intent: IntentType.MEDICATION_QUERY, confidence: 0.95 };
     }
 
-    // 3. LAB_RESULT_QUERY
+    // 4. LAB_RESULT_QUERY
     if (
       /रिपोर्ट|लैब|टेस्ट|जांच|शुगर|रक्त|ब्लड|lab|report|result|test|glucose|hba1c|ecg|cbc/i.test(
         lower,
@@ -161,7 +172,7 @@ export class IntentClassifierService implements IIntentClassifier {
       return { intent: IntentType.LAB_RESULT_QUERY, confidence: 0.95 };
     }
 
-    // 4. DIAGNOSIS_QUERY
+    // 5. DIAGNOSIS_QUERY
     if (
       /बीमारी|রোগ|निदान|डायग्नोसिस|समस्या|diagnosis|condition|disease|illness|hypertension|diabetes/i.test(
         lower,
@@ -170,14 +181,14 @@ export class IntentClassifierService implements IIntentClassifier {
       return { intent: IntentType.DIAGNOSIS_QUERY, confidence: 0.92 };
     }
 
-    // 5. ALLERGY_QUERY
+    // 6. ALLERGY_QUERY
     if (
       /एलर्जी|एलर्गी|ऐलर्जी|allergen|allergy|allergies|reaction/i.test(lower)
     ) {
       return { intent: IntentType.ALLERGY_QUERY, confidence: 0.95 };
     }
 
-    // 6. GOVERNMENT_SCHEME_QUERY
+    // 7. GOVERNMENT_SCHEME_QUERY
     if (
       /योजना|आयुष्मान|पीएमजेएवाई|pmjay|pm-jay|ayushman|scheme|insurance|card|बीमा/i.test(
         lower,
@@ -186,7 +197,16 @@ export class IntentClassifierService implements IIntentClassifier {
       return { intent: IntentType.GOVERNMENT_SCHEME_QUERY, confidence: 0.95 };
     }
 
-    // 7. FACILITY_QUERY
+    // 8. TELECONSULTATION_QUERY
+    if (
+      /ऑनलाइन.*डॉक्टर|डॉक्टर.*ऑनलाइन|टेली.?कंसल्ट|tele.?consult|online doctor|doctor.*online|video consultation/i.test(
+        lower,
+      )
+    ) {
+      return { intent: IntentType.TELECONSULTATION_QUERY, confidence: 0.95 };
+    }
+
+    // 9. FACILITY_QUERY
     if (
       /अस्पताल|क्लिनिक|अस्पतालों|phc|chc|facility|facilities|hospital|hospitals|clinic/i.test(
         lower,
@@ -195,17 +215,17 @@ export class IntentClassifierService implements IIntentClassifier {
       return { intent: IntentType.FACILITY_QUERY, confidence: 0.95 };
     }
 
-    // 8. REFERRAL_QUERY
+    // 10. REFERRAL_QUERY
     if (/रेफर|रेफरल|refer|referral|pathway/i.test(lower)) {
       return { intent: IntentType.REFERRAL_QUERY, confidence: 0.95 };
     }
 
-    // 9. GENERAL_HEALTH_QUERY
+    // 11. GENERAL_HEALTH_QUERY
     if (/स्वास्थ्य|सेहत|health|fitness|wellness|general health/i.test(lower)) {
       return { intent: IntentType.GENERAL_HEALTH_QUERY, confidence: 0.88 };
     }
 
-    // 10. CLARIFICATION
+    // 12. CLARIFICATION
     if (
       /क्या मतलब|फिर से बताएं|समझ नहीं आया|repeat|explain|clarify|what do you mean/i.test(
         lower,
@@ -232,6 +252,7 @@ export class IntentClassifierService implements IIntentClassifier {
 
     let safetySensitivity: 'LOW' | 'MEDIUM' | 'HIGH' = 'LOW';
     if (
+      intent === IntentType.ADHERENCE_QUERY ||
       intent === IntentType.MEDICATION_QUERY ||
       intent === IntentType.PRESCRIPTION_QUERY ||
       intent === IntentType.DIAGNOSIS_QUERY

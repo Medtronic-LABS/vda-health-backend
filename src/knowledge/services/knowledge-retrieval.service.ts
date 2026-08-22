@@ -115,9 +115,16 @@ export class KnowledgeRetrievalService implements IKnowledgeRetrievalService {
       addFilter('domain', options?.domain);
       addFilter('category', options?.category);
       addFilter('role', options?.role, true);
-      addFilter('language', options?.language);
       addFilter('state', options?.state, true);
       addFilter('district', options?.district, true);
+      // Language is a preference, not an exclusion. The governed corpus can be
+      // English while a patient asks in Hindi; an exact filter would hide all
+      // authoritative knowledge and encourage an ungrounded response.
+      let languagePreference = '0';
+      if (options?.language) {
+        parameters.push(options.language);
+        languagePreference = `CASE WHEN c.language = $${parameters.length} THEN 0 ELSE 1 END`;
+      }
       parameters.push(maxResults * 2);
 
       const rawQuery = `
@@ -132,12 +139,13 @@ export class KnowledgeRetrievalService implements IKnowledgeRetrievalService {
           c.domain AS "domain",
           c.category AS "category",
           c.metadata AS "metadata",
+          ${languagePreference} AS "languagePreference",
           (e.embedding <=> $1::vector) AS "cosineDistance"
         FROM knowledge_embeddings e
         JOIN knowledge_chunks c ON e."chunkId" = c.id
         JOIN knowledge_documents d ON c."documentId" = d.id
         WHERE ${predicates.join('\n          AND ')}
-        ORDER BY "cosineDistance" ASC
+        ORDER BY "languagePreference" ASC, "cosineDistance" ASC
         LIMIT $${parameters.length};
       `;
 

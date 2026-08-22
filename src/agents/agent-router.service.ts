@@ -13,6 +13,9 @@ export class AgentRouterService {
     let agentId = 'general-health-agent';
 
     switch (intent) {
+      case IntentType.ADHERENCE_QUERY:
+        agentId = 'adherence-agent';
+        break;
       case IntentType.MEDICATION_QUERY:
       case IntentType.PRESCRIPTION_QUERY:
         agentId = 'medication-agent';
@@ -31,6 +34,9 @@ export class AgentRouterService {
         break;
       case IntentType.FACILITY_QUERY:
         agentId = 'facility-agent';
+        break;
+      case IntentType.TELECONSULTATION_QUERY:
+        agentId = 'teleconsultation-agent';
         break;
       case IntentType.REFERRAL_QUERY:
         agentId = 'referral-agent';

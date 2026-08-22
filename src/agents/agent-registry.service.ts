@@ -9,6 +9,8 @@ import { GreetingAgent } from './domain/greeting.agent';
 import { SchemeAgent } from '../ai/agents/scheme.agent';
 import { FacilityAgent } from '../ai/agents/facility.agent';
 import { ReferralAgent } from '../ai/agents/referral.agent';
+import { AdherenceAgent } from '../ai/agents/adherence.agent';
+import { TeleconsultationAgent } from '../ai/agents/teleconsultation.agent';
 
 @Injectable()
 export class AgentRegistryService implements OnModuleInit {
@@ -25,6 +27,8 @@ export class AgentRegistryService implements OnModuleInit {
     @Optional() private readonly schemeAgent?: SchemeAgent,
     @Optional() private readonly facilityAgent?: FacilityAgent,
     @Optional() private readonly referralAgent?: ReferralAgent,
+    @Optional() private readonly adherenceAgent?: AdherenceAgent,
+    @Optional() private readonly teleconsultationAgent?: TeleconsultationAgent,
   ) {}
 
   onModuleInit() {
@@ -37,6 +41,8 @@ export class AgentRegistryService implements OnModuleInit {
     if (this.schemeAgent) this.registerAgent(this.schemeAgent);
     if (this.facilityAgent) this.registerAgent(this.facilityAgent);
     if (this.referralAgent) this.registerAgent(this.referralAgent);
+    if (this.adherenceAgent) this.registerAgent(this.adherenceAgent);
+    if (this.teleconsultationAgent) this.registerAgent(this.teleconsultationAgent);
   }
 
   registerAgent(agent: IAgent): void {
