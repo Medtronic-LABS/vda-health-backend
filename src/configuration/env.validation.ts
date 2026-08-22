@@ -114,11 +114,11 @@ export class EnvironmentVariables {
 
   @IsString()
   @IsOptional()
-  SARVAM_SAARAS_STT_MODEL = 'sarvam-saaras-stt-v1';
+  SARVAM_SAARAS_STT_MODEL = 'saaras:v3';
 
   @IsString()
   @IsOptional()
-  SARVAM_BULBUL_TTS_MODEL = 'sarvam-bulbul-tts-v1';
+  SARVAM_BULBUL_TTS_MODEL = 'bulbul:v3';
 
   @IsOptional()
   SARVAM_ENABLED = false;

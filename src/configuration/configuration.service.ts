@@ -124,11 +124,11 @@ export class ConfigurationService {
   }
 
   get sarvamSaarasSttModel(): string | undefined {
-    return this.configService.get<string>('SARVAM_SAARAS_STT_MODEL');
+    return this.configService.get<string>('SARVAM_SAARAS_STT_MODEL') || 'saaras:v3';
   }
 
   get sarvamBulbulTtsModel(): string | undefined {
-    return this.configService.get<string>('SARVAM_BULBUL_TTS_MODEL');
+    return this.configService.get<string>('SARVAM_BULBUL_TTS_MODEL') || 'bulbul:v3';
   }
 
   get sarvamEnabled(): boolean {
