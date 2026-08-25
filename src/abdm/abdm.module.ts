@@ -10,6 +10,7 @@ import { ClinicalContextService } from './services/clinical-context.service';
 import { AbdmHiuCallbackController } from './controllers/abdm-hiu-callback.controller';
 import { ConfigurationService } from '../configuration/configuration.service';
 import { ConfigurationModule } from '../configuration/configuration.module';
+import { DevDemoModule } from '../dev/dev-demo.module';
 
 /**
  * AbdmModule — Health Record Provider Abstraction and Clinical Context Assembly.
@@ -23,7 +24,7 @@ import { ConfigurationModule } from '../configuration/configuration.module';
  * Missing credentials NEVER break application startup.
  */
 @Module({
-  imports: [ConsentModule, AuditModule, ConfigurationModule],
+  imports: [ConsentModule, AuditModule, ConfigurationModule, DevDemoModule],
   controllers: [AbdmHiuCallbackController],
   providers: [
     DevelopmentHealthRecordService,

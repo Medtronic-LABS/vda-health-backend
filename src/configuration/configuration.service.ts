@@ -144,7 +144,18 @@ export class ConfigurationService {
   }
 
   get geminiApiKey(): string | undefined {
-    return this.configService.get<string>('GEMINI_API_KEY');
+    return this.geminiApiKeys[0]?.key;
+  }
+
+  get geminiApiKeys(): Array<{ slot: number; key: string }> {
+    const numbered = [1, 2, 3, 4]
+      .map((slot) => ({ slot, key: this.configService.get<string>(`GEMINI_API_KEY_${slot}`)?.trim() || '' }))
+      .filter((entry) => entry.key.length > 0);
+    return numbered.length > 0
+      ? numbered
+      : this.configService.get<string>('GEMINI_API_KEY')?.trim()
+        ? [{ slot: 1, key: this.configService.get<string>('GEMINI_API_KEY')!.trim() }]
+        : [];
   }
 
   get geminiModelId(): string {
@@ -169,6 +180,10 @@ export class ConfigurationService {
 
   get geminiMaxRetries(): number {
     return this.configService.get<number>('GEMINI_MAX_RETRIES') || 2;
+  }
+
+  get geminiKeyCooldownSeconds(): number {
+    return Number(this.configService.get<number>('GEMINI_KEY_COOLDOWN_SECONDS')) || 60;
   }
 
   get aiMaxInputLength(): number {

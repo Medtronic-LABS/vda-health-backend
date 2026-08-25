@@ -188,7 +188,18 @@ export class IntentClassifierService implements IIntentClassifier {
       return { intent: IntentType.ALLERGY_QUERY, confidence: 0.95 };
     }
 
-    // 7. GOVERNMENT_SCHEME_QUERY
+    // 7. FACILITY_QUERY
+    // A facility request may also name a scheme such as PM-JAY. In that case,
+    // route by the requested service rather than the scheme keyword.
+    if (
+      /अस्पताल|क्लिनिक|अस्पतालों|phc|chc|facility|facilities|hospital|hospitals|clinic/i.test(
+        lower,
+      )
+    ) {
+      return { intent: IntentType.FACILITY_QUERY, confidence: 0.95 };
+    }
+
+    // 8. GOVERNMENT_SCHEME_QUERY
     if (
       /योजना|आयुष्मान|पीएमजेएवाई|pmjay|pm-jay|ayushman|scheme|insurance|card|बीमा/i.test(
         lower,
@@ -197,22 +208,13 @@ export class IntentClassifierService implements IIntentClassifier {
       return { intent: IntentType.GOVERNMENT_SCHEME_QUERY, confidence: 0.95 };
     }
 
-    // 8. TELECONSULTATION_QUERY
+    // 9. TELECONSULTATION_QUERY
     if (
       /ऑनलाइन.*डॉक्टर|डॉक्टर.*ऑनलाइन|टेली.?कंसल्ट|tele.?consult|online doctor|doctor.*online|video consultation/i.test(
         lower,
       )
     ) {
       return { intent: IntentType.TELECONSULTATION_QUERY, confidence: 0.95 };
-    }
-
-    // 9. FACILITY_QUERY
-    if (
-      /अस्पताल|क्लिनिक|अस्पतालों|phc|chc|facility|facilities|hospital|hospitals|clinic/i.test(
-        lower,
-      )
-    ) {
-      return { intent: IntentType.FACILITY_QUERY, confidence: 0.95 };
     }
 
     // 10. REFERRAL_QUERY

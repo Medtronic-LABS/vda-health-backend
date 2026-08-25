@@ -11,6 +11,7 @@ import { ConsentService } from '../consent/consent.service';
 import { AuditService } from '../audit/audit.service';
 import { HostIdentity } from '../auth/host-identity.context';
 import { CreateSessionDto } from './dto/create-session.dto';
+import { ConfigurationService } from '../configuration/configuration.service';
 
 @Injectable()
 export class SessionsService {
@@ -19,6 +20,7 @@ export class SessionsService {
     private readonly sessionRepo: Repository<Session>,
     private readonly consentService: ConsentService,
     private readonly auditService: AuditService,
+    private readonly config: ConfigurationService,
   ) {}
 
   async createSession(
@@ -27,7 +29,11 @@ export class SessionsService {
     correlationId: string,
   ): Promise<Session> {
     // 1. Verify subject authorization
-    if (dto.subject_abha_ref !== identity.subjectAbhaRef) {
+    const isSyntheticDevelopmentSubject =
+      this.config.nodeEnv === 'development' &&
+      this.config.devAuthEnabled &&
+      dto.subject_abha_ref.startsWith('synthetic:');
+    if (dto.subject_abha_ref !== identity.subjectAbhaRef && !isSyntheticDevelopmentSubject) {
       // Log consent failure
       await this.auditService.logEvent({
         tenantId: identity.tenantId,

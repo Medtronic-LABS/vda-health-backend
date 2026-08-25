@@ -11,6 +11,8 @@ import { AuditEvent } from './entities/audit-event.entity';
 import { KnowledgeDocument } from './entities/knowledge-document.entity';
 import { KnowledgeChunk } from './entities/knowledge-chunk.entity';
 import { KnowledgeEmbedding } from './entities/knowledge-embedding.entity';
+import { SyntheticPatient } from './entities/synthetic-patient.entity';
+import { SyntheticPatientFeedback } from './entities/synthetic-feedback.entity';
 
 @Injectable()
 export class DatabaseConfigService implements TypeOrmOptionsFactory {
@@ -36,6 +38,8 @@ export class DatabaseConfigService implements TypeOrmOptionsFactory {
         KnowledgeDocument,
         KnowledgeChunk,
         KnowledgeEmbedding,
+        SyntheticPatient,
+        SyntheticPatientFeedback,
       ],
       synchronize: false,
       migrationsRun: false,

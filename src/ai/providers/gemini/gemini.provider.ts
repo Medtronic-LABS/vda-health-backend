@@ -12,6 +12,7 @@ import {
 @Injectable()
 export class GeminiProvider implements IAiProvider {
   private readonly logger = new Logger(GeminiProvider.name);
+  private readonly unavailableUntil = new Map<number, number>();
 
   constructor(private readonly config: ConfigurationService) {}
 
@@ -19,7 +20,36 @@ export class GeminiProvider implements IAiProvider {
     prompt: string,
     options?: AiGenerateOptions,
   ): Promise<AiGenerateResult> {
-    const apiKey = this.config.geminiApiKey;
+    const candidates = this.config.geminiApiKeys.filter(
+      ({ slot }) => (this.unavailableUntil.get(slot) || 0) <= Date.now(),
+    );
+    if (candidates.length === 0) {
+      throw new Error('GEMINI_PROVIDER_UNAVAILABLE');
+    }
+    let finalError: Error | undefined;
+    for (let attempt = 0; attempt < candidates.length; attempt++) {
+      const candidate = candidates[attempt];
+      try {
+        return await this.generateForKey(prompt, options, candidate.key, candidate.slot, attempt + 1);
+      } catch (err: unknown) {
+        finalError = err instanceof Error ? err : new Error(String(err));
+        const status = this.statusFromError(finalError);
+        const retryable = status !== undefined && [401, 403, 408, 429, 500, 502, 503, 504].includes(status);
+        if (!retryable) throw finalError;
+        this.unavailableUntil.set(candidate.slot, Date.now() + this.config.geminiKeyCooldownSeconds * 1000);
+        this.logger.warn(`[GeminiTelemetry] provider=gemini keySlot=${candidate.slot} status=${status} failover=${attempt < candidates.length - 1} attempt=${attempt + 1}`);
+      }
+    }
+    throw finalError || new Error('GEMINI_PROVIDER_UNAVAILABLE');
+  }
+
+  private async generateForKey(
+    prompt: string,
+    options: AiGenerateOptions | undefined,
+    apiKey: string,
+    keySlot: number,
+    failoverAttempt: number,
+  ): Promise<AiGenerateResult> {
     const model = this.config.geminiModel;
     const timeoutMs: number = Number(
       options?.timeoutMs || this.config.geminiTimeoutMs,
@@ -27,11 +57,6 @@ export class GeminiProvider implements IAiProvider {
     const maxRetries: number = Number(
       options?.maxRetries || this.config.geminiMaxRetries,
     );
-
-    if (!apiKey) {
-      this.logger.warn('Gemini API Key is missing');
-      throw new Error('GEMINI_NOT_CONFIGURED');
-    }
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
@@ -93,10 +118,11 @@ export class GeminiProvider implements IAiProvider {
 
         let jsonObj: Record<string, any> | undefined;
         if (options?.responseFormat === 'json' && textContent) {
-          try {
-            jsonObj = JSON.parse(textContent) as Record<string, any>;
-          } catch {
-            this.logger.warn('Failed to parse Gemini JSON output');
+          jsonObj = this.parseStructuredJson(textContent);
+          if (!jsonObj) {
+            this.logger.warn(
+              `[GeminiTelemetry] provider=gemini keySlot=${keySlot} json_parse=false response_chars=${textContent.length}`,
+            );
           }
         }
 
@@ -105,7 +131,7 @@ export class GeminiProvider implements IAiProvider {
 
         const durationMs = Date.now() - requestStartedAt;
         this.logger.log(
-          `[GeminiTelemetry] status=success model=${model} attempts=${attempt} duration_ms=${durationMs} prompt_chars=${prompt.length} system_chars=${options?.systemPrompt?.length || 0}`,
+          `[GeminiTelemetry] provider=gemini keySlot=${keySlot} status=success failover=${failoverAttempt > 1} attempts=${attempt} duration_ms=${durationMs} prompt_chars=${prompt.length} system_chars=${options?.systemPrompt?.length || 0}`,
         );
         return {
           text: textContent,
@@ -123,7 +149,7 @@ export class GeminiProvider implements IAiProvider {
         const errMsg = err instanceof Error ? err.message : String(err);
         lastError = err instanceof Error ? err : new Error(errMsg);
         this.logger.warn(
-          `[GeminiTelemetry] status=failed model=${model} attempt=${attempt}/${maxRetries} duration_ms=${Date.now() - requestStartedAt} prompt_chars=${prompt.length} system_chars=${options?.systemPrompt?.length || 0} error=${lastError.message}`,
+          `[GeminiTelemetry] provider=gemini keySlot=${keySlot} status=failed attempt=${attempt}/${maxRetries} duration_ms=${Date.now() - requestStartedAt} prompt_chars=${prompt.length} system_chars=${options?.systemPrompt?.length || 0} error=${lastError.message}`,
         );
         if (attempt < maxRetries) {
           await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 200));
@@ -132,6 +158,31 @@ export class GeminiProvider implements IAiProvider {
     }
 
     throw lastError || new Error('Gemini execution failed after retries');
+  }
+
+  private statusFromError(error: Error): number | undefined {
+    const match = error.message.match(/status\s+(\d{3})/i);
+    return match ? Number(match[1]) : undefined;
+  }
+
+  /** Transport-only normalization. It never converts prose into a response. */
+  private parseStructuredJson(text: string): Record<string, any> | undefined {
+    const trimmed = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    const candidates = [trimmed];
+    const start = trimmed.indexOf('{');
+    const end = trimmed.lastIndexOf('}');
+    if (start >= 0 && end > start) candidates.push(trimmed.slice(start, end + 1));
+    for (const candidate of candidates) {
+      try {
+        const parsed = JSON.parse(candidate) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed as Record<string, any>;
+        }
+      } catch {
+        // Continue only with another safe JSON envelope candidate.
+      }
+    }
+    return undefined;
   }
 
   async classify(
@@ -168,8 +219,7 @@ Query: "${text}"`;
 
   async healthCheck(): Promise<ProviderHealth> {
     await Promise.resolve();
-    const apiKey = this.config.geminiApiKey;
-    if (!apiKey) {
+    if (this.config.geminiApiKeys.length === 0) {
       return {
         status: 'NOT_CONFIGURED',
         details: 'Gemini API key is not configured',

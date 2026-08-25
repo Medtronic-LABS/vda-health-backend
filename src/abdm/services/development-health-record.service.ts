@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/require-await */
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import {
   IHealthRecordService,
   HealthRecordRequest,
@@ -8,6 +8,7 @@ import {
   RawHealthRecord,
   RawHealthRecordBundle,
 } from '../interfaces/health-record-service.interface';
+import { SyntheticPatientService } from '../../dev/synthetic-patient.service';
 
 /**
  * DevelopmentHealthRecordService
@@ -38,6 +39,8 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
   private static readonly DEV_TENANT_ID =
     '00000000-0000-0000-0000-000000000000';
 
+  constructor(@Optional() private readonly syntheticPatients?: SyntheticPatientService) {}
+
   async fetchRecords(
     request: HealthRecordRequest,
   ): Promise<HealthRecordResult> {
@@ -48,11 +51,15 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
     );
 
     // Subject isolation: only serve records for development-authorized subjects and tenants
+    const syntheticPatient = this.syntheticPatients && subjectContext.subjectAbhaRef.startsWith('synthetic:')
+      ? await this.syntheticPatients.getByReference(subjectContext.tenantId, subjectContext.subjectAbhaRef)
+      : null;
     if (
-      (subjectContext.subjectAbhaRef !==
+      ((subjectContext.subjectAbhaRef !==
         DevelopmentHealthRecordService.DEV_SUBJECT_REF &&
         subjectContext.subjectAbhaRef !== 'dev-host-user-123') ||
-      subjectContext.tenantId !== DevelopmentHealthRecordService.DEV_TENANT_ID
+        subjectContext.tenantId !== DevelopmentHealthRecordService.DEV_TENANT_ID) &&
+      !syntheticPatient
     ) {
       this.logger.warn(
         `[DEV] Subject or tenant mismatch — returning empty records`,
@@ -69,7 +76,9 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
     const now = new Date();
 
     for (const category of categories) {
-      const records = this.getSyntheticRecords(category, now, dateRangeStart);
+      const records = syntheticPatient
+        ? this.getPatientRecords(syntheticPatient.clinicalProfile, category, now)
+        : this.getSyntheticRecords(category, now, dateRangeStart);
       bundles.push({
         category,
         records,
@@ -83,6 +92,27 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
       unavailableCategories,
       providerErrorCodes: [],
     };
+  }
+
+  private getPatientRecords(profile: Record<string, unknown>, category: HealthRecordCategory, now: Date): RawHealthRecord[] {
+    const records = (key: string) => Array.isArray(profile[key]) ? profile[key] as Array<Record<string, unknown>> : [];
+    const source = 'synthetic-development-patient';
+    const map = (items: Array<Record<string, unknown>>, payload: (item: Record<string, unknown>) => Record<string, unknown>) =>
+      items.map((item, index) => ({ category, sourceRef: `${source}-${category}-${index + 1}`, fetchedAt: now, payload: { ...payload(item), date: now } }));
+    switch (category) {
+      case HealthRecordCategory.MEDICATION:
+        return map(records('medications'), (x) => ({ medicationName: x.name, dosage: x.dosage, frequency: x.frequency, route: x.route || 'Oral', startDate: x.startDate || now, endDate: null, status: 'active' }));
+      case HealthRecordCategory.PRESCRIPTION:
+        return map(records('medications'), (x) => ({ medicationName: x.name, prescriptionDate: now, instructions: x.instructions || null, status: 'active' }));
+      case HealthRecordCategory.DIAGNOSIS:
+        return map(records('diagnoses'), (x) => ({ conditionName: x.name, severity: x.severity || null, onsetDate: x.onsetDate || null, status: 'active' }));
+      case HealthRecordCategory.ALLERGY:
+        return map(records('allergies'), (x) => ({ allergen: x.name, reactionType: x.reaction || null, severity: x.severity || null, status: 'active' }));
+      case HealthRecordCategory.LAB_REPORT:
+        return map(records('labResults'), (x) => ({ testName: x.name, value: x.value, unit: x.unit || null, referenceRange: x.referenceRange || null, interpretation: x.interpretation || null, observationDate: x.observationDate || now }));
+      default:
+        return [];
+    }
   }
 
   private getSyntheticRecords(

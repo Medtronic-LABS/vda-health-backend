@@ -139,6 +139,22 @@ export class EnvironmentVariables {
 
   @IsString()
   @IsOptional()
+  GEMINI_API_KEY_1?: string;
+
+  @IsString()
+  @IsOptional()
+  GEMINI_API_KEY_2?: string;
+
+  @IsString()
+  @IsOptional()
+  GEMINI_API_KEY_3?: string;
+
+  @IsString()
+  @IsOptional()
+  GEMINI_API_KEY_4?: string;
+
+  @IsString()
+  @IsOptional()
   GEMINI_MODEL_ID = 'gemini-3.5-flash';
 
   @IsString()
@@ -157,6 +173,11 @@ export class EnvironmentVariables {
   @IsNumber()
   @IsOptional()
   GEMINI_MAX_RETRIES = 2;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  GEMINI_KEY_COOLDOWN_SECONDS = 60;
 
   @Type(() => Number)
   @IsNumber()

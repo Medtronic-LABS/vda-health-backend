@@ -6,7 +6,7 @@ export class DevelopmentSafetyGate implements ISafetyGate {
   // emergency indicators mapping
   private readonly emergencyPatterns = {
     en: /\b(?:severe chest pain|difficulty breathing|unconscious|severe bleeding|stroke indicators|stroke)\b/i,
-    hi: /(?:(?:सीने|छाती)\s+में\s+(?:बहुत\s+)?तेज\s+दर्द|सांस\s+(?:लेने\s+में\s+(?:बहुत\s+)?दिक्कत|फूल)|बेहोश|बहुत\s+ज्यादा\s+खून\s+बहना|स्ट्रोक\s+के\s+संकेत|स्ट्रोक)/,
+    hi: /(?:(?:सीने|छाती)\s+में\s+(?:बहुत\s+)?(?:तेज\s+)?दर्द|सांस\s+(?:लेने\s+में\s+(?:बहुत\s+)?(?:दिक्कत|तकलीफ)|फूल)|बेहोश|बहुत\s+ज्यादा\s+खून\s+बहना|स्ट्रोक\s+के\s+संकेत|स्ट्रोक)/,
     hiLatn:
       /\b(?:seene mein bahut tez dard|saans lene mein bahut dikkat|behosh|bahut zyada khoon beh raha|stroke ke lakshan|stroke)\b/i,
   };

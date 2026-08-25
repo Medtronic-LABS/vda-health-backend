@@ -9,8 +9,53 @@ export interface FormattedPatientResponse {
   safety_status: string;
 }
 
+export interface PatientResponseContent {
+  summary: string;
+  sections?: Array<{ title?: string; body?: string; bullets?: string[] }>;
+  cards?: Array<Record<string, unknown>>;
+  actions?: Array<{ label: string; action: string }>;
+}
+
 @Injectable()
 export class ConversationResponseFormatter {
+  normalizeGeneratedContent(
+    generated: unknown,
+  ): PatientResponseContent | null {
+    if (!generated || typeof generated !== 'object') return null;
+    const candidate = generated as Record<string, unknown>;
+    const summary = typeof candidate.summary === 'string' ? candidate.summary.trim() : '';
+    // A normal patient reply must be concise, but the SafetyGate owns emergency output.
+    if (!summary || this.wordCount(summary) > 120) return null;
+
+    const sections = Array.isArray(candidate.sections)
+      ? candidate.sections
+          .filter((s): s is Record<string, unknown> => !!s && typeof s === 'object')
+          .slice(0, 3)
+          .map((s) => ({
+            title: typeof s.title === 'string' ? s.title : undefined,
+            body: typeof s.body === 'string' ? s.body : undefined,
+            bullets: Array.isArray(s.bullets)
+              ? s.bullets.filter((b): b is string => typeof b === 'string').slice(0, 4)
+              : undefined,
+          }))
+      : undefined;
+    const cards = Array.isArray(candidate.cards)
+      ? candidate.cards.filter((c): c is Record<string, unknown> => !!c && typeof c === 'object').slice(0, 5)
+      : undefined;
+    const actions = Array.isArray(candidate.actions)
+      ? candidate.actions
+          .filter((a): a is Record<string, unknown> => !!a && typeof a === 'object' && typeof a.label === 'string' && typeof a.action === 'string')
+          .slice(0, 2)
+          .map((a) => ({ label: String(a.label), action: String(a.action) }))
+      : undefined;
+
+    return { summary, sections, cards, actions };
+  }
+
+  private wordCount(text: string): number {
+    return text.trim().split(/\s+/).filter(Boolean).length;
+  }
+
   /**
    * Formats AI turn results into structured patient-safe responses with clinical card metadata.
    */
@@ -22,6 +67,7 @@ export class ConversationResponseFormatter {
     safetyStatus: string;
     clinicalContext?: ClinicalContext | null;
     language?: string;
+    inputText?: string;
   }): FormattedPatientResponse {
     const {
       responseType,
@@ -30,9 +76,20 @@ export class ConversationResponseFormatter {
       selectedAgent,
       safetyStatus,
       clinicalContext,
+      inputText = '',
     } = options;
 
     const formattedContent: Record<string, unknown> = { ...content };
+
+    // Gemini's governed response contract always renders through `summary`.
+    // Retain the language-keyed text for API compatibility and TTS only.
+    const summary = typeof formattedContent['summary'] === 'string'
+      ? formattedContent['summary']
+      : undefined;
+    if (summary) {
+      formattedContent['summary'] = summary;
+      formattedContent[options.language || 'en'] = summary;
+    }
 
     // Embed structured cards based on ClinicalContext when available
     if (clinicalContext) {
@@ -51,6 +108,8 @@ export class ConversationResponseFormatter {
             status: m.status,
           }),
         );
+        // Medication values must come from authorized ClinicalContext, not LLM cards.
+        formattedContent['cards'] = [];
       }
 
       if (
@@ -60,7 +119,14 @@ export class ConversationResponseFormatter {
         clinicalContext.labResults &&
         clinicalContext.labResults.length > 0
       ) {
-        formattedContent['lab_results'] = clinicalContext.labResults.map(
+        const lowerInput = inputText.toLowerCase();
+        const requestedLabs = clinicalContext.labResults.filter((l) => {
+          if (/hba1c|एचबीए1सी|एचबीए1सी/.test(lowerInput)) {
+            return /hba1c/i.test(l.testName);
+          }
+          return true;
+        });
+        formattedContent['lab_results'] = requestedLabs.slice(0, 3).map(
           (l) => ({
             test_name: l.testName,
             value: l.value,
@@ -70,6 +136,8 @@ export class ConversationResponseFormatter {
             interpretation: l.interpretation,
           }),
         );
+        // Lab values must come from authorized ClinicalContext, not LLM cards.
+        formattedContent['cards'] = [];
       }
 
       if (

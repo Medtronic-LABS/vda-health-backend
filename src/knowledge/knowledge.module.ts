@@ -10,6 +10,7 @@ import { DevelopmentEmbeddingProvider } from './providers/development/developmen
 import { DevelopmentKnowledgeService } from './services/development-knowledge.service';
 import { KnowledgeRetrievalService } from './services/knowledge-retrieval.service';
 import { KnowledgeAdminService } from './services/knowledge-admin.service';
+import { KnowledgeQueryNormalizerService } from './services/knowledge-query-normalizer.service';
 import { AdminKnowledgeController } from './controllers/admin-knowledge.controller';
 import { ConfigurationModule } from '../configuration/configuration.module';
 import { AuditModule } from '../audit/audit.module';
@@ -37,12 +38,14 @@ import { AuthModule } from '../auth/auth.module';
     DevelopmentKnowledgeService,
     KnowledgeRetrievalService,
     KnowledgeAdminService,
+    KnowledgeQueryNormalizerService,
   ],
   exports: [
     KnowledgeRetrievalService,
     KnowledgeAdminService,
     LocalSemanticEmbeddingProvider,
     DevelopmentKnowledgeService,
+    KnowledgeQueryNormalizerService,
   ],
 })
 export class KnowledgeModule {}

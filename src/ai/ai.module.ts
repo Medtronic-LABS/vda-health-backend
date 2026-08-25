@@ -44,7 +44,7 @@ import { PiiModule } from '../pii/pii.module';
         devProvider: DevelopmentAiProvider,
         geminiProvider: GeminiProvider,
       ) => {
-        if (config.aiProviderEnabled && config.geminiApiKey) {
+        if (config.aiProviderEnabled && config.geminiApiKeys.length > 0) {
           return geminiProvider;
         }
         return devProvider;
