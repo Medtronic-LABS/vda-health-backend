@@ -9,6 +9,11 @@ import {
   RawHealthRecordBundle,
 } from '../interfaces/health-record-service.interface';
 import { SyntheticPatientService } from '../../dev/synthetic-patient.service';
+import { PrescriptionService } from '../../prescriptions/prescription.service';
+import { MedicationService } from '../../medications/medication.service';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
+import { Session } from '../../database/entities/session.entity';
 
 /**
  * DevelopmentHealthRecordService
@@ -39,7 +44,7 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
   private static readonly DEV_TENANT_ID =
     '00000000-0000-0000-0000-000000000000';
 
-  constructor(@Optional() private readonly syntheticPatients?: SyntheticPatientService) {}
+  constructor(@Optional() private readonly syntheticPatients?: SyntheticPatientService, @Optional() private readonly prescriptions?: PrescriptionService, @Optional() private readonly medicationService?: MedicationService, @InjectDataSource() private readonly dataSource?: DataSource) {}
 
   async fetchRecords(
     request: HealthRecordRequest,
@@ -50,9 +55,14 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
       `[DEV] fetchRecords categories=${categories.join(',')} sessionId=${subjectContext.sessionId}`,
     );
 
+    // In a synthetic demo, consent remains bound to the host identity while the
+    // session supplies the server-authorized synthetic record reference. Never
+    // accept a synthetic subject reference directly from patient input.
+    const session = this.dataSource ? await this.dataSource.getRepository(Session).findOne({ where: { id: subjectContext.sessionId, tenantId: subjectContext.tenantId, externalId: subjectContext.subjectAbhaRef } }) : null;
+    const recordSubjectRef = session?.subjectAbhaRef.startsWith('synthetic:') ? session.subjectAbhaRef : subjectContext.subjectAbhaRef;
     // Subject isolation: only serve records for development-authorized subjects and tenants
-    const syntheticPatient = this.syntheticPatients && subjectContext.subjectAbhaRef.startsWith('synthetic:')
-      ? await this.syntheticPatients.getByReference(subjectContext.tenantId, subjectContext.subjectAbhaRef)
+    const syntheticPatient = this.syntheticPatients && recordSubjectRef.startsWith('synthetic:')
+      ? await this.syntheticPatients.getByReference(subjectContext.tenantId, recordSubjectRef)
       : null;
     if (
       ((subjectContext.subjectAbhaRef !==
@@ -77,7 +87,7 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
 
     for (const category of categories) {
       const records = syntheticPatient
-        ? this.getPatientRecords(syntheticPatient.clinicalProfile, category, now)
+        ? await this.getPatientRecords(syntheticPatient, category, now)
         : this.getSyntheticRecords(category, now, dateRangeStart);
       bundles.push({
         category,
@@ -94,15 +104,21 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
     };
   }
 
-  private getPatientRecords(profile: Record<string, unknown>, category: HealthRecordCategory, now: Date): RawHealthRecord[] {
+  private async getPatientRecords(patient: { tenantId: string; syntheticPatientId: string; clinicalProfile: Record<string, unknown> }, category: HealthRecordCategory, now: Date): Promise<RawHealthRecord[]> {
+    const profile = patient.clinicalProfile;
     const records = (key: string) => Array.isArray(profile[key]) ? profile[key] as Array<Record<string, unknown>> : [];
     const source = 'synthetic-development-patient';
     const map = (items: Array<Record<string, unknown>>, payload: (item: Record<string, unknown>) => Record<string, unknown>) =>
       items.map((item, index) => ({ category, sourceRef: `${source}-${category}-${index + 1}`, fetchedAt: now, payload: { ...payload(item), date: now } }));
     switch (category) {
       case HealthRecordCategory.MEDICATION:
+        const confirmed = this.medicationService ? await this.medicationService.activeForPatient(patient.tenantId, `synthetic:${patient.syntheticPatientId}`) : [];
+        // Uploaded candidates are intentionally excluded until explicit medication confirmation.
+        if (confirmed.length) return confirmed.map((medication, index) => ({ category, sourceRef: `confirmed-medication-${medication.sourcePrescriptionId}-${index + 1}`, fetchedAt: now, payload: { medicationName: medication.name, dosage: medication.strength || medication.dosage || null, frequency: medication.frequency || null, route: medication.route || null, startDate: medication.startDate || medication.createdAt, endDate: medication.endDate || null, status: 'active', date: medication.createdAt } }));
         return map(records('medications'), (x) => ({ medicationName: x.name, dosage: x.dosage, frequency: x.frequency, route: x.route || 'Oral', startDate: x.startDate || now, endDate: null, status: 'active' }));
       case HealthRecordCategory.PRESCRIPTION:
+        const uploaded = this.prescriptions ? await this.prescriptions.approvedForPatient(patient.tenantId, `synthetic:${patient.syntheticPatientId}`) : [];
+        if (uploaded.length) return uploaded.flatMap((prescription) => prescription.medications.map((medication, index) => ({ category, sourceRef: `synthetic-prescription-${prescription.sourceDocumentId}-${index + 1}`, fetchedAt: now, payload: { medicationName: medication.medicationName, prescriptionDate: prescription.prescriptionDate || prescription.createdAt, instructions: medication.instructions || null, status: 'active', date: prescription.createdAt } })));
         return map(records('medications'), (x) => ({ medicationName: x.name, prescriptionDate: now, instructions: x.instructions || null, status: 'active' }));
       case HealthRecordCategory.DIAGNOSIS:
         return map(records('diagnoses'), (x) => ({ conditionName: x.name, severity: x.severity || null, onsetDate: x.onsetDate || null, status: 'active' }));

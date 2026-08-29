@@ -19,8 +19,8 @@ export class TeleconsultationAgent implements IAgent {
       agentId: this.agentId,
       responseType: 'teleconsultation',
       content: hi
-        ? { hi: 'टेलीकंसल्टेशन सेवा अगले चरण के लिए कॉन्फ़िगर है। आपातकालीन लक्षण हों तो तुरंत स्थानीय आपातकालीन सेवा से संपर्क करें.' }
-        : { en: 'The teleconsultation service is configured for the next step. If you have emergency symptoms, contact local emergency services immediately.' },
+        ? { summary: 'टेलीकंसल्टेशन डेमो शुरू हो गया है। यह केवल डेमो है; कोई वास्तविक डॉक्टर या अपॉइंटमेंट बुक नहीं किया गया है। अगला चरण: डेमो कंसल्टेशन स्थिति देखें।', hi: 'टेलीकंसल्टेशन डेमो शुरू हो गया है। यह केवल डेमो है; कोई वास्तविक डॉक्टर या अपॉइंटमेंट बुक नहीं किया गया है। अगला चरण: डेमो कंसल्टेशन स्थिति देखें।', teleconsultation: { status: 'DEMO_STARTED', consultationState: 'DEMO_PENDING', mode: 'DEMO_ONLY', nextStep: 'VIEW_DEMO_CONSULTATION_STATUS' } }
+        : { summary: 'Teleconsultation demo started. This is DEMO ONLY; no real doctor or appointment has been created. Next step: view the demo consultation status.', en: 'Teleconsultation demo started. This is DEMO ONLY; no real doctor or appointment has been created. Next step: view the demo consultation status.', teleconsultation: { status: 'DEMO_STARTED', consultationState: 'DEMO_PENDING', mode: 'DEMO_ONLY', nextStep: 'VIEW_DEMO_CONSULTATION_STATUS' } },
     };
   }
 }

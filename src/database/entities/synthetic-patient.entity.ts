@@ -19,6 +19,10 @@ export class SyntheticPatient {
   @Column('int')
   age!: number;
 
+  /** Optional development-only demographic detail supplied by the admin. */
+  @Column({ type: 'date', nullable: true })
+  dateOfBirth?: string | null;
+
   @Column()
   gender!: string;
 
@@ -28,8 +32,17 @@ export class SyntheticPatient {
   @Column()
   district!: string;
 
+  @Column({ type: 'varchar', nullable: true })
+  city?: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  locality?: string | null;
+
   @Column({ default: 'hi' })
   language!: string;
+
+  @Column({ default: 'Asia/Kolkata' })
+  timezone!: string;
 
   @Column({ type: 'varchar', nullable: true })
   phoneNumber?: string | null;

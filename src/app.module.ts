@@ -30,6 +30,9 @@ import { HealthModule } from './health/health.module';
 import { DevDemoModule } from './dev/dev-demo.module';
 import { CommonModule } from './common/common.module';
 import { VoiceModule } from './voice/voice.module';
+import { FacilityModule } from './facilities/facility.module';
+import { SchemeModule } from './schemes/scheme.module';
+import { PrescriptionModule } from './prescriptions/prescription.module';
 import { GlobalExceptionFilter } from './common/global-exception.filter';
 import { CorrelationIdMiddleware } from './observability/correlation-id.middleware';
 
@@ -62,6 +65,9 @@ import { CorrelationIdMiddleware } from './observability/correlation-id.middlewa
     HealthModule,
     DevDemoModule,
     VoiceModule,
+    FacilityModule,
+    SchemeModule,
+    PrescriptionModule,
     CommonModule,
   ],
   controllers: [AppController],

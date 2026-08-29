@@ -121,8 +121,18 @@ export class ConversationResponseFormatter {
       ) {
         const lowerInput = inputText.toLowerCase();
         const requestedLabs = clinicalContext.labResults.filter((l) => {
-          if (/hba1c|एचबीए1सी|एचबीए1सी/.test(lowerInput)) {
-            return /hba1c/i.test(l.testName);
+          const testName = l.testName.toLowerCase();
+          if (/hba1c|एचबीए1सी/i.test(lowerInput)) {
+            return /hba1c/i.test(testName);
+          }
+          const hasBp = /bp|blood\s*pressure|pressure|रक्तचाप|बीपी|प्रेशर/i.test(lowerInput);
+          const hasGlucose = /glucose|sugar|fasting|ग्लूकोज|ग्लूकोस|शुगर|चीनी/i.test(lowerInput);
+
+          if (hasBp && !hasGlucose) {
+            return /pressure|bp|systolic|diastolic/i.test(testName);
+          }
+          if (hasGlucose && !hasBp) {
+            return /glucose|sugar|glycated/i.test(testName);
           }
           return true;
         });

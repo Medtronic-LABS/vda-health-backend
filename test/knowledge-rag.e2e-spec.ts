@@ -21,10 +21,63 @@ process.env.DEV_AUTH_ROLES = 'admin,doctor,patient';
 jest.mock('@nestjs/typeorm', () => {
   const original = jest.requireActual('@nestjs/typeorm');
   const { DataSource } = require('typeorm');
+  const repositories = new Map<any, any>();
+  let nextRepositoryId = 0;
+  const getRepository = (entity: any) => {
+    if (repositories.has(entity)) return repositories.get(entity);
+    const rows = new Map<string, any>();
+    const entityName = entity?.name || 'Entity';
+    const fallback = (where: any = {}) => ({
+      id: where.id || `${entityName}-${++nextRepositoryId}`,
+      tenantId: '00000000-0000-0000-0000-000000000000',
+      externalId: 'dev-patient-123',
+      subjectId: 'dev-patient-123',
+      subjectAbhaRef: 'dev-subject-abha-ref',
+      consentArtifactId: 'dev-consent-001',
+      scopes: ['record_read', 'conversation_retention', 'reminder_delivery'],
+      title: 'PM-JAY Scheme Info',
+      description: 'आयुष्मान भारत योजना के तहत ₹5 लाख का मुफ्त इलाज',
+      status: entityName.includes('KnowledgeDocument') ? 'REVIEW_REQUIRED' : 'ACTIVE',
+      domain: 'government_schemes',
+      language: 'hi',
+      chunks: [],
+    });
+    const repository = {
+      find: jest.fn().mockImplementation(() => Promise.resolve([...rows.values()])),
+      findOne: jest.fn().mockImplementation((opts: any) => {
+        const where = opts?.where || {};
+        const found = [...rows.values()].find((row) => Object.entries(where).every(([key, value]) => row[key] === value));
+        return Promise.resolve(found || fallback(where));
+      }),
+      create: jest.fn().mockImplementation((dto: any) => ({ id: dto?.id || `${entityName}-${++nextRepositoryId}`, ...dto })),
+      save: jest.fn().mockImplementation((dto: any) => {
+        const saved = { ...dto, id: dto?.id || `${entityName}-${++nextRepositoryId}` };
+        rows.set(saved.id, saved);
+        return Promise.resolve(saved);
+      }),
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
+      remove: jest.fn().mockResolvedValue({}),
+      createQueryBuilder: jest.fn().mockImplementation(() => {
+        const builder: any = {
+          where: jest.fn().mockReturnThis(),
+          andWhere: jest.fn().mockReturnThis(),
+          innerJoin: jest.fn().mockReturnThis(),
+          orderBy: jest.fn().mockReturnThis(),
+          addOrderBy: jest.fn().mockReturnThis(),
+          take: jest.fn().mockReturnThis(),
+          getMany: jest.fn().mockImplementation(() => Promise.resolve([...rows.values()])),
+        };
+        return builder;
+      }),
+    };
+    repositories.set(entity, repository);
+    return repository;
+  };
   class MockTypeOrmModule {
     static forRoot = jest.fn().mockImplementation(() => {
       const mockDS = {
         query: jest.fn().mockResolvedValue([]),
+        getRepository: jest.fn().mockImplementation((entity: any) => getRepository(entity)),
         isInitialized: true,
         entityMetadatas: [],
         transaction: jest.fn().mockImplementation(async (cb: any) =>
@@ -98,6 +151,7 @@ jest.mock('@nestjs/typeorm', () => {
     static forRootAsync = jest.fn().mockImplementation(() => {
       const mockDS = {
         query: jest.fn().mockResolvedValue([]),
+        getRepository: jest.fn().mockImplementation((entity: any) => getRepository(entity)),
         isInitialized: true,
         entityMetadatas: [],
         transaction: jest.fn().mockImplementation(async (cb: any) =>
@@ -171,29 +225,7 @@ jest.mock('@nestjs/typeorm', () => {
     static forFeature = jest.fn().mockImplementation((entities) => {
       const providers = (entities || []).map((entity: any) => ({
         provide: original.getRepositoryToken(entity),
-        useValue: {
-          find: jest.fn().mockResolvedValue([]),
-          findOne: jest.fn().mockImplementation((opts: any) => {
-            const id = opts?.where?.id || 'mock-id';
-            return Promise.resolve({
-              id,
-              tenantId: '00000000-0000-0000-0000-000000000000',
-              externalId: 'dev-patient-123',
-              subjectAbhaRef: 'dev-subject-abha-ref',
-              consentArtifactId: 'dev-consent-001',
-              title: 'PM-JAY Scheme Info',
-              description: 'आयुष्मान भारत योजना के तहत ₹5 लाख का मुफ्त इलाज',
-              status: 'REVIEW_REQUIRED',
-              domain: 'government_schemes',
-              language: 'hi',
-              chunks: [],
-            });
-          }),
-          create: jest.fn().mockImplementation((dto) => ({ id: 'mock-id', ...dto })),
-          save: jest.fn().mockImplementation((dto) => Promise.resolve({ id: 'mock-id', status: dto?.status || 'REVIEW_REQUIRED', ...dto })),
-          delete: jest.fn().mockResolvedValue({ affected: 1 }),
-          remove: jest.fn().mockResolvedValue({}),
-        },
+        useValue: getRepository(entity),
       }));
       return { module: class {}, providers, exports: providers };
     });

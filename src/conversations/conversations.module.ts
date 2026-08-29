@@ -17,10 +17,13 @@ import { AiModule } from '../ai/ai.module';
 import { ConfigurationModule } from '../configuration/configuration.module';
 import { RedisModule } from '../redis/redis.module';
 import { TenantRateLimiterGuard } from '../common/guards/tenant-rate-limiter.guard';
+import { FacilityModule } from '../facilities/facility.module';
+import { SyntheticPatient } from '../database/entities/synthetic-patient.entity';
+import { EscalationModule } from '../escalation/escalation.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([ConversationTurn, Session, ConsentArtifact]),
+    TypeOrmModule.forFeature([ConversationTurn, Session, ConsentArtifact, SyntheticPatient]),
     AuditModule,
     AuthModule,
     TenantsModule,
@@ -29,6 +32,8 @@ import { TenantRateLimiterGuard } from '../common/guards/tenant-rate-limiter.gua
     AiModule,
     ConfigurationModule,
     RedisModule,
+    FacilityModule,
+    EscalationModule,
   ],
   controllers: [TurnsController],
   providers: [

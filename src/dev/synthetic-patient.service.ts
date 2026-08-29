@@ -4,7 +4,7 @@ import { Repository } from 'typeorm';
 import { SyntheticPatient } from '../database/entities/synthetic-patient.entity';
 import { SyntheticPatientFeedback } from '../database/entities/synthetic-feedback.entity';
 
-export type SyntheticPatientInput = Pick<SyntheticPatient, 'name' | 'age' | 'gender' | 'state' | 'district' | 'language'> & {
+export type SyntheticPatientInput = Pick<SyntheticPatient, 'name' | 'age' | 'dateOfBirth' | 'gender' | 'state' | 'district' | 'city' | 'locality' | 'language'> & {
   phoneNumber?: string;
   clinicalProfile?: Record<string, unknown>;
   syntheticPatientId?: string;

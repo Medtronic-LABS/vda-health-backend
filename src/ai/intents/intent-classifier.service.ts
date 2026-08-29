@@ -85,8 +85,12 @@ export class IntentClassifierService implements IIntentClassifier {
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
       this.logger.warn(
-        `Stage 2 AI Classification failed, falling back to UNKNOWN: ${errMsg}`,
+        `Stage 2 AI Classification failed, falling back to rule engine or UNKNOWN: ${errMsg}`,
       );
+      if (ruleResult) {
+        aiCategory = ruleResult.intent;
+        confidence = ruleResult.confidence;
+      }
     }
 
     const metadata = this.buildMetadata(
@@ -146,13 +150,20 @@ export class IntentClassifierService implements IIntentClassifier {
       return { intent: IntentType.ADHERENCE_QUERY, confidence: 0.95 };
     }
 
+    // A brief explicit answer is resolved only by the medication state machine
+    // against a pending adherence confirmation in the current session. Routing
+    // it here prevents a needless provider call; it never infers MISSED.
+    if (/^(?:हाँ|हां|जी हाँ|नहीं|ना|ha|haan|han|yes|no|nahi|nahin)$/i.test(lower)) {
+      return { intent: IntentType.ADHERENCE_QUERY, confidence: 0.95 };
+    }
+
     // 3. MEDICATION_QUERY vs PRESCRIPTION_QUERY
     const hasMedKeyword =
       /दवाई|दवा|दवाइयां|दवाइया|दवाइयाँ|दवाइयों|दवाइयो|medication|medicine|medicines|tablet|tablets|dose|dosage|dawa/i.test(
         lower,
       );
     const hasPrescriptionKeyword =
-      /पर्ची|प्रिस्क्रिप्शन|prescription|prescribed|डॉक्टर ने लिखी/i.test(
+      /पर्ची|प्रिस्क्रिप्शन|prescription|prescribed|डॉक्टर ने लिखी|लिखे हैं|लिखे हैं|konse test likhe|kaun se test|कौन से टेस्ट|इनमें से.*dengue|dengue.*test|ye test|wo test|इस दवाई|wo dawiya|wo dawai|wo dawa|likha hai|likhe hain/i.test(
         lower,
       );
 
@@ -165,7 +176,7 @@ export class IntentClassifierService implements IIntentClassifier {
 
     // 4. LAB_RESULT_QUERY
     if (
-      /रिपोर्ट|लैब|टेस्ट|जांच|शुगर|रक्त|ब्लड|lab|report|result|test|glucose|hba1c|ecg|cbc/i.test(
+      /रिपोर्ट|लैब|टेस्ट|जांच|शुगर|रक्त|ब्लड|lab|report|result|test|glucose|hba1c|ecg|cbc|bp|blood\s*pressure|pressure|बीपी|प्रेशर|ग्लूकोज|ग्लूकोस|चीनी/i.test(
         lower,
       )
     ) {
@@ -174,7 +185,7 @@ export class IntentClassifierService implements IIntentClassifier {
 
     // 5. DIAGNOSIS_QUERY
     if (
-      /बीमारी|রোগ|निदान|डायग्नोसिस|समस्या|diagnosis|condition|disease|illness|hypertension|diabetes/i.test(
+      /बीमारी|बीमारियाँ|बीमारियां|रोग|निदान|डायग्नोसिस|समस्या|diagnosis|condition|disease|illness|hypertension|diabetes/i.test(
         lower,
       )
     ) {
@@ -192,16 +203,14 @@ export class IntentClassifierService implements IIntentClassifier {
     // A facility request may also name a scheme such as PM-JAY. In that case,
     // route by the requested service rather than the scheme keyword.
     if (
-      /अस्पताल|क्लिनिक|अस्पतालों|phc|chc|facility|facilities|hospital|hospitals|clinic/i.test(
-        lower,
-      )
+      /अस्पताल|क्लिनिक|अस्पतालों|phc|chc|facility|facilities|hospital|hospitals|clinic|पास में|नजदीक|near me|nearby|gurugram|gurgaon|गुरुग्राम|गुड़गांव|kangra|कांगड़ा|कांगरा|west\s+delhi|पश्चिम\s+दिल्ली|इनमें से.*(सरकारी|निजी)|और.*(himcare|ayushman|pm-?jay).*वाला/i.test(lower)
     ) {
       return { intent: IntentType.FACILITY_QUERY, confidence: 0.95 };
     }
 
     // 8. GOVERNMENT_SCHEME_QUERY
     if (
-      /योजना|आयुष्मान|पीएमजेएवाई|pmjay|pm-jay|ayushman|scheme|insurance|card|बीमा/i.test(
+      /योजना|आयुष्मान|पीएमजेएवाई|pmjay|pm-jay|ayushman|himcare|हिमकेयर|scheme|insurance|card|बीमा/i.test(
         lower,
       )
     ) {
@@ -210,7 +219,7 @@ export class IntentClassifierService implements IIntentClassifier {
 
     // 9. TELECONSULTATION_QUERY
     if (
-      /ऑनलाइन.*डॉक्टर|डॉक्टर.*ऑनलाइन|टेली.?कंसल्ट|tele.?consult|online doctor|doctor.*online|video consultation/i.test(
+      /ऑनलाइन.*डॉक्टर|डॉक्टर.*ऑनलाइन|डॉक्टर\s*से\s*बात|टेली.?कंसल्ट|tele.?consult|online doctor|doctor.*online|talk to (a )?doctor|i want to talk to (a )?doctor|video consultation/i.test(
         lower,
       )
     ) {

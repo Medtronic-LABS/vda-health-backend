@@ -57,6 +57,13 @@ export class GeminiProvider implements IAiProvider {
     const maxRetries: number = Number(
       options?.maxRetries || this.config.geminiMaxRetries,
     );
+    const telemetryLabel = options?.telemetryLabel;
+    const emitDiagnostics = Boolean(
+      telemetryLabel && this.config.nodeEnv === 'development',
+    );
+    const inlineMimeTypes = (options?.inlineData || [])
+      .map((attachment) => attachment.mimeType)
+      .join(',') || 'none';
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
@@ -69,16 +76,26 @@ export class GeminiProvider implements IAiProvider {
     }
     contents.push({
       role: 'user',
-      parts: [{ text: prompt }],
+      parts: [
+        { text: prompt },
+        ...(options?.inlineData || []).map((attachment) => ({
+          inlineData: {
+            mimeType: attachment.mimeType,
+            data: Buffer.isBuffer(attachment.data)
+              ? attachment.data.toString('base64')
+              : attachment.data,
+          },
+        })),
+      ],
     });
 
     const body: Record<string, unknown> = {
       contents,
       generationConfig: {
         temperature: options?.temperature ?? 0.2,
-        maxOutputTokens: this.config.aiMaxOutputLength,
-        ...(options?.responseFormat === 'json'
-          ? { responseMimeType: 'application/json' }
+        maxOutputTokens: Number(this.config.aiMaxOutputLength),
+          ...(options?.responseFormat === 'json'
+          ? { responseMimeType: 'application/json', ...(options.jsonSchema ? { responseSchema: options.jsonSchema } : {}) }
           : {}),
       },
     };
@@ -103,18 +120,47 @@ export class GeminiProvider implements IAiProvider {
         clearTimeout(timer);
 
         if (!res.ok) {
-          throw new Error(`Gemini API returned status ${res.status}`);
+          const failure = (await res.json().catch(() => ({}))) as Record<string, any>;
+          const providerError = failure['error'] as Record<string, unknown> | undefined;
+          const providerCategory =
+            (typeof providerError?.['status'] === 'string' && providerError['status']) ||
+            `HTTP_${res.status}`;
+          const providerMessage =
+            typeof providerError?.['message'] === 'string'
+              ? providerError['message'].replace(/[\r\n]+/g, ' ').slice(0, 240)
+              : 'unavailable';
+          if (emitDiagnostics) {
+            this.logger.warn(
+              `[${telemetryLabel}] model=${model} mime=${inlineMimeTypes} request=completed provider_status=${res.status} provider_category=${providerCategory} provider_message=${providerMessage} elapsed_ms=${Date.now() - requestStartedAt}`,
+            );
+          }
+          throw new Error(`Gemini API returned status ${res.status} (${providerCategory})`);
         }
 
         const data = (await res.json()) as Record<string, unknown>;
         const candidates =
           (data['candidates'] as Array<Record<string, unknown>>) || [];
-        const textContent =
-          ((
-            (candidates[0]?.content as Record<string, unknown>)?.parts as Array<
+        let finishReason = 'UNKNOWN';
+        let textContent = '';
+        // Gemini may return multiple candidates and multiple parts. Prefer the
+        // first candidate with visible, non-thought text.
+        for (const candidate of candidates) {
+          const parts =
+            ((candidate.content as Record<string, unknown>)?.parts as Array<
               Record<string, unknown>
-            >
-          )?.[0]?.text as string) || '';
+            >) || [];
+          const candidateText = parts
+            .filter((part) => part['thought'] !== true && typeof part['text'] === 'string')
+            .map((part) => part['text'] as string)
+            .join('\n');
+          if (candidateText) {
+            textContent = candidateText;
+            finishReason =
+              (typeof candidate['finishReason'] === 'string' && candidate['finishReason']) ||
+              'UNKNOWN';
+            break;
+          }
+        }
 
         let jsonObj: Record<string, any> | undefined;
         if (options?.responseFormat === 'json' && textContent) {
@@ -130,6 +176,11 @@ export class GeminiProvider implements IAiProvider {
           (data['usageMetadata'] as Record<string, number>) || {};
 
         const durationMs = Date.now() - requestStartedAt;
+        if (emitDiagnostics) {
+          this.logger.log(
+            `[${telemetryLabel}] model=${model} mime=${inlineMimeTypes} request=completed provider_status=200 candidate_count=${candidates.length} finish_reason=${finishReason} text_present=${Boolean(textContent)} json_detected=${Boolean(jsonObj)} elapsed_ms=${durationMs}`,
+          );
+        }
         this.logger.log(
           `[GeminiTelemetry] provider=gemini keySlot=${keySlot} status=success failover=${failoverAttempt > 1} attempts=${attempt} duration_ms=${durationMs} prompt_chars=${prompt.length} system_chars=${options?.systemPrompt?.length || 0}`,
         );

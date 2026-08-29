@@ -1,0 +1,23 @@
+[Nest] 31684  - 27/08/2026, 11:14:34 am   ERROR [NestApplication] Error: listen EADDRINUSE: address already in use :::3000 +1ms
+node:net:1937
+    const ex = new UVExceptionWithHostPort(err, 'listen', address, port);
+               ^
+
+Error: listen EADDRINUSE: address already in use :::3000
+    at Server.setupListenHandle [as _listen2] (node:net:1937:16)
+    at listenInCluster (node:net:1994:12)
+    at Server.listen (node:net:2099:7)
+    at ExpressAdapter.listen (C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\node_modules\@nestjs\platform-express\adapters\express-adapter.js:115:32)
+    at C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\node_modules\@nestjs\core\nest-application.js:190:30
+    at new Promise (<anonymous>)
+    at NestApplication.listen (C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\node_modules\@nestjs\core\nest-application.js:180:16)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async bootstrap (C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\dist\main.js:26:5) {
+  code: 'EADDRINUSE',
+  errno: -4091,
+  syscall: 'listen',
+  address: '::',
+  port: 3000
+}
+
+Node.js v22.13.1

@@ -3,12 +3,11 @@ import { ISafetyGate, SafetyResult } from '../interfaces/safety-gate.interface';
 
 @Injectable()
 export class DevelopmentSafetyGate implements ISafetyGate {
-  // emergency indicators mapping
   private readonly emergencyPatterns = {
     en: /\b(?:severe chest pain|difficulty breathing|unconscious|severe bleeding|stroke indicators|stroke)\b/i,
-    hi: /(?:(?:सीने|छाती)\s+में\s+(?:बहुत\s+)?(?:तेज\s+)?दर्द|सांस\s+(?:लेने\s+में\s+(?:बहुत\s+)?(?:दिक्कत|तकलीफ)|फूल)|बेहोश|बहुत\s+ज्यादा\s+खून\s+बहना|स्ट्रोक\s+के\s+संकेत|स्ट्रोक)/,
+    hi: /(?:(?:सीने|छाती|chest)\s+(?:में|me|mein)\s+(?:[a-zA-Z\u0900-\u097F\s]{0,20})(?:दर्द|pain|dard)|सांस\s+(?:लेने\s+में\s+(?:बहुत\s+)?(?:दिक्कत|तकलीफ)|फूल)|बेहोश|बहुत\s+ज्यादा\s+खून\s+बहना|स्ट्रोक\s+के\s+संकेत|स्ट्रोक)/,
     hiLatn:
-      /\b(?:seene mein bahut tez dard|saans lene mein bahut dikkat|behosh|bahut zyada khoon beh raha|stroke ke lakshan|stroke)\b/i,
+      /\b(?:seene mein bahut tez dard|chest me(?:in)?\s+(?:[a-zA-Z\s]{0,20})(?:pain|dard)|saans lene mein bahut dikkat|behosh|bahut zyada khoon beh raha|stroke ke lakshan|stroke)\b/i,
   };
 
   // self-harm patterns mapping

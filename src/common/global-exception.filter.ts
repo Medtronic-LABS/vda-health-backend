@@ -55,6 +55,14 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         'UPSTREAM_TIMEOUT',
         'TOO_MANY_REQUESTS',
         'RATE_LIMITER_UNAVAILABLE',
+        'PRESCRIPTION_EXTRACTION_FAILED',
+        'GEMINI_UNAVAILABLE',
+        'UNSUPPORTED_FILE',
+        'INVALID_FILE',
+        'ORCHESTRATION_FAILED',
+        'KNOWLEDGE_SERVICE_UNAVAILABLE',
+        'PRESCRIPTION_SERVICE_UNAVAILABLE',
+        'NO_PATIENT_DATA',
       ];
 
       // If the message or error matches one of these public codes, use it
@@ -148,9 +156,41 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         en: 'Rate limiter service is currently unavailable. Please try again later.',
         hi: 'दर सीमक सेवा वर्तमान में उपलब्ध नहीं है। कृपया बाद में पुनः प्रयास करें।',
       },
+      PRESCRIPTION_EXTRACTION_FAILED: {
+        en: 'We could not read this prescription confidently. Please upload a clearer image or PDF.',
+        hi: 'हम इस पर्चे को भरोसे के साथ नहीं पढ़ सके। कृपया अधिक स्पष्ट फोटो या PDF अपलोड करें।',
+      },
+      GEMINI_UNAVAILABLE: {
+        en: 'Prescription reading service is temporarily unavailable. Please try again.',
+        hi: 'पर्चा पढ़ने की सेवा अस्थायी रूप से उपलब्ध नहीं है। कृपया दोबारा प्रयास करें।',
+      },
+      UNSUPPORTED_FILE: {
+        en: 'Please upload a supported PDF, image, TXT, or Markdown file.',
+        hi: 'कृपया समर्थित PDF, फोटो, TXT या Markdown फ़ाइल अपलोड करें।',
+      },
+      INVALID_FILE: {
+        en: 'The selected file is empty or invalid. Please choose another file.',
+        hi: 'चुनी गई फ़ाइल खाली या अमान्य है। कृपया दूसरी फ़ाइल चुनें।',
+      },
       INTERNAL_SERVER_ERROR: {
         en: 'A temporary system issue occurred. Please try again later.',
         hi: 'एक अस्थायी सिस्टम समस्या उत्पन्न हुई। कृपया बाद में पुनः प्रयास करें।',
+      },
+      ORCHESTRATION_FAILED: {
+        en: 'Unable to process your request.',
+        hi: 'आपके अनुरोध पर कार्रवाई करने में असमर्थ।',
+      },
+      KNOWLEDGE_SERVICE_UNAVAILABLE: {
+        en: 'Knowledge service is temporarily unavailable.',
+        hi: 'ज्ञान सेवा अस्थायी रूप से उपलब्ध नहीं है।',
+      },
+      PRESCRIPTION_SERVICE_UNAVAILABLE: {
+        en: 'Prescription service is temporarily unavailable.',
+        hi: 'पर्चा सेवा अस्थायी रूप से उपलब्ध नहीं है।',
+      },
+      NO_PATIENT_DATA: {
+        en: 'This information is not available in your records.',
+        hi: 'यह जानकारी आपके रिकॉर्ड में उपलब्ध नहीं है।',
       },
     };
 
@@ -162,7 +202,11 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         code,
         message: patientSafeMessage.en,
         // eslint-disable-next-line @typescript-eslint/no-unsafe-enum-comparison
-        retryable: code === 'UPSTREAM_TIMEOUT' || status >= 500,
+        retryable:
+          code === 'UPSTREAM_TIMEOUT' ||
+          code === 'PRESCRIPTION_EXTRACTION_FAILED' ||
+          code === 'GEMINI_UNAVAILABLE' ||
+          status >= 500,
         patient_safe_message: patientSafeMessage,
         correlation_id: correlationId,
         detail: detail || {},

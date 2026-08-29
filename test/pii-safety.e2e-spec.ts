@@ -17,6 +17,7 @@ import { ConsentArtifact } from '../src/database/entities/consent-artifact.entit
 import { Session } from '../src/database/entities/session.entity';
 import { ConversationTurn } from '../src/database/entities/conversation-turn.entity';
 import { AuditEvent } from '../src/database/entities/audit-event.entity';
+import { ClinicalEscalation } from '../src/database/entities/clinical-escalation.entity';
 import { RedisService } from '../src/redis/redis.service';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import * as crypto from 'crypto';
@@ -87,6 +88,11 @@ const mockAuditRepository = {
   }),
 };
 
+const mockEscalationRepository = {
+  create: jest.fn().mockImplementation((value) => value),
+  save: jest.fn().mockImplementation((value) => Promise.resolve({ id: crypto.randomUUID(), ...value })),
+};
+
 jest.mock('@nestjs/typeorm', () => {
   const original = jest.requireActual('@nestjs/typeorm');
    
@@ -137,9 +143,17 @@ jest.mock('@nestjs/typeorm', () => {
       };
     });
     static forFeature = jest.fn().mockImplementation((entities) => {
-      const providers = (entities || []).map((entity: any) => ({
+        const providers = (entities || []).map((entity: any) => ({
         provide: original.getRepositoryToken(entity),
-        useValue: {},
+        // The suite overrides its owned repositories below. Optional modules
+        // use this inert local double so their real code remains unchanged.
+        useValue: {
+          findOne: jest.fn().mockResolvedValue(null),
+          find: jest.fn().mockResolvedValue([]),
+          count: jest.fn().mockResolvedValue(0),
+          create: jest.fn().mockImplementation((value) => value),
+          save: jest.fn().mockImplementation((value) => Promise.resolve(value)),
+        },
       }));
       return {
         module: class {},
@@ -198,11 +212,19 @@ describe('PII Protection & Safety Gate (E2E)', () => {
       .useValue(mockTurnRepository)
       .overrideProvider(getRepositoryToken(AuditEvent))
       .useValue(mockAuditRepository)
+      .overrideProvider(getRepositoryToken(ClinicalEscalation))
+      .useValue(mockEscalationRepository)
       .overrideProvider(RedisService)
       .useValue(mockRedisService)
       .overrideProvider(getDataSourceToken())
       .useValue({
         query: jest.fn().mockResolvedValue([]),
+        getRepository: jest.fn().mockImplementation((entity) => {
+          if (entity === Session) return mockSessionRepository;
+          // Facility lookup is optional for escalation rendering; tests that do
+          // not model a synthetic patient receive no cards, as in production.
+          return { findOne: jest.fn().mockResolvedValue(null) };
+        }),
         transaction: jest.fn().mockImplementation((cb) => {
           const mockManager = {
             findOne: jest.fn().mockImplementation((entity, options) => {

@@ -1,0 +1,6 @@
+[Nest] 18388  - 27/08/2026, 11:03:22 am   ERROR [GlobalExceptionFilter] VDA Error: code=INTERNAL_SERVER_ERROR status=500 correlationId=vda-7139c24c-febe-4f4a-9cd2-b80d27b4904d message=PATIENT_RESPONSE_CONTRACT_INVALID
+Error: PATIENT_RESPONSE_CONTRACT_INVALID
+    at AiOrchestratorService.orchestrateTurn (C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\dist\ai\orchestration\ai-orchestrator.service.js:373:27)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async AiConversationProcessor.processTurn (C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\dist\conversations\processors\ai-conversation-processor.js:25:24)
+    at async TurnsService.executeTurnPipeline (C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\dist\conversations\turns.service.js:328:26)

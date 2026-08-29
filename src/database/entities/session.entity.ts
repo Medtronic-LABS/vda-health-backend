@@ -51,6 +51,9 @@ export class Session {
   @Column({ nullable: true })
   deviceClass?: string;
 
+  @Column({ type: 'jsonb', default: {} })
+  medicationState!: Record<string, unknown>;
+
   @Column({ default: 'ACTIVE' })
   status!: string; // ACTIVE, CLOSED
 

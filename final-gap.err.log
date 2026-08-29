@@ -1,0 +1,24 @@
+[Nest] 29248  - 27/08/2026, 12:00:56 pm   ERROR [GlobalExceptionFilter] VDA Error: code=TENANT_ACCESS_DENIED status=401 correlationId=22bb86ef-946c-4909-8b8a-ce3a85e20617 message=Invalid Authorization header format
+UnauthorizedException: Invalid Authorization header format
+    at AuthGuard.canActivate (C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\dist\auth\auth.guard.js:32:19)
+    at GuardsConsumer.tryActivate (C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\node_modules\@nestjs\core\guards\guards-consumer.js:15:34)
+    at canActivateFn (C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\node_modules\@nestjs\core\router\router-execution-context.js:146:59)
+    at C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\node_modules\@nestjs\core\router\router-execution-context.js:43:37
+    at C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\node_modules\@nestjs\core\router\router-proxy.js:9:23
+    at C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\node_modules\@nestjs\core\router\router-explorer.js:199:162
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[Nest] 29248  - 27/08/2026, 12:05:58 pm   ERROR [GlobalExceptionFilter] VDA Error: code=INTERNAL_SERVER_ERROR status=500 correlationId=5ed94c9e-15a7-490d-8a69-5c9b937abc4b message=Gemini API returned status 429
+Error: Gemini API returned status 429
+    at GeminiProvider.generateForKey (C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\dist\ai\providers\gemini\gemini.provider.js:87:27)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async GeminiProvider.generate (C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\dist\ai\providers\gemini\gemini.provider.js:31:24)
+    at async AiOrchestratorService.orchestrateTurn (C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\dist\ai\orchestration\ai-orchestrator.service.js:392:36)
+    at async AiConversationProcessor.processTurn (C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\dist\conversations\processors\ai-conversation-processor.js:25:24)
+    at async TurnsService.executeTurnPipeline (C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\dist\conversations\turns.service.js:328:26)
+[Nest] 29248  - 27/08/2026, 12:06:15 pm   ERROR [GlobalExceptionFilter] VDA Error: code=INTERNAL_SERVER_ERROR status=500 correlationId=a2a75e4a-07f4-4ba9-84a6-d67be49edc22 message=GEMINI_PROVIDER_UNAVAILABLE
+Error: GEMINI_PROVIDER_UNAVAILABLE
+    at GeminiProvider.generate (C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\dist\ai\providers\gemini\gemini.provider.js:25:19)
+    at AiOrchestratorService.orchestrateTurn (C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\dist\ai\orchestration\ai-orchestrator.service.js:392:58)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async AiConversationProcessor.processTurn (C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\dist\conversations\processors\ai-conversation-processor.js:25:24)
+    at async TurnsService.executeTurnPipeline (C:\Users\paras\OneDrive\Desktop\VDA-Application\vda\dist\conversations\turns.service.js:328:26)

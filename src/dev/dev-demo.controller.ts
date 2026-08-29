@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, NotFoundException, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AuthGuard } from '../auth/auth.guard';
@@ -97,6 +97,37 @@ export class DevDemoController {
     const consent = await this.consents.save(this.consents.create({ tenantId: identity.tenantId, subjectId: identity.externalId, consentVersion: 'synthetic-development-v1', scopes: ['record_read', 'conversation_retention'], language: patient.language, deliveryMode: 'text', retentionInfo: { mode: 'synthetic-development', syntheticPatientId: patient.syntheticPatientId }, status: 'ACTIVE' }));
     const session = await this.sessions.createSession({ external_id: identity.externalId, subject_abha_ref: `synthetic:${patient.syntheticPatientId}`, speaker: 'self', locale_hint: patient.language, consent_artefact_id: consent.id }, identity, (req['correlationId'] as string) || 'synthetic-demo-session');
     return { session_id: session.id, synthetic_patient_id: patient.id, patient_name: patient.name, locale: patient.language, development_demo: true };
+  }
+
+  /**
+   * Demo UI context is derived from the synthetic record bound to this session.
+   * It intentionally returns no opaque patient or session identifiers beyond the
+   * requested session path, and it never reads a global/default patient.
+   */
+  @Get('sessions/:sessionId/patient-context')
+  async patientContext(@Param('sessionId') sessionId: string, @Req() req: Record<string, unknown>) {
+    this.assertEnabled();
+    const identity = req['user'] as HostIdentity;
+    const session = await this.sessions.getSessionById(sessionId);
+    if (!session) throw new NotFoundException('SESSION_NOT_FOUND');
+    if (session.tenantId !== identity.tenantId || !session.subjectAbhaRef.startsWith('synthetic:')) {
+      throw new ForbiddenException('TENANT_ACCESS_DENIED');
+    }
+    const patient = await this.syntheticPatients.getByReference(identity.tenantId, session.subjectAbhaRef);
+    if (!patient) throw new NotFoundException('SYNTHETIC_PATIENT_NOT_FOUND');
+    const profile = patient.clinicalProfile || {};
+    const items = (key: string) => Array.isArray(profile[key]) ? profile[key] as Array<Record<string, unknown>> : [];
+    return {
+      development_demo: true,
+      patient: {
+        name: patient.name,
+        age: patient.age,
+        language: patient.language,
+        conditions: items('diagnoses').map((item) => item.name).filter((value): value is string => typeof value === 'string'),
+        medications: items('medications').map((item) => ({ name: item.name, dosage: item.dosage, frequency: item.frequency })).filter((item) => typeof item.name === 'string'),
+        labs: items('labResults').map((item) => ({ name: item.name, value: item.value, unit: item.unit })).filter((item) => typeof item.name === 'string'),
+      },
+    };
   }
 
   @Post('feedback')

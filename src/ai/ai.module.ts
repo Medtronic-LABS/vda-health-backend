@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigurationModule } from '../configuration/configuration.module';
 import { ConfigurationService } from '../configuration/configuration.service';
 import { AuditModule } from '../audit/audit.module';
@@ -19,6 +20,14 @@ import { ConversationResponseFormatter } from '../conversations/formatters/conve
 import { ConversationHistoryService } from '../conversations/services/conversation-history.service';
 
 import { PiiModule } from '../pii/pii.module';
+import { FacilityModule } from '../facilities/facility.module';
+import { SchemeModule } from '../schemes/scheme.module';
+import { MedicationModule } from '../medications/medication.module';
+import { EvaluationModule } from '../evaluation/evaluation.module';
+import { Session } from '../database/entities/session.entity';
+import { SyntheticPatient } from '../database/entities/synthetic-patient.entity';
+import { ConversationTurn } from '../database/entities/conversation-turn.entity';
+import { Prescription } from '../database/entities/prescription.entity';
 
 @Module({
   imports: [
@@ -29,6 +38,11 @@ import { PiiModule } from '../pii/pii.module';
     AgentsModule,
     KnowledgeModule,
     PiiModule,
+    FacilityModule,
+    SchemeModule,
+    MedicationModule,
+    EvaluationModule,
+    TypeOrmModule.forFeature([Session, SyntheticPatient, ConversationTurn, Prescription]),
   ],
   providers: [
     DevelopmentAiProvider,

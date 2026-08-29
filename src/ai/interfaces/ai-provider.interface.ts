@@ -3,10 +3,16 @@ export interface AiGenerateOptions {
   temperature?: number;
   maxTokens?: number;
   responseFormat?: 'json' | 'text';
+  /** Optional native provider schema for a JSON response; never used to synthesize content locally. */
+  jsonSchema?: Record<string, unknown>;
   model?: string;
   correlationId?: string;
   timeoutMs?: number;
   maxRetries?: number;
+  /** Additive Gemini-compatible inline document/image parts. Text-only calls are unchanged. */
+  inlineData?: Array<{ mimeType: string; data: Buffer | string }>;
+  /** Safe diagnostic label for development telemetry; never includes patient data. */
+  telemetryLabel?: string;
 }
 
 export interface AiGenerateResult {

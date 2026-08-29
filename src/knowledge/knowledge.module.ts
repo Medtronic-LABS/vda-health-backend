@@ -46,6 +46,7 @@ import { AuthModule } from '../auth/auth.module';
     LocalSemanticEmbeddingProvider,
     DevelopmentKnowledgeService,
     KnowledgeQueryNormalizerService,
+    MultiFormatParserService,
   ],
 })
 export class KnowledgeModule {}

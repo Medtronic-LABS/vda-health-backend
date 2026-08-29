@@ -79,6 +79,8 @@ jest.mock('@nestjs/typeorm', () => {
 describe('Phase 9 — Operationalization, Telemetry, Health Diagnostics & Rate Limiting (E2E)', () => {
   let app: INestApplication;
   let activeSessionId: string;
+  let originalAiProviderEnabled: string | undefined;
+  let originalKnowledgeRagEnabled: string | undefined;
 
   jest.setTimeout(30000);
 
@@ -243,6 +245,12 @@ describe('Phase 9 — Operationalization, Telemetry, Health Diagnostics & Rate L
   };
 
   beforeAll(async () => {
+    // This suite verifies operational guards and offline clinical routing. It must
+    // not call the live Gemini provider or a real pgvector database during a test.
+    originalAiProviderEnabled = process.env.AI_PROVIDER_ENABLED;
+    originalKnowledgeRagEnabled = process.env.KNOWLEDGE_RAG_ENABLED;
+    process.env.AI_PROVIDER_ENABLED = 'false';
+    process.env.KNOWLEDGE_RAG_ENABLED = 'false';
     activeSessionId = 'p9-active-session';
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -275,6 +283,10 @@ describe('Phase 9 — Operationalization, Telemetry, Health Diagnostics & Rate L
 
   afterAll(async () => {
     await app.close();
+    if (originalAiProviderEnabled === undefined) delete process.env.AI_PROVIDER_ENABLED;
+    else process.env.AI_PROVIDER_ENABLED = originalAiProviderEnabled;
+    if (originalKnowledgeRagEnabled === undefined) delete process.env.KNOWLEDGE_RAG_ENABLED;
+    else process.env.KNOWLEDGE_RAG_ENABLED = originalKnowledgeRagEnabled;
   });
 
   beforeEach(() => {

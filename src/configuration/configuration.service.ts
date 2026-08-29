@@ -186,6 +186,10 @@ export class ConfigurationService {
     return Number(this.configService.get<number>('GEMINI_KEY_COOLDOWN_SECONDS')) || 60;
   }
 
+  get medicationAdherenceCooldownMinutes(): number {
+    return Number(this.configService.get<number>('MEDICATION_ADHERENCE_COOLDOWN_MINUTES')) || 240;
+  }
+
   get aiMaxInputLength(): number {
     return this.configService.get<number>('AI_MAX_INPUT_LENGTH') || 2000;
   }

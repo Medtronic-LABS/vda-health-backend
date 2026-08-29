@@ -13,6 +13,14 @@ import { KnowledgeChunk } from './entities/knowledge-chunk.entity';
 import { KnowledgeEmbedding } from './entities/knowledge-embedding.entity';
 import { SyntheticPatient } from './entities/synthetic-patient.entity';
 import { SyntheticPatientFeedback } from './entities/synthetic-feedback.entity';
+import { Facility } from './entities/facility.entity';
+import { FacilityScheme } from './entities/facility-scheme.entity';
+import { Scheme } from './entities/scheme.entity';
+import { Prescription } from './entities/prescription.entity';
+import { Medication } from './entities/medication.entity';
+import { MedicationAdherenceEvent } from './entities/medication-adherence-event.entity';
+import { RagEvaluationTrace } from './entities/rag-evaluation-trace.entity';
+import { ClinicalEscalation } from './entities/clinical-escalation.entity';
 
 @Injectable()
 export class DatabaseConfigService implements TypeOrmOptionsFactory {
@@ -40,6 +48,14 @@ export class DatabaseConfigService implements TypeOrmOptionsFactory {
         KnowledgeEmbedding,
         SyntheticPatient,
         SyntheticPatientFeedback,
+        Facility,
+        FacilityScheme,
+        Scheme,
+        Prescription,
+        Medication,
+        MedicationAdherenceEvent,
+        RagEvaluationTrace,
+        ClinicalEscalation,
       ],
       synchronize: false,
       migrationsRun: false,

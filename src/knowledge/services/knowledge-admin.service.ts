@@ -335,7 +335,7 @@ export class KnowledgeAdminService {
   async findOne(id: string, tenantId: string): Promise<KnowledgeDocument> {
     const doc = await this.docRepo.findOne({
       where: { id, tenantId },
-      relations: { chunks: true },
+      relations: { chunks: { embedding: true } },
     });
     if (!doc) throw new NotFoundException('Document not found');
     return doc;

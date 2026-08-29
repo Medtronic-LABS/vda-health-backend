@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
 } from '@nestjs/common';
@@ -19,9 +20,14 @@ import { ISafetyGate } from '../safety/interfaces/safety-gate.interface';
 import { IConversationProcessor } from './interfaces/conversation-processor.interface';
 import { ConversationResponseFormatter } from './formatters/conversation-response.formatter';
 import { MetricsService } from '../observability/metrics.service';
+import { FacilitySearchService } from '../facilities/facility-search.service';
+import { SyntheticPatient } from '../database/entities/synthetic-patient.entity';
+import { EscalationService } from '../escalation/escalation.service';
 
 @Injectable()
 export class TurnsService {
+  private readonly logger = new Logger(TurnsService.name);
+
   constructor(
     private readonly auditService: AuditService,
     @InjectDataSource()
@@ -36,7 +42,72 @@ export class TurnsService {
     private readonly responseFormatter?: ConversationResponseFormatter,
     @Optional()
     private readonly metricsService?: MetricsService,
+    @Optional()
+    private readonly facilitySearch?: FacilitySearchService,
+    @Optional()
+    private readonly escalationService?: EscalationService,
   ) {}
+
+  /** Audit observability must not suppress a deterministic emergency response. */
+  private async recordEmergencyAudit(
+    action: string,
+    correlationId: string,
+    record: () => Promise<unknown>,
+  ): Promise<void> {
+    try {
+      await record();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'unknown error';
+      this.logger.error(`Emergency audit failed action=${action} correlationId=${correlationId} reason=${reason}`);
+    }
+  }
+
+  private async emergencyFacilityContent(session: Session): Promise<Record<string, unknown>> {
+    if (!this.facilitySearch || !session.subjectAbhaRef.startsWith('synthetic:')) return {};
+    const patient = await this.dataSource.getRepository(SyntheticPatient).findOne({
+      where: { tenantId: session.tenantId, syntheticPatientId: session.subjectAbhaRef.replace(/^synthetic:/, '') },
+    });
+    if (!patient?.state && !patient?.district) return {};
+    const scopedFilters = {
+      state: patient.state,
+      district: patient.district,
+      city: patient.city || undefined,
+      locality: patient.locality || undefined,
+      limit: 5,
+    };
+    let results = await this.facilitySearch.searchWithSchemes(session.tenantId, scopedFilters);
+    // Source files can be district-scoped without a city/locality value. Retain
+    // the patient's state and district, then relax only empty source dimensions.
+    if (!results.length && (scopedFilters.city || scopedFilters.locality)) {
+      results = await this.facilitySearch.searchWithSchemes(session.tenantId, {
+        state: patient.state,
+        district: patient.district,
+        limit: 5,
+      });
+    }
+    if (!results.length) return {};
+    return {
+      cards: results.map(({ facility, schemes }) => ({
+        title: facility.name,
+        value: [facility.locality, facility.district, facility.state].filter(Boolean).join(', '),
+        subtitle: [facility.hospitalType, schemes.length ? schemes.join(' · ') : null, facility.specialityCodes?.length ? facility.specialityCodes.join(', ') : null, facility.contactNumber || null].filter(Boolean).join(' · '),
+      })),
+      facility_results: results.map(({ facility, schemes }) => ({
+        name: facility.name,
+        state: facility.state,
+        district: facility.district,
+        locality: facility.locality,
+        hospitalType: facility.hospitalType,
+        schemes,
+        specialityCodes: facility.specialityCodes,
+        contactNumber: facility.contactNumber,
+        emergencyAvailable: facility.emergencyAvailable,
+        distanceKm: null,
+        source: facility.sourceVersion || 'Structured facility source',
+      })),
+      emergency_capability_note: 'उपलब्ध रिकॉर्ड में emergency सुविधा की पुष्टि नहीं है।',
+    };
+  }
 
   async registerTurn(
     sessionId: string,
@@ -280,14 +351,11 @@ export class TurnsService {
     identity: HostIdentity,
     correlationId: string,
   ): Promise<any> {
-    // 1. Run PII Protection on raw input_text
-    const piiResult = await this.piiService.sanitizeText(dto.input_text);
-
-    // 2. Run Safety Gate on sanitized text
+    // Safety receives raw input first; raw text is never persisted or logged here.
     const safetyResult = await this.safetyGate.evaluateSafety(
-      piiResult.sanitizedText,
+      dto.input_text,
       correlationId,
-      piiResult.language,
+      dto.language,
     );
 
     // 3. If Safety Gate returns INVALID_INPUT, throw validation error immediately
@@ -297,6 +365,9 @@ export class TurnsService {
         safetyResult.patientSafeMessage || 'INVALID_INPUT',
       );
     }
+
+    // PII redaction applies to every persisted and downstream representation.
+    const piiResult = await this.piiService.sanitizeText(dto.input_text);
 
     // Determine initial safety status code
     let safetyStatus = 'SAFE';
@@ -350,7 +421,7 @@ export class TurnsService {
 
     // 6. Run PII and Safety audits outside of the transactions
     if (piiResult.piiDetected) {
-      await this.auditService.logEvent({
+      const piiAudit = () => this.auditService.logEvent({
         tenantId: identity.tenantId,
         subjectAbhaRef: turn.subjectRef,
         speaker: turn.speaker,
@@ -366,9 +437,14 @@ export class TurnsService {
           rule_version: '1.0',
         },
       });
+      if (safetyResult.status === 'ESCALATION_REQUIRED') {
+        await this.recordEmergencyAudit('pii_detected', correlationId, piiAudit);
+      } else {
+        await piiAudit();
+      }
     }
 
-    await this.auditService.logEvent({
+    const safetyAudit = () => this.auditService.logEvent({
       tenantId: identity.tenantId,
       subjectAbhaRef: turn.subjectRef,
       speaker: turn.speaker,
@@ -385,6 +461,11 @@ export class TurnsService {
         action: safetyResult.action,
       },
     });
+    if (safetyResult.status === 'ESCALATION_REQUIRED') {
+      await this.recordEmergencyAudit('safety_evaluated', correlationId, safetyAudit);
+    } else {
+      await safetyAudit();
+    }
 
     // 7. Route based on safety decision
     let responseType: string;
@@ -412,17 +493,43 @@ export class TurnsService {
         throw err;
       }
     } else if (safetyResult.status === 'ESCALATION_REQUIRED') {
+      // This contract is deterministic and ready before any best-effort HITL work.
       responseType = 'escalation';
       content = {
+        summary:
+          safetyResult.patientSafeMessage || 'Clinical escalation required.',
         escalation_id: safetyResult.ruleId || 'EMERGENCY_ESCALATION',
         reason:
           safetyResult.patientSafeMessage || 'Clinical escalation required.',
         assigned_role: 'CLINICIAN',
       };
+      // SafetyGate remains authoritative and runs before this optional,
+      // source-backed location lookup. No model selects or labels facilities.
+      try {
+        Object.assign(content, await this.emergencyFacilityContent(session));
+      } catch {
+        // Emergency guidance must remain available even if facility data is unavailable.
+      }
       intent = 'safety-escalation';
       selectedAgent = safetyResult.ruleId;
 
-      await this.auditService.logEvent({
+      if (this.escalationService) {
+        try {
+          await this.escalationService.createFromSafety({
+            identity,
+            turn,
+            safety: safetyResult,
+            sanitizedInputText: piiResult.sanitizedText,
+            structuredResponse: content,
+          });
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : 'unknown error';
+          // Do not include raw input or PII in this operational log.
+          this.logger.error(`Clinical escalation persistence failed rule=${safetyResult.ruleId} correlationId=${correlationId} reason=${reason}`);
+        }
+      }
+
+      await this.recordEmergencyAudit('safety_escalated', correlationId, () => this.auditService.logEvent({
         tenantId: identity.tenantId,
         subjectAbhaRef: turn.subjectRef,
         speaker: turn.speaker,
@@ -436,7 +543,7 @@ export class TurnsService {
           rule_version: safetyResult.ruleVersion,
           severity: safetyResult.severity,
         },
-      });
+      }));
     } else {
       // safetyResult.status === 'WITHHOLD'
       responseType = 'text';
@@ -466,7 +573,8 @@ export class TurnsService {
       });
     }
 
-    if (this.responseFormatter) {
+    // Emergency content is already deterministic and conforms to Patient.tsx.
+    if (this.responseFormatter && safetyResult.status !== 'ESCALATION_REQUIRED') {
       const formatted = this.responseFormatter.formatResponse({
         responseType,
         content,

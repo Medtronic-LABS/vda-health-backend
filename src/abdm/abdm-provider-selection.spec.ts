@@ -1,3 +1,4 @@
+import { Global, Module } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { AbdmModule } from './abdm.module';
 import { ConfigurationService } from '../configuration/configuration.service';
@@ -7,9 +8,26 @@ import {
   IHealthRecordService,
   HealthRecordCategory,
 } from './interfaces/health-record-service.interface';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { ConsentArtifact } from '../database/entities/consent-artifact.entity';
 import { AuditEvent } from '../database/entities/audit-event.entity';
+
+@Global()
+@Module({
+  providers: [
+    {
+      provide: getDataSourceToken(),
+      useValue: {
+        entityMetadatas: [],
+        getRepository: () => ({
+          metadata: { columns: [], relations: [] },
+        }),
+      },
+    },
+  ],
+  exports: [getDataSourceToken()],
+})
+class MockDataSourceModule {}
 
 describe('ABDM Provider Selection & Offline Foundation (Phase 7)', () => {
   let moduleRef: TestingModule;
@@ -30,7 +48,7 @@ describe('ABDM Provider Selection & Offline Foundation (Phase 7)', () => {
 
   it('1. ABDM_ENABLED=false selects DevelopmentHealthRecordService', async () => {
     moduleRef = await Test.createTestingModule({
-      imports: [AbdmModule],
+      imports: [MockDataSourceModule, AbdmModule],
     })
       .overrideProvider(getRepositoryToken(ConsentArtifact))
       .useValue(mockConsentRepo)
@@ -56,7 +74,7 @@ describe('ABDM Provider Selection & Offline Foundation (Phase 7)', () => {
 
   it('2. ABDM_ENABLED=true with valid credentials selects AbdmHealthRecordService', async () => {
     moduleRef = await Test.createTestingModule({
-      imports: [AbdmModule],
+      imports: [MockDataSourceModule, AbdmModule],
     })
       .overrideProvider(getRepositoryToken(ConsentArtifact))
       .useValue(mockConsentRepo)
@@ -81,7 +99,7 @@ describe('ABDM Provider Selection & Offline Foundation (Phase 7)', () => {
 
   it('3. ABDM_ENABLED=true with missing credentials safely falls back to DevelopmentHealthRecordService without crashing', async () => {
     moduleRef = await Test.createTestingModule({
-      imports: [AbdmModule],
+      imports: [MockDataSourceModule, AbdmModule],
     })
       .overrideProvider(getRepositoryToken(ConsentArtifact))
       .useValue(mockConsentRepo)

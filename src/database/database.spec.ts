@@ -6,6 +6,7 @@ import { ConsentArtifact } from './entities/consent-artifact.entity';
 import { ConsentEvent } from './entities/consent-event.entity';
 import { Session } from './entities/session.entity';
 import { ConversationTurn } from './entities/conversation-turn.entity';
+import { ClinicalEscalation } from './entities/clinical-escalation.entity';
 
 describe('Database Configuration & Entities', () => {
   const mockConfigService = {
@@ -35,6 +36,7 @@ describe('Database Configuration & Entities', () => {
     expect(options.entities).toContain(ConsentEvent);
     expect(options.entities).toContain(Session);
     expect(options.entities).toContain(ConversationTurn);
+    expect(options.entities).toContain(ClinicalEscalation);
   });
 
   it('should instantiate entities and verify structures', () => {
