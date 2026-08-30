@@ -9,8 +9,6 @@ import {
   RawHealthRecordBundle,
 } from '../interfaces/health-record-service.interface';
 import { SyntheticPatientService } from '../../dev/synthetic-patient.service';
-import { PrescriptionService } from '../../prescriptions/prescription.service';
-import { MedicationService } from '../../medications/medication.service';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { Session } from '../../database/entities/session.entity';
@@ -44,7 +42,7 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
   private static readonly DEV_TENANT_ID =
     '00000000-0000-0000-0000-000000000000';
 
-  constructor(@Optional() private readonly syntheticPatients?: SyntheticPatientService, @Optional() private readonly prescriptions?: PrescriptionService, @Optional() private readonly medicationService?: MedicationService, @InjectDataSource() private readonly dataSource?: DataSource) {}
+  constructor(@Optional() private readonly syntheticPatients?: SyntheticPatientService, @InjectDataSource() private readonly dataSource?: DataSource) {}
 
   async fetchRecords(
     request: HealthRecordRequest,
@@ -112,14 +110,14 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
       items.map((item, index) => ({ category, sourceRef: `${source}-${category}-${index + 1}`, fetchedAt: now, payload: { ...payload(item), date: now } }));
     switch (category) {
       case HealthRecordCategory.MEDICATION:
-        const confirmed = this.medicationService ? await this.medicationService.activeForPatient(patient.tenantId, `synthetic:${patient.syntheticPatientId}`) : [];
-        // Uploaded candidates are intentionally excluded until explicit medication confirmation.
-        if (confirmed.length) return confirmed.map((medication, index) => ({ category, sourceRef: `confirmed-medication-${medication.sourcePrescriptionId}-${index + 1}`, fetchedAt: now, payload: { medicationName: medication.name, dosage: medication.strength || medication.dosage || null, frequency: medication.frequency || null, route: medication.route || null, startDate: medication.startDate || medication.createdAt, endDate: medication.endDate || null, status: 'active', date: medication.createdAt } }));
+        // Only the authorized synthetic clinical profile supplies ClinicalContext
+        // medications. Uploaded prescriptions are document context, never a
+        // competing medication source.
         return map(records('medications'), (x) => ({ medicationName: x.name, dosage: x.dosage, frequency: x.frequency, route: x.route || 'Oral', startDate: x.startDate || now, endDate: null, status: 'active' }));
       case HealthRecordCategory.PRESCRIPTION:
-        const uploaded = this.prescriptions ? await this.prescriptions.approvedForPatient(patient.tenantId, `synthetic:${patient.syntheticPatientId}`) : [];
-        if (uploaded.length) return uploaded.flatMap((prescription) => prescription.medications.map((medication, index) => ({ category, sourceRef: `synthetic-prescription-${prescription.sourceDocumentId}-${index + 1}`, fetchedAt: now, payload: { medicationName: medication.medicationName, prescriptionDate: prescription.prescriptionDate || prescription.createdAt, instructions: medication.instructions || null, status: 'active', date: prescription.createdAt } })));
-        return map(records('medications'), (x) => ({ medicationName: x.name, prescriptionDate: now, instructions: x.instructions || null, status: 'active' }));
+        // Clinical prescription records, when a future authorized provider exposes
+        // them, are distinct from uploaded prescription-document context.
+        return map(records('prescriptions'), (x) => ({ medicationName: x.medicationName || x.name, prescriptionDate: x.prescriptionDate || now, prescribingProviderRef: x.prescribingProviderRef || null, instructions: x.instructions || null, status: x.status || 'active' }));
       case HealthRecordCategory.DIAGNOSIS:
         return map(records('diagnoses'), (x) => ({ conditionName: x.name, severity: x.severity || null, onsetDate: x.onsetDate || null, status: 'active' }));
       case HealthRecordCategory.ALLERGY:

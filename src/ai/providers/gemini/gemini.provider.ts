@@ -68,12 +68,6 @@ export class GeminiProvider implements IAiProvider {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
     const contents: any[] = [];
-    if (options?.systemPrompt) {
-      contents.push({
-        role: 'user',
-        parts: [{ text: `[SYSTEM INSTRUCTION]\n${options.systemPrompt}` }],
-      });
-    }
     contents.push({
       role: 'user',
       parts: [
@@ -91,9 +85,12 @@ export class GeminiProvider implements IAiProvider {
 
     const body: Record<string, unknown> = {
       contents,
+      ...(options?.systemPrompt
+        ? { systemInstruction: { parts: [{ text: options.systemPrompt }] } }
+        : {}),
       generationConfig: {
         temperature: options?.temperature ?? 0.2,
-        maxOutputTokens: Number(this.config.aiMaxOutputLength),
+        maxOutputTokens: Number(options?.maxTokens || this.config.aiMaxOutputLength),
           ...(options?.responseFormat === 'json'
           ? { responseMimeType: 'application/json', ...(options.jsonSchema ? { responseSchema: options.jsonSchema } : {}) }
           : {}),

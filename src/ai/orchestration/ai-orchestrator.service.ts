@@ -33,7 +33,6 @@ import { Session } from '../../database/entities/session.entity';
 import { SyntheticPatient } from '../../database/entities/synthetic-patient.entity';
 import { Prescription } from '../../database/entities/prescription.entity';
 import { ConversationTurn } from '../../database/entities/conversation-turn.entity';
-import { Medication } from '../../database/entities/medication.entity';
 import { FacilitySearchResult } from '../../facilities/facility-search.service';
 import { RagEvaluationService } from '../../evaluation/rag-evaluation.service';
 import { KnowledgeRetrievalResult } from '../../knowledge/models/knowledge-retrieval.model';
@@ -68,7 +67,6 @@ export class AiOrchestratorService implements IAiOrchestrator {
     @Optional() @InjectRepository(Prescription) private readonly prescriptions?: Repository<Prescription>,
     @Optional() @InjectRepository(SyntheticPatient) private readonly syntheticPatients?: Repository<SyntheticPatient>,
     @Optional() @InjectRepository(ConversationTurn) private readonly conversationTurns?: Repository<ConversationTurn>,
-    @Optional() @InjectRepository(Medication) private readonly medications?: Repository<Medication>,
     @Optional() private readonly ragEvaluation?: RagEvaluationService,
   ) {}
 
@@ -209,46 +207,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
 
           const isHindi = language === 'hi' || /[ह-्]/.test(inputText);
 
-          // A. Prescription Confirmation ("हाँ, यह सही है", "हाँ", "सही है", "confirm")
-          const isConfirmation = /^(हाँ|हाँ,?\s*यह\s*सही\s*है|सही\s*है|confirm|yes\s*this\s*is\s*correct)$/i.test(inputText.trim());
-          if (isConfirmation && latestPrescription) {
-            latestPrescription.extractionStatus = 'APPROVED';
-            await this.prescriptions.save(latestPrescription);
-
-            if (this.medications) {
-              const rxMeds = await this.medications.find({
-                where: { tenantId: identity.tenantId, patientRef: patientRef },
-              });
-              for (const m of rxMeds) {
-                m.status = 'ACTIVE';
-                m.verificationStatus = 'CONFIRMED';
-                await this.medications.save(m);
-              }
-            }
-
-            const summaryText = isHindi
-              ? `ठीक है। आपकी prescription की जानकारी पुष्टि कर दी गई है।`
-              : `Alright. Your prescription information has been confirmed.`;
-
-            return {
-              responseType: 'text',
-              content: {
-                summary: summaryText,
-                [isHindi ? 'hi' : 'en']: summaryText,
-                cards: latestPrescription.medications?.map((m: any) => ({
-                  title: m.medicationName || m.normalizedName || 'Prescription Medicine',
-                  value: [m.dosage || m.strength, m.frequency].filter(Boolean).join(' · ') || 'Active',
-                  subtitle: 'Status: APPROVED (Active Medication)',
-                })) || [],
-              },
-              intent: 'PRESCRIPTION_CONFIRMATION',
-              selectedAgent: 'medication-agent',
-              safetyStatus: 'SAFE',
-              latencyMs: Date.now() - startTime,
-            };
-          }
-
-          // B. Deterministic Prescription Test Listing ("konse test likhe hai", "kaun se test likhe hain", "कौन से टेस्ट लिखे हैं")
+          // Deterministic Prescription Test Listing ("konse test likhe hai", "kaun se test likhe hain", "कौन से टेस्ट लिखे हैं")
           const isTestListingQuery = /konse test likhe|kaun\s*se test likhe|कौन\s*से टेस्ट लिखे|पर्ची में कौन|prescription.*test|what tests are written|which tests are written|which tests on prescription|konse test hain|konse test h/i.test(inputText);
 
           if (isTestListingQuery && latestPrescription.investigations?.length) {
@@ -286,8 +245,8 @@ export class AiOrchestratorService implements IAiOrchestrator {
           if (isWhichNonActiveQuery && firstMed) {
             const medName = generic && generic !== firstMed ? `${firstMed} (${generic})` : firstMed;
             const summaryText = isHindi
-              ? `आपकी prescription में **${medName}** लिखी है:\n\n• Dose: ${dosage || '250 mg'}\n• मात्रा: 1 tablet\n• Frequency: ${freq || '1-0-1'}\n• निर्देश: ${inst || 'After Food'}\n• अवधि: ${dur || '5 days'}\n\nयह prescription में है और confirmation के अनुसार ही active medication मानी जाएगी।`
-              : `The medicine written in your prescription is **${medName}**:\n\n• Dose: ${dosage || '250 mg'}\n• Quantity: 1 tablet\n• Frequency: ${freq || '1-0-1'}\n• Instructions: ${inst || 'After Food'}\n• Duration: ${dur || '5 days'}\n\nThis is in your prescription and will be set to active medication upon confirmation.`;
+              ? `आपकी prescription में **${medName}** लिखी है:\n\n• Dose: ${dosage || '250 mg'}\n• मात्रा: 1 tablet\n• Frequency: ${freq || '1-0-1'}\n• निर्देश: ${inst || 'After Food'}\n• अवधि: ${dur || '5 days'}`
+              : `The medicine written in your prescription is **${medName}**:\n\n• Dose: ${dosage || '250 mg'}\n• Quantity: 1 tablet\n• Frequency: ${freq || '1-0-1'}\n• Instructions: ${inst || 'After Food'}\n• Duration: ${dur || '5 days'}`;
 
             return {
               responseType: 'text',
@@ -480,11 +439,6 @@ export class AiOrchestratorService implements IAiOrchestrator {
           await this.prescriptions.save(latestPrescription);
         }
 
-        // Confirm all candidate medications under the existing safety logic
-        if (this.medicationService) {
-          await this.medicationService.confirmPrescription(identity.tenantId, latestPrescription.prescriptionId);
-        }
-
         // Audit confirmation
         await this.auditService.logEvent({
           tenantId: identity.tenantId,
@@ -502,8 +456,8 @@ export class AiOrchestratorService implements IAiOrchestrator {
         });
 
         const summaryText = intentMeta.language === 'hi'
-          ? 'ठीक है। मैंने आपकी prescription की जानकारी पुष्टि के लिए सहेज ली है।'
-          : 'Alright. I have saved your prescription details for confirmation.';
+          ? 'ठीक है। आपकी prescription की जानकारी की पुष्टि कर दी गई है।'
+          : 'Alright. Your prescription information has been confirmed.';
 
         return {
           responseType: 'text',
@@ -757,7 +711,7 @@ STRICT BOUNDARIES & GROUNDING POLICY:
 7. Answer only the patient's question. Use simple ${intentMeta.language === 'hi' ? 'Hindi' : 'English'}. Lead with the most important answer. Do not repeat the question, add generic disclaimers, mention internal systems, or recommend medication changes.
 8. Use only supplied authorized ClinicalContext, uploaded prescription context, and retrieved knowledge. If a location has no exact facility match, say so; do not broaden it to a different district.
 9. Scheme Information: When the patient asks about available healthcare schemes in their state, identify ALL relevant schemes present in authorized sources (for Himachal Pradesh: BOTH HIMCARE and Ayushman Bharat PM-JAY). Always clearly distinguish AVAILABLE SCHEMES in the state from PERSONAL ELIGIBILITY. Explicitly state that eligibility for each scheme must be verified separately based on specific rules (such as BPL certificate, MNREGA card, disability, or employment category). Do NOT assert that the patient is personally eligible unless explicit authorized evidence is provided.
-10. Return JSON only using this contract: {"summary":"short patient-facing answer","sections":[{"title":"optional","body":"optional","bullets":["optional"]}],"cards":[{"title":"optional","value":"optional","subtitle":"optional"}],"actions":[{"label":"optional","action":"optional"}]}. Default response must be under 120 words, with no more than 3 sections, 5 cards, or 2 actions. Do not use Markdown.`;
+10. Return exactly one valid JSON object and nothing else. Use this contract: {"summary":"short patient-facing answer","sections":[{"title":"optional","body":"optional","bullets":["optional"]}],"cards":[{"title":"optional","value":"optional","subtitle":"optional"}],"actions":[{"label":"optional","action":"optional"}]}. "summary" is required. Default response must be under 120 words, with no more than 3 sections, 5 cards, or 2 actions. Do not use Markdown, code fences, headings, sources, domain labels, or internal implementation terms.`;
 
     let userPrompt = `${formattedContext}`;
 
@@ -778,7 +732,7 @@ STRICT BOUNDARIES & GROUNDING POLICY:
       const rxBlock = `\n\n[UPLOADED PRESCRIPTION CONTEXT]
 Status: ${latestPrescription.extractionStatus}
 Prescription ID: ${latestPrescription.id}
-Medicines from uploaded prescription (NOT yet active medications):
+Medicines from uploaded prescription (their active status is determined only by ClinicalContext):
 ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTests}` : ''}
 [/UPLOADED PRESCRIPTION CONTEXT]`;
 
@@ -802,6 +756,7 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
         actions: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, action: { type: 'string' } } } },
       },
       required: ['summary'],
+      additionalProperties: false,
     };
 
     // Check if patient asks for dosage/medication changes explicitly
@@ -829,6 +784,7 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
           systemPrompt,
           correlationId,
           temperature: 0.2,
+          maxTokens: 420,
           responseFormat: 'json',
           jsonSchema: patientResponseSchema,
         });
@@ -836,16 +792,25 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
           aiResponse.json,
         );
         if (!generated) {
+          this.logger.warn(
+            `[PatientResponseContract] correlationId=${correlationId} intent=${intentMeta.intent} agent=${selectedAgent.agentId} parser=${aiResponse.json ? 'parsed' : 'unparseable_json'} response_chars=${aiResponse.text.length} validation=${aiResponse.json ? 'missing_or_invalid_summary' : 'json_unavailable'}`,
+          );
           const retryResponse = await this.aiProvider.generate(userPrompt, {
             systemPrompt: `${systemPrompt}\nYour previous output was invalid. Return only valid concise JSON matching the contract.`,
             correlationId,
             temperature: 0,
+            maxTokens: 420,
             responseFormat: 'json',
             jsonSchema: patientResponseSchema,
           });
           generated = this.responseFormatter?.normalizeGeneratedContent(
             retryResponse.json,
           );
+          if (!generated) {
+            this.logger.warn(
+              `[PatientResponseContract] correlationId=${correlationId} intent=${intentMeta.intent} agent=${selectedAgent.agentId} parser=${retryResponse.json ? 'parsed' : 'unparseable_json'} response_chars=${retryResponse.text.length} validation=${retryResponse.json ? 'missing_or_invalid_summary' : 'json_unavailable'} retry=true`,
+            );
+          }
         }
         if (!generated) {
           throw new Error('PATIENT_RESPONSE_CONTRACT_INVALID');
@@ -858,7 +823,8 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
         this.logger.error(`AI Provider execution failed correlationId=${correlationId} intent=${intentMeta.intent} layer=ai_orchestrator errorType=${err instanceof Error ? err.name : 'Unknown'} errorMessage=${errMsg}`, errStack);
         if (this.configService?.aiProviderEnabled) {
           const isProviderFailure = errMsg.includes('Gemini API') || errMsg.includes('GEMINI') || errMsg.includes('rate limit') || errMsg.includes('429') || errMsg.includes('timeout') || errMsg.includes('abort');
-          if (isProviderFailure) {
+          const isResponseContractFailure = errMsg === 'PATIENT_RESPONSE_CONTRACT_INVALID';
+          if (isProviderFailure || isResponseContractFailure) {
             const isHindi = intentMeta.language === 'hi' || /[ह-्]/.test(resolvedInputText);
             this.logger.warn(`AI Provider rate-limited/failed; attempting grounded fallback correlationId=${correlationId} intent=${intentMeta.intent}`);
 
@@ -901,7 +867,7 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
 
             // 2. Fallback for EXPLICIT Clinical Record Queries (HbA1c, Active Meds, Diagnoses)
             const isExplicitHbA1c = /hba1c|sugar|ग्लूकोज|ग्लूकोस|बीपी|bp|blood pressure|प्रेशर/i.test(resolvedInputText) && !/konse test likhe|kaun.*test|कौन.*टेस्ट/i.test(resolvedInputText);
-            const isExplicitActiveMeds = /कौन सी दवाइयाँ चल रही|active med|my med|current med/i.test(resolvedInputText);
+            const isExplicitActiveMeds = /कौन\s*(?:सी|[-\s]*कौन\s*सी)\s*दवाइयाँ\s*चल\s*रही|मेरी.*दवाइ|चल\s*रही.*दवाइ|active medications?|my medications?|current medications?|what medications?/i.test(resolvedInputText);
 
             if (!aiResultText && clinicalContext) {
               if ((intentMeta.intent === IntentType.LAB_RESULT_QUERY || isExplicitHbA1c) && isExplicitHbA1c && clinicalContext.labResults?.length) {
@@ -915,12 +881,12 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
                   [intentMeta.language]: summaryText,
                   lab_results: clinicalContext.labResults,
                 };
-              } else if (intentMeta.intent === IntentType.MEDICATION_QUERY && (isExplicitActiveMeds || !latestPrescription) && clinicalContext.medications?.length) {
-                const medList = clinicalContext.medications.map(m => `• **${m.medicationName}** ${m.dosage || ''} — ${m.frequency || ''}`).join('\n');
+              } else if (intentMeta.intent === IntentType.MEDICATION_QUERY && isExplicitActiveMeds && clinicalContext.medications?.length) {
+                const medList = clinicalContext.medications.map(m => `${m.medicationName}${m.dosage ? ` ${m.dosage}` : ''}${m.frequency ? `, ${m.frequency}` : ''}`).join('; ');
                 let summaryText = isHindi
-                  ? `आपकी सक्रिय (Active) दवाइयाँ निम्नलिखित हैं:\n\n${medList}`
-                  : `Your active medications are as follows:\n\n${medList}`;
-                if (latestPrescription?.medications?.length) {
+                  ? `आपके उपलब्ध स्वास्थ्य रिकॉर्ड में ये सक्रिय दवाइयाँ हैं: ${medList}।`
+                  : `Your available health records list these active medications: ${medList}.`;
+                if (latestPrescription?.extractionStatus === 'REVIEW_REQUIRED' && latestPrescription.medications?.length) {
                   const rxName = latestPrescription.medications[0]?.medicationName || latestPrescription.medications[0]?.normalizedName;
                   summaryText += isHindi
                     ? `\n\n(नोट: आपकी पर्ची से 1 दवा **${rxName}** समीक्षाधीन है और अभी सक्रिय नहीं है।)`

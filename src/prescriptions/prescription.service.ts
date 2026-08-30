@@ -4,13 +4,12 @@ import { randomUUID } from 'crypto';
 import { Repository } from 'typeorm';
 import { Prescription } from '../database/entities/prescription.entity';
 import { MultiFormatParserService } from '../knowledge/ingestion/multi-format-parser.service';
-import { MedicationService } from '../medications/medication.service';
 import { IAiProvider } from '../ai/interfaces/ai-provider.interface';
 
 @Injectable()
 export class PrescriptionService {
   private readonly logger = new Logger(PrescriptionService.name);
-  constructor(@InjectRepository(Prescription) private readonly prescriptions: Repository<Prescription>, private readonly parser: MultiFormatParserService, private readonly medicationService: MedicationService, @Inject('IAiProvider') private readonly aiProvider: IAiProvider) {}
+  constructor(@InjectRepository(Prescription) private readonly prescriptions: Repository<Prescription>, private readonly parser: MultiFormatParserService, @Inject('IAiProvider') private readonly aiProvider: IAiProvider) {}
   async upload(tenantId: string, patientRef: string, file: { buffer: Buffer; filename: string; mimeType?: string }) {
     if (!patientRef.startsWith('synthetic:')) throw new BadRequestException('PRESCRIPTION_UPLOAD_REQUIRES_SYNTHETIC_DEVELOPMENT_PATIENT');
     if (!file.buffer?.length) throw new BadRequestException('INVALID_FILE');
@@ -22,7 +21,6 @@ export class PrescriptionService {
     const medications = extracted?.medicines || this.extractMedications(parsed.content);
     const investigations = extracted?.investigations || this.extractInvestigations(parsed.content);
     const prescription = await this.prescriptions.save(this.prescriptions.create({ tenantId, patientRef, prescriptionId: randomUUID(), sourceDocumentId: documentId, filename: file.filename, checksum: parsed.checksum, extractedText: parsed.content, medications, investigations, extractionStatus: 'REVIEW_REQUIRED' }));
-    await this.medicationService.createCandidates(tenantId, patientRef, prescription.prescriptionId, medications);
     return prescription;
   }
   async list(tenantId: string, patientRef?: string) { return this.prescriptions.find({ where: patientRef ? { tenantId, patientRef } : { tenantId }, order: { createdAt: 'DESC' } }); }
