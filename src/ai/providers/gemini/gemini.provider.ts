@@ -252,12 +252,15 @@ export class GeminiProvider implements IAiProvider {
     options?: AiClassifyOptions,
   ): Promise<AiClassifyResult> {
     const candidates = options?.candidateCategories || [];
-    const prompt = `Classify the following medical/health query into exactly ONE category from this list: [${candidates.join(
+    const prompt = `You classify one patient message for an NCD-focused VDA. Use the current query and the privacy-sanitized recent conversation only to resolve references such as "this", "it", or "ye". Select exactly ONE supported capability from: [${candidates.join(
       ', ',
-    )}].
-Output JSON only in this exact format: {"category": "<SELECTED_CATEGORY>", "confidence": <NUMBER_0_TO_1>, "explanation": "<REASON>"}.
+    )}]. Do not give medical advice or generate a patient answer. If the request is ambiguous or outside those capabilities, select UNKNOWN with low confidence. For a FACILITY_QUERY, extract only constraints actually expressed or established by recent context; do not infer a service, scheme, location, or facility capability. For all other categories, requirements must be empty.
+Output JSON only in this exact format: {"category": "<SELECTED_CATEGORY>", "confidence": <NUMBER_0_TO_1>, "explanation": "<SHORT_REASON>", "requirements":{"state":null,"district":null,"facilityType":null,"scheme":null,"service":null}}.
 
-Query: "${text}"`;
+Recent conversation context (may be empty):
+${options?.conversationContext || '(none)'}
+
+Current query: "${text}"`;
 
     const result = await this.generate(prompt, {
       responseFormat: 'json',
@@ -275,7 +278,22 @@ Query: "${text}"`;
       category,
       confidence,
       explanation: (parsed['explanation'] as string) || 'Gemini classification',
+      requirements: this.parseRequirements(parsed['requirements']),
       provider: 'gemini',
+    };
+  }
+
+  private parseRequirements(value: unknown): AiClassifyResult['requirements'] {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const raw = value as Record<string, unknown>;
+    const stringValue = (key: string) => typeof raw[key] === 'string' && raw[key].trim() ? raw[key].trim().slice(0, 120) : undefined;
+    const facilityType = stringValue('facilityType')?.toUpperCase();
+    return {
+      state: stringValue('state'),
+      district: stringValue('district'),
+      facilityType: facilityType === 'PUBLIC' || facilityType === 'PRIVATE' ? facilityType : undefined,
+      scheme: stringValue('scheme'),
+      service: stringValue('service'),
     };
   }
 

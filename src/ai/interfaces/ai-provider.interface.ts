@@ -33,12 +33,22 @@ export interface AiClassifyOptions {
   candidateCategories: string[];
   systemPrompt?: string;
   correlationId?: string;
+  /** Privacy-sanitized, consent-scoped prior turns for contextual classification. */
+  conversationContext?: string;
 }
 
 export interface AiClassifyResult {
   category: string;
   confidence: number;
   explanation?: string;
+  /** Semantic constraints are source hints, never patient-facing facts. */
+  requirements?: {
+    state?: string;
+    district?: string;
+    facilityType?: 'PUBLIC' | 'PRIVATE';
+    scheme?: string;
+    service?: string;
+  };
   provider: string;
 }
 

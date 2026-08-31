@@ -5,5 +5,6 @@ export interface IIntentClassifier {
     text: string,
     language?: string,
     correlationId?: string,
+    conversationContext?: string,
   ): Promise<IntentMetadata>;
 }

@@ -14,13 +14,19 @@ export class TeleconsultationAgent implements IAgent {
   readonly agentId = 'teleconsultation-agent';
 
   async process(input: AgentProcessRequest): Promise<AgentProcessResult> {
-    const hi = input.intentMetadata?.language === 'hi';
+    const hi = input.intentMetadata.language.startsWith('hi');
+    const officialUrl = 'https://esanjeevani.mohfw.gov.in/';
+    const summary = hi
+      ? `VDA के भीतर कोई लाइव टेलीकंसल्टेशन या डॉक्टर बुकिंग उपलब्ध नहीं है। आप आधिकारिक eSanjeevani सेवा पर जा सकते हैं: ${officialUrl}`
+      : `No live teleconsultation or doctor booking is available within VDA. You can use the official eSanjeevani service: ${officialUrl}`;
     return {
       agentId: this.agentId,
       responseType: 'teleconsultation',
-      content: hi
-        ? { summary: 'टेलीकंसल्टेशन डेमो शुरू हो गया है। यह केवल डेमो है; कोई वास्तविक डॉक्टर या अपॉइंटमेंट बुक नहीं किया गया है। अगला चरण: डेमो कंसल्टेशन स्थिति देखें।', hi: 'टेलीकंसल्टेशन डेमो शुरू हो गया है। यह केवल डेमो है; कोई वास्तविक डॉक्टर या अपॉइंटमेंट बुक नहीं किया गया है। अगला चरण: डेमो कंसल्टेशन स्थिति देखें।', teleconsultation: { status: 'DEMO_STARTED', consultationState: 'DEMO_PENDING', mode: 'DEMO_ONLY', nextStep: 'VIEW_DEMO_CONSULTATION_STATUS' } }
-        : { summary: 'Teleconsultation demo started. This is DEMO ONLY; no real doctor or appointment has been created. Next step: view the demo consultation status.', en: 'Teleconsultation demo started. This is DEMO ONLY; no real doctor or appointment has been created. Next step: view the demo consultation status.', teleconsultation: { status: 'DEMO_STARTED', consultationState: 'DEMO_PENDING', mode: 'DEMO_ONLY', nextStep: 'VIEW_DEMO_CONSULTATION_STATUS' } },
+      content: {
+        summary,
+        ...(hi ? { hi: summary } : { en: summary }),
+        teleconsultation: { status: 'EXTERNAL_NAVIGATION_ONLY', officialUrl },
+      },
     };
   }
 }

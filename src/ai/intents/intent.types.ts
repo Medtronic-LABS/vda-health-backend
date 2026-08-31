@@ -25,4 +25,11 @@ export interface IntentMetadata {
   language: string;
   safetySensitivity: 'LOW' | 'MEDIUM' | 'HIGH';
   classifiedBy: 'RULE_ENGINE' | 'AI_MODEL';
+  requirements?: {
+    state?: string;
+    district?: string;
+    facilityType?: 'PUBLIC' | 'PRIVATE';
+    scheme?: string;
+    service?: string;
+  };
 }
