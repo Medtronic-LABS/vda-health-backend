@@ -45,6 +45,12 @@ export class ClinicalEscalation {
   @Column({ type: 'varchar', length: 255, nullable: true }) reviewerId?: string | null;
   @Column({ type: 'text', nullable: true }) reviewerNote?: string | null;
   @Column({ type: 'timestamptz', nullable: true }) reviewedAt?: Date | null;
+  /** Timestamps make the delayed patient fallback server-authoritative and idempotent. */
+  @Column({ type: 'timestamptz', nullable: true }) teleconsultationOfferedAt?: Date | null;
+  @Column({ type: 'timestamptz', nullable: true }) teleconsultationRequestedAt?: Date | null;
+  /** Separate from safety classification and response review. */
+  @Column({ type: 'timestamptz', nullable: true }) clinicalConversationClosedAt?: Date | null;
+  @Column({ type: 'varchar', length: 255, nullable: true }) clinicalConversationClosedBy?: string | null;
   @Column({ type: 'jsonb', default: [] }) reviewHistory!: Array<Record<string, unknown>>;
   @CreateDateColumn({ type: 'timestamptz' }) createdAt!: Date;
   @UpdateDateColumn({ type: 'timestamptz' }) updatedAt!: Date;

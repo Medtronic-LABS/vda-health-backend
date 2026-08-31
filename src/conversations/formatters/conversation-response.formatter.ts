@@ -25,7 +25,7 @@ export class ConversationResponseFormatter {
     const candidate = generated as Record<string, unknown>;
     const summary = typeof candidate.summary === 'string' ? candidate.summary.trim() : '';
     // A normal patient reply must be concise, but the SafetyGate owns emergency output.
-    if (!summary || this.wordCount(summary) > 120) return null;
+    if (!summary || this.wordCount(summary) > 120 || this.containsInternalRetrievalMaterial(summary)) return null;
 
     const sections = Array.isArray(candidate.sections)
       ? candidate.sections
@@ -40,7 +40,14 @@ export class ConversationResponseFormatter {
           }))
       : undefined;
     const cards = Array.isArray(candidate.cards)
-      ? candidate.cards.filter((c): c is Record<string, unknown> => !!c && typeof c === 'object').slice(0, 5)
+      ? candidate.cards
+          .filter((c): c is Record<string, unknown> => !!c && typeof c === 'object')
+          .slice(0, 5)
+          .map((c) => ({
+            title: typeof c.title === 'string' ? c.title : undefined,
+            value: typeof c.value === 'string' ? c.value : undefined,
+            subtitle: typeof c.subtitle === 'string' ? c.subtitle : undefined,
+          }))
       : undefined;
     const actions = Array.isArray(candidate.actions)
       ? candidate.actions
@@ -54,6 +61,12 @@ export class ConversationResponseFormatter {
 
   private wordCount(text: string): number {
     return text.trim().split(/\s+/).filter(Boolean).length;
+  }
+
+  private containsInternalRetrievalMaterial(text: string): boolean {
+    return /(?:^|\n)\s*(?:title|source|domain|content)\s*:/i.test(text)
+      || /\b[\w.-]+\.(?:pdf|docx|txt|md|csv)\b/i.test(text)
+      || /\[(?:knowledge source|authorized knowledge source|deterministic scheme facts)\]/i.test(text);
   }
 
   /**
@@ -80,6 +93,16 @@ export class ConversationResponseFormatter {
     } = options;
 
     const formattedContent: Record<string, unknown> = { ...content };
+    // Retrieval provenance stays in audit/evaluation services. The patient API
+    // exposes only the standardized patient response and allowed UI structures.
+    for (const internalField of [
+      'knowledge_sources', 'scheme_results', 'matchedChunks', 'matched_chunks',
+      'retrievalTrace', 'retrieval_trace', 'formattedKnowledgePrompt',
+      'raw_content', 'rawContent', 'metadata', 'sources', 'documentId',
+      'sourceDocumentId', 'embedding',
+    ]) {
+      delete formattedContent[internalField];
+    }
 
     // Gemini's governed response contract always renders through `summary`.
     // Retain the language-keyed text for API compatibility and TTS only.

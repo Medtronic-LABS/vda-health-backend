@@ -20,8 +20,6 @@ import { ISafetyGate } from '../safety/interfaces/safety-gate.interface';
 import { IConversationProcessor } from './interfaces/conversation-processor.interface';
 import { ConversationResponseFormatter } from './formatters/conversation-response.formatter';
 import { MetricsService } from '../observability/metrics.service';
-import { FacilitySearchService } from '../facilities/facility-search.service';
-import { SyntheticPatient } from '../database/entities/synthetic-patient.entity';
 import { EscalationService } from '../escalation/escalation.service';
 
 @Injectable()
@@ -43,8 +41,6 @@ export class TurnsService {
     @Optional()
     private readonly metricsService?: MetricsService,
     @Optional()
-    private readonly facilitySearch?: FacilitySearchService,
-    @Optional()
     private readonly escalationService?: EscalationService,
   ) {}
 
@@ -60,53 +56,6 @@ export class TurnsService {
       const reason = error instanceof Error ? error.message : 'unknown error';
       this.logger.error(`Emergency audit failed action=${action} correlationId=${correlationId} reason=${reason}`);
     }
-  }
-
-  private async emergencyFacilityContent(session: Session): Promise<Record<string, unknown>> {
-    if (!this.facilitySearch || !session.subjectAbhaRef.startsWith('synthetic:')) return {};
-    const patient = await this.dataSource.getRepository(SyntheticPatient).findOne({
-      where: { tenantId: session.tenantId, syntheticPatientId: session.subjectAbhaRef.replace(/^synthetic:/, '') },
-    });
-    if (!patient?.state && !patient?.district) return {};
-    const scopedFilters = {
-      state: patient.state,
-      district: patient.district,
-      city: patient.city || undefined,
-      locality: patient.locality || undefined,
-      limit: 5,
-    };
-    let results = await this.facilitySearch.searchWithSchemes(session.tenantId, scopedFilters);
-    // Source files can be district-scoped without a city/locality value. Retain
-    // the patient's state and district, then relax only empty source dimensions.
-    if (!results.length && (scopedFilters.city || scopedFilters.locality)) {
-      results = await this.facilitySearch.searchWithSchemes(session.tenantId, {
-        state: patient.state,
-        district: patient.district,
-        limit: 5,
-      });
-    }
-    if (!results.length) return {};
-    return {
-      cards: results.map(({ facility, schemes }) => ({
-        title: facility.name,
-        value: [facility.locality, facility.district, facility.state].filter(Boolean).join(', '),
-        subtitle: [facility.hospitalType, schemes.length ? schemes.join(' · ') : null, facility.specialityCodes?.length ? facility.specialityCodes.join(', ') : null, facility.contactNumber || null].filter(Boolean).join(' · '),
-      })),
-      facility_results: results.map(({ facility, schemes }) => ({
-        name: facility.name,
-        state: facility.state,
-        district: facility.district,
-        locality: facility.locality,
-        hospitalType: facility.hospitalType,
-        schemes,
-        specialityCodes: facility.specialityCodes,
-        contactNumber: facility.contactNumber,
-        emergencyAvailable: facility.emergencyAvailable,
-        distanceKm: null,
-        source: facility.sourceVersion || 'Structured facility source',
-      })),
-      emergency_capability_note: 'उपलब्ध रिकॉर्ड में emergency सुविधा की पुष्टि नहीं है।',
-    };
   }
 
   async registerTurn(
@@ -475,22 +424,37 @@ export class TurnsService {
     let finalStatus = 'COMPLETED';
 
     if (safetyResult.status === 'SAFE') {
-      let result;
-      try {
-        result = await this.processor.processTurn(
-          sessionId,
-          piiResult.sanitizedText,
-          correlationId,
-          identity,
-          session.consentArtifactId,
-        );
-        responseType = result.responseType;
-        content = result.content;
-        intent = result.intent;
-        selectedAgent = result.selectedAgent;
-      } catch (err: any) {
-        await this.failTurn(turn.id, err as Error, correlationId, identity);
-        throw err;
+      const routedToClinicalReview = this.escalationService
+        ? await this.escalationService.recordPatientMessage(identity.tenantId, sessionId, turn, identity.externalId)
+        : false;
+      if (routedToClinicalReview) {
+        const hi = dto.language === 'hi' || /[ह-्]/.test(dto.input_text);
+        responseType = 'clinical-review';
+        content = {
+          summary: hi
+            ? 'आपका संदेश क्लिनिकल टीम को भेज दिया गया है।'
+            : 'Your message has been sent to the clinical team.',
+        };
+        intent = 'clinical-review-message';
+        selectedAgent = 'clinical-team';
+      } else {
+        let result;
+        try {
+          result = await this.processor.processTurn(
+            sessionId,
+            piiResult.sanitizedText,
+            correlationId,
+            identity,
+            session.consentArtifactId,
+          );
+          responseType = result.responseType;
+          content = result.content;
+          intent = result.intent;
+          selectedAgent = result.selectedAgent;
+        } catch (err: any) {
+          await this.failTurn(turn.id, err as Error, correlationId, identity);
+          throw err;
+        }
       }
     } else if (safetyResult.status === 'ESCALATION_REQUIRED') {
       // This contract is deterministic and ready before any best-effort HITL work.
@@ -503,13 +467,8 @@ export class TurnsService {
           safetyResult.patientSafeMessage || 'Clinical escalation required.',
         assigned_role: 'CLINICIAN',
       };
-      // SafetyGate remains authoritative and runs before this optional,
-      // source-backed location lookup. No model selects or labels facilities.
-      try {
-        Object.assign(content, await this.emergencyFacilityContent(session));
-      } catch {
-        // Emergency guidance must remain available even if facility data is unavailable.
-      }
+      // An approved red-flag escalation enters the clinical-review path directly.
+      // Facility lookup remains available for ordinary, explicit facility requests.
       intent = 'safety-escalation';
       selectedAgent = safetyResult.ruleId;
 

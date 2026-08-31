@@ -13,6 +13,8 @@ export interface AiGenerateOptions {
   inlineData?: Array<{ mimeType: string; data: Buffer | string }>;
   /** Safe diagnostic label for development telemetry; never includes patient data. */
   telemetryLabel?: string;
+  /** Optional provider-supported reasoning level for constrained response formatting. */
+  thinkingLevel?: 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH';
 }
 
 export interface AiGenerateResult {

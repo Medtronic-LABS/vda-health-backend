@@ -91,8 +91,11 @@ export class GeminiProvider implements IAiProvider {
       generationConfig: {
         temperature: options?.temperature ?? 0.2,
         maxOutputTokens: Number(options?.maxTokens || this.config.aiMaxOutputLength),
-          ...(options?.responseFormat === 'json'
+        ...(options?.responseFormat === 'json'
           ? { responseMimeType: 'application/json', ...(options.jsonSchema ? { responseSchema: options.jsonSchema } : {}) }
+          : {}),
+        ...(options?.thinkingLevel
+          ? { thinkingConfig: { thinkingLevel: options.thinkingLevel } }
           : {}),
       },
     };
@@ -119,16 +122,14 @@ export class GeminiProvider implements IAiProvider {
         if (!res.ok) {
           const failure = (await res.json().catch(() => ({}))) as Record<string, any>;
           const providerError = failure['error'] as Record<string, unknown> | undefined;
-          const providerCategory =
-            (typeof providerError?.['status'] === 'string' && providerError['status']) ||
-            `HTTP_${res.status}`;
+          const providerCategory = this.classifyHttpStatus(res.status, providerError?.['status']);
           const providerMessage =
             typeof providerError?.['message'] === 'string'
               ? providerError['message'].replace(/[\r\n]+/g, ' ').slice(0, 240)
               : 'unavailable';
           if (emitDiagnostics) {
             this.logger.warn(
-              `[${telemetryLabel}] model=${model} mime=${inlineMimeTypes} request=completed provider_status=${res.status} provider_category=${providerCategory} provider_message=${providerMessage} elapsed_ms=${Date.now() - requestStartedAt}`,
+              `[${telemetryLabel}] model=${model} mime=${inlineMimeTypes} response_format=${options?.responseFormat || 'text'} response_schema=${Boolean(options?.jsonSchema)} request=completed provider_status=${res.status} provider_category=${providerCategory} provider_message=${providerMessage} elapsed_ms=${Date.now() - requestStartedAt}`,
             );
           }
           throw new Error(`Gemini API returned status ${res.status} (${providerCategory})`);
@@ -196,11 +197,15 @@ export class GeminiProvider implements IAiProvider {
         clearTimeout(timer);
         const errMsg = err instanceof Error ? err.message : String(err);
         lastError = err instanceof Error ? err : new Error(errMsg);
+        const status = this.statusFromError(lastError);
         this.logger.warn(
-          `[GeminiTelemetry] provider=gemini keySlot=${keySlot} status=failed attempt=${attempt}/${maxRetries} duration_ms=${Date.now() - requestStartedAt} prompt_chars=${prompt.length} system_chars=${options?.systemPrompt?.length || 0} error=${lastError.message}`,
+          `[GeminiTelemetry] provider=gemini keySlot=${keySlot} status=failed category=${this.classifyHttpStatus(status)} response_format=${options?.responseFormat || 'text'} response_schema=${Boolean(options?.jsonSchema)} attempt=${attempt}/${maxRetries} duration_ms=${Date.now() - requestStartedAt} prompt_chars=${prompt.length} system_chars=${options?.systemPrompt?.length || 0} error=${lastError.message}`,
         );
-        if (attempt < maxRetries) {
+        const retryable = status === undefined || [408, 429, 500, 502, 503, 504].includes(status);
+        if (attempt < maxRetries && retryable) {
           await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 200));
+        } else if (!retryable) {
+          break;
         }
       }
     }
@@ -211,6 +216,15 @@ export class GeminiProvider implements IAiProvider {
   private statusFromError(error: Error): number | undefined {
     const match = error.message.match(/status\s+(\d{3})/i);
     return match ? Number(match[1]) : undefined;
+  }
+
+  private classifyHttpStatus(status?: number, providerStatus?: unknown): string {
+    if (status === 400) return 'INVALID_ARGUMENT';
+    if (status === 401) return 'AUTHENTICATION';
+    if (status === 403) return 'AUTHORIZATION';
+    if (status === 429) return 'RATE_LIMITED';
+    if (status !== undefined && status >= 500) return 'PROVIDER_ERROR';
+    return typeof providerStatus === 'string' ? providerStatus : status === undefined ? 'TRANSPORT_ERROR' : `HTTP_${status}`;
   }
 
   /** Transport-only normalization. It never converts prose into a response. */

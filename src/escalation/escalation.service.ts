@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, IsNull, Repository } from 'typeorm';
 import { AuditService } from '../audit/audit.service';
 import { HostIdentity } from '../auth/host-identity.context';
 import { ClinicalEscalation, ClinicalEscalationOutcome, ClinicalEscalationStatus, ClinicalResponseReviewDecision } from '../database/entities/clinical-escalation.entity';
@@ -11,6 +11,7 @@ import { SafetyResult } from '../safety/interfaces/safety-gate.interface';
 export class EscalationService {
   constructor(
     @InjectRepository(ClinicalEscalation) private readonly escalations: Repository<ClinicalEscalation>,
+    @InjectRepository(ConversationTurn) private readonly turns: Repository<ConversationTurn>,
     private readonly auditService: AuditService,
     @Optional() private readonly dataSource?: DataSource,
   ) {}
@@ -40,6 +41,167 @@ export class EscalationService {
     }
   }
 
+  private async clinicalConversation(escalation: ClinicalEscalation): Promise<Array<{ speaker: 'PATIENT' | 'CLINICIAN'; text: string; createdAt: Date }>> {
+    const turns = await this.turns.find({ where: { clinicalEscalationId: escalation.id, conversationRetentionGranted: true }, order: { turnNumber: 'ASC' } });
+    return turns.flatMap((turn) => {
+      const text = turn.inputText?.trim();
+      if (!text) return [];
+      const speaker: 'PATIENT' | 'CLINICIAN' = turn.speaker === 'CLINICIAN' ? 'CLINICIAN' : 'PATIENT';
+      return [{ speaker, text, createdAt: turn.createdAt }];
+    });
+  }
+
+  /**
+   * The browser may poll this state, but the server alone determines eligibility
+   * from the persisted escalation timestamp. There is deliberately no provider
+   * call here: the current project has no real teleconsultation integration.
+   */
+  async patientFallbackState(tenantId: string, sessionId: string): Promise<{
+    reviewRequested: boolean;
+    teleconsultationOffered: boolean;
+    teleconsultationConfigured: boolean;
+    messages: Array<{ speaker: 'PATIENT' | 'CLINICIAN'; text: string; createdAt: Date }>;
+  }> {
+    const escalation = await this.escalations.findOne({
+      where: { tenantId, sessionId },
+      order: { createdAt: 'DESC' },
+    });
+    if (!escalation) {
+      return { reviewRequested: false, teleconsultationOffered: false, teleconsultationConfigured: false, messages: [] };
+    }
+    const messages = await this.clinicalConversation(escalation);
+    if (escalation.status !== 'OPEN' || escalation.clinicalConversationClosedAt) {
+      return { reviewRequested: false, teleconsultationOffered: false, teleconsultationConfigured: false, messages };
+    }
+    const clinicianResponded = messages.some((message) => message.speaker === 'CLINICIAN');
+
+    const waitingMs = Date.now() - escalation.createdAt.getTime();
+    const eligible = waitingMs >= 60_000;
+    if (eligible && !clinicianResponded && !escalation.teleconsultationOfferedAt) {
+      const marked = await this.escalations.update(
+        { id: escalation.id, tenantId, status: 'OPEN', teleconsultationOfferedAt: IsNull() },
+        { teleconsultationOfferedAt: new Date() },
+      );
+      if (marked.affected) {
+        await this.auditService.logEvent({
+          tenantId,
+          subjectAbhaRef: `escalation:${escalation.subjectRefHash}`,
+          actingPrincipal: 'clinical-escalation-fallback',
+          correlationId: escalation.correlationId,
+          action: 'TELECONSULTATION_OFFERED',
+          entityName: 'clinical_escalation',
+          entityId: escalation.id,
+          details: { delayed_seconds: 60 },
+        });
+        escalation.teleconsultationOfferedAt = new Date();
+      }
+    }
+    return {
+      reviewRequested: true,
+      teleconsultationOffered: eligible && !clinicianResponded,
+      teleconsultationConfigured: false,
+      messages,
+    };
+  }
+
+  async requestTeleconsultation(tenantId: string, sessionId: string): Promise<{
+    teleconsultationConfigured: boolean;
+  }> {
+    const state = await this.patientFallbackState(tenantId, sessionId);
+    if (!state.reviewRequested || !state.teleconsultationOffered) {
+      throw new BadRequestException('TELECONSULTATION_FALLBACK_NOT_AVAILABLE');
+    }
+    const escalation = await this.escalations.findOne({ where: { tenantId, sessionId, status: 'OPEN', clinicalConversationClosedAt: IsNull() }, order: { createdAt: 'DESC' } });
+    if (!escalation) throw new BadRequestException('TELECONSULTATION_FALLBACK_NOT_AVAILABLE');
+    if (!escalation.teleconsultationRequestedAt) {
+      const marked = await this.escalations.update(
+        { id: escalation.id, tenantId, teleconsultationRequestedAt: IsNull() },
+        { teleconsultationRequestedAt: new Date() },
+      );
+      if (marked.affected) {
+        await this.auditService.logEvent({
+          tenantId,
+          subjectAbhaRef: `escalation:${escalation.subjectRefHash}`,
+          actingPrincipal: 'patient',
+          correlationId: escalation.correlationId,
+          action: 'TELECONSULTATION_REQUESTED',
+          entityName: 'clinical_escalation',
+          entityId: escalation.id,
+          details: { integration_configured: false },
+        });
+      }
+    }
+    // No STARTED or FAILED event is emitted: no real provider was configured or invoked.
+    return { teleconsultationConfigured: false };
+  }
+
+  async recordPatientMessage(tenantId: string, sessionId: string, turn: ConversationTurn, actingPrincipal: string): Promise<boolean> {
+    const escalation = await this.escalations.findOne({ where: { tenantId, sessionId, status: 'OPEN', clinicalConversationClosedAt: IsNull() }, order: { createdAt: 'DESC' } });
+    if (!escalation) return false;
+    turn.clinicalEscalationId = escalation.id;
+    turn.speaker = 'PATIENT';
+    await this.turns.save(turn);
+    await this.auditService.logEvent({
+      tenantId, subjectAbhaRef: turn.subjectRef, speaker: 'PATIENT', actingPrincipal,
+      correlationId: turn.correlationId, action: 'PATIENT_MESSAGE_RECEIVED_IN_CLINICAL_REVIEW',
+      entityName: 'clinical_escalation', entityId: escalation.id,
+      details: { session_id: sessionId, turn_id: turn.id },
+    });
+    return true;
+  }
+
+  async sendClinicianMessage(tenantId: string, escalationId: string, actingPrincipal: string, message: string, correlationId: string, idempotencyKey?: string): Promise<{ speaker: 'CLINICIAN'; text: string; createdAt: Date }> {
+    const escalation = await this.get(tenantId, escalationId);
+    if (escalation.status !== 'OPEN' || escalation.clinicalConversationClosedAt) throw new BadRequestException('CLINICAL_CONVERSATION_NOT_OPEN');
+    if (idempotencyKey) {
+      const existing = await this.turns.findOne({ where: { clinicalEscalationId: escalation.id, idempotencyKey } });
+      if (existing?.inputText) return { speaker: 'CLINICIAN', text: existing.inputText, createdAt: existing.createdAt };
+    }
+    const initialTurn = await this.turns.findOne({ where: { id: escalation.turnId, sessionId: escalation.sessionId } });
+    if (!initialTurn) throw new NotFoundException('ESCALATION_CONVERSATION_NOT_FOUND');
+    const lastTurn = await this.turns.findOne({ where: { sessionId: escalation.sessionId }, order: { turnNumber: 'DESC' } });
+    const turn = this.turns.create({
+      sessionId: escalation.sessionId, clinicalEscalationId: escalation.id,
+      turnNumber: (lastTurn?.turnNumber || 0) + 1, correlationId, speaker: 'CLINICIAN',
+      subjectRef: initialTurn.subjectRef,
+      inputText: initialTurn.conversationRetentionGranted ? message.trim() : null,
+      outputText: null, responseType: 'clinical-review-message', intent: 'clinical-review-message',
+      selectedAgent: 'clinician', latency: 0, safetyStatus: 'CLINICAL_REVIEW', status: 'COMPLETED',
+      idempotencyKey: idempotencyKey || null, conversationRetentionGranted: initialTurn.conversationRetentionGranted,
+    });
+    const saved = await this.turns.save(turn);
+    await this.auditService.logEvent({
+      tenantId, subjectAbhaRef: saved.subjectRef, speaker: 'CLINICIAN', actingPrincipal,
+      correlationId, action: 'CLINICIAN_MESSAGE_SENT', entityName: 'clinical_escalation', entityId: escalation.id,
+      details: { session_id: escalation.sessionId, turn_id: saved.id },
+    });
+    return { speaker: 'CLINICIAN', text: message.trim(), createdAt: saved.createdAt };
+  }
+
+  async endClinicalConversation(tenantId: string, escalationId: string, actingPrincipal: string): Promise<ClinicalEscalation & { clinicalConversation: Array<{ speaker: 'PATIENT' | 'CLINICIAN'; text: string; createdAt: Date }> }> {
+    const escalation = await this.findScoped(tenantId, escalationId);
+    if (escalation.clinicalConversationClosedAt) return this.get(tenantId, escalationId);
+    if (escalation.status !== 'OPEN') throw new BadRequestException('CLINICAL_ESCALATION_NOT_OPEN');
+    const closedAt = new Date();
+    const marked = await this.escalations.update(
+      { id: escalation.id, tenantId, status: 'OPEN', clinicalConversationClosedAt: IsNull() },
+      { clinicalConversationClosedAt: closedAt, clinicalConversationClosedBy: actingPrincipal },
+    );
+    if (marked.affected) {
+      await this.auditService.logEvent({
+        tenantId,
+        subjectAbhaRef: `escalation:${escalation.subjectRefHash}`,
+        actingPrincipal,
+        correlationId: escalation.correlationId,
+        action: 'CLINICAL_CHAT_ENDED',
+        entityName: 'clinical_escalation',
+        entityId: escalation.id,
+        details: { session_id: escalation.sessionId },
+      });
+    }
+    return this.get(tenantId, escalationId);
+  }
+
   async createFromSafety(params: { identity: HostIdentity; turn: ConversationTurn; safety: SafetyResult; sanitizedInputText: string; structuredResponse?: Record<string, unknown> }): Promise<ClinicalEscalation | null> {
     if (params.safety.status !== 'ESCALATION_REQUIRED') return null;
     const escalation = this.escalations.create({
@@ -62,6 +224,9 @@ export class EscalationService {
       reviewHistory: [{ action: 'CREATED', at: new Date().toISOString() }],
     });
     const saved = await this.escalations.save(escalation);
+    params.turn.clinicalEscalationId = saved.id;
+    params.turn.speaker = 'PATIENT';
+    await this.turns.save(params.turn);
     await this.auditService.logEvent({
       tenantId: params.identity.tenantId, subjectAbhaRef: params.turn.subjectRef,
       speaker: params.turn.speaker, actingPrincipal: params.identity.externalId,
@@ -80,10 +245,15 @@ export class EscalationService {
     return this.escalations.find({ where, order: { createdAt: 'DESC' }, take: 100 });
   }
 
-  async get(tenantId: string, id: string): Promise<ClinicalEscalation> {
+  private async findScoped(tenantId: string, id: string): Promise<ClinicalEscalation> {
     const escalation = await this.escalations.findOne({ where: { id, tenantId } });
     if (!escalation) throw new NotFoundException('CLINICAL_ESCALATION_NOT_FOUND');
     return escalation;
+  }
+
+  async get(tenantId: string, id: string): Promise<ClinicalEscalation & { clinicalConversation: Array<{ speaker: 'PATIENT' | 'CLINICIAN'; text: string; createdAt: Date }> }> {
+    const escalation = await this.findScoped(tenantId, id);
+    return Object.assign(escalation, { clinicalConversation: await this.clinicalConversation(escalation) });
   }
 
   async openCount(tenantId: string): Promise<{ open: number }> {
@@ -91,7 +261,7 @@ export class EscalationService {
   }
 
   async review(tenantId: string, id: string, reviewer: HostIdentity, outcome: ClinicalEscalationOutcome, note?: string): Promise<ClinicalEscalation> {
-    const escalation = await this.get(tenantId, id);
+    const escalation = await this.findScoped(tenantId, id);
     const reviewedAt = new Date();
     const status: ClinicalEscalationStatus = outcome === 'TRUE_POSITIVE' ? 'TRUE_POSITIVE' : outcome === 'FALSE_POSITIVE' ? 'FALSE_POSITIVE' : 'REVIEWED';
     escalation.status = status;
@@ -118,7 +288,7 @@ export class EscalationService {
     note?: string,
     correctedResponse?: string,
   ): Promise<ClinicalEscalation> {
-    const escalation = await this.get(tenantId, id);
+    const escalation = await this.findScoped(tenantId, id);
     const originalResponse = escalation.originalPatientResponse || escalation.patientSafeResponse || null;
     const normalizedCorrection = correctedResponse?.trim();
     if (decision === 'CORRECTED' && !normalizedCorrection) {

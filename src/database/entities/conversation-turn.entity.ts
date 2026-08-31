@@ -18,6 +18,11 @@ export class ConversationTurn {
   @Column('uuid')
   sessionId!: string;
 
+  /** Set only for messages belonging to an active Clinical Escalation conversation. */
+  @Index()
+  @Column('uuid', { nullable: true })
+  clinicalEscalationId?: string | null;
+
   @ManyToOne(() => Session, (session) => session.turns, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'sessionId' })
   session?: Session;

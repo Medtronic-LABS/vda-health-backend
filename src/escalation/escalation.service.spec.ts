@@ -7,6 +7,10 @@ describe('EscalationService', () => {
     create: jest.fn((value) => value), save: jest.fn(async (value) => ({ id: 'escalation-1', ...value })),
     findOne: jest.fn(), count: jest.fn(), find: jest.fn(),
   };
+  const turnRepo = {
+    create: jest.fn((value) => value), save: jest.fn(async (value) => value),
+    findOne: jest.fn(), count: jest.fn(), find: jest.fn(),
+  };
   const audit = { hashSubject: jest.fn(() => ({ hash: 'subject-hash', keyId: 'v1' })), logEvent: jest.fn(async () => undefined) };
   const identity = { tenantId: '00000000-0000-0000-0000-000000000000', externalId: 'reviewer', scopes: [] } as any;
   const turn = { id: '00000000-0000-0000-0000-000000000001', subjectRef: 'synthetic:patient', speaker: 'self', conversationRetentionGranted: true } as ConversationTurn;
@@ -14,7 +18,7 @@ describe('EscalationService', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('persists an existing high-severity safety escalation as an open T1 record without raw input', async () => {
-    const service = new EscalationService(repo as any, audit as any);
+    const service = new EscalationService(repo as any, turnRepo as any, audit as any);
     await service.createFromSafety({ identity, turn, sanitizedInputText: '[REDACTED_PHONE]', safety: {
       status: 'ESCALATION_REQUIRED', ruleId: 'EMERGENCY_01', ruleVersion: '1.0', severity: 'HIGH', action: 'ESCALATE',
       patientSafeMessage: 'Seek emergency care.', correlationId: 'corr-1', language: 'en',
@@ -24,7 +28,7 @@ describe('EscalationService', () => {
   });
 
   it('keeps the input unavailable when conversation retention is not granted', async () => {
-    const service = new EscalationService(repo as any, audit as any);
+    const service = new EscalationService(repo as any, turnRepo as any, audit as any);
     await service.createFromSafety({ identity, turn: { ...turn, conversationRetentionGranted: false }, sanitizedInputText: '[REDACTED_PHONE]', safety: {
       status: 'ESCALATION_REQUIRED', ruleId: 'SELF_HARM_01', ruleVersion: '1.0', severity: 'HIGH', action: 'ESCALATE',
       patientSafeMessage: 'Seek immediate help.', correlationId: 'corr-2', language: 'en',
@@ -35,7 +39,7 @@ describe('EscalationService', () => {
   it('records a review outcome and its operational audit event', async () => {
     const escalation = Object.assign(new ClinicalEscalation(), { id: 'escalation-1', tenantId: identity.tenantId, subjectRefHash: 'subject-hash', correlationId: 'corr-3', ruleId: 'EMERGENCY_01', tier: 'T1', status: 'OPEN', reviewHistory: [] });
     repo.findOne.mockResolvedValue(escalation);
-    const service = new EscalationService(repo as any, audit as any);
+    const service = new EscalationService(repo as any, turnRepo as any, audit as any);
     const saved = await service.review(identity.tenantId, 'escalation-1', identity, 'TRUE_POSITIVE', 'Reviewed operationally');
     expect(saved.status).toBe('TRUE_POSITIVE');
     expect(saved.reviewOutcome).toBe('TRUE_POSITIVE');

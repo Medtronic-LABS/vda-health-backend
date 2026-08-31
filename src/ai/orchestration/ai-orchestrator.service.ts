@@ -747,18 +747,6 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
     let aiResultText = '';
     let finalResponseType = 'text';
     let contentObj: Record<string, any> = {};
-    const patientResponseSchema = {
-      type: 'object',
-      properties: {
-        summary: { type: 'string' },
-        sections: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string' }, bullets: { type: 'array', items: { type: 'string' } } } } },
-        cards: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, value: { type: 'string' }, subtitle: { type: 'string' } } } },
-        actions: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, action: { type: 'string' } } } },
-      },
-      required: ['summary'],
-      additionalProperties: false,
-    };
-
     // Check if patient asks for dosage/medication changes explicitly
     const lowerInput = resolvedInputText.toLowerCase();
     const asksMedChange =
@@ -784,9 +772,10 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
           systemPrompt,
           correlationId,
           temperature: 0.2,
-          maxTokens: 420,
+          maxTokens: 1024,
           responseFormat: 'json',
-          jsonSchema: patientResponseSchema,
+          thinkingLevel: 'MINIMAL',
+          telemetryLabel: 'PATIENT_RESPONSE',
         });
         let generated = this.responseFormatter?.normalizeGeneratedContent(
           aiResponse.json,
@@ -799,9 +788,10 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
             systemPrompt: `${systemPrompt}\nYour previous output was invalid. Return only valid concise JSON matching the contract.`,
             correlationId,
             temperature: 0,
-            maxTokens: 420,
+            maxTokens: 1024,
             responseFormat: 'json',
-            jsonSchema: patientResponseSchema,
+            thinkingLevel: 'MINIMAL',
+            telemetryLabel: 'PATIENT_RESPONSE_RETRY',
           });
           generated = this.responseFormatter?.normalizeGeneratedContent(
             retryResponse.json,
@@ -822,11 +812,11 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
         const errStack = err instanceof Error ? err.stack : '';
         this.logger.error(`AI Provider execution failed correlationId=${correlationId} intent=${intentMeta.intent} layer=ai_orchestrator errorType=${err instanceof Error ? err.name : 'Unknown'} errorMessage=${errMsg}`, errStack);
         if (this.configService?.aiProviderEnabled) {
-          const isProviderFailure = errMsg.includes('Gemini API') || errMsg.includes('GEMINI') || errMsg.includes('rate limit') || errMsg.includes('429') || errMsg.includes('timeout') || errMsg.includes('abort');
+          const isProviderFailure = /Gemini API returned status (401|403|408|429|500|502|503|504)|GEMINI_PROVIDER_UNAVAILABLE|timeout|abort/i.test(errMsg);
           const isResponseContractFailure = errMsg === 'PATIENT_RESPONSE_CONTRACT_INVALID';
           if (isProviderFailure || isResponseContractFailure) {
             const isHindi = intentMeta.language === 'hi' || /[ह-्]/.test(resolvedInputText);
-            this.logger.warn(`AI Provider rate-limited/failed; attempting grounded fallback correlationId=${correlationId} intent=${intentMeta.intent}`);
+            this.logger.warn(`AI Provider retryable failure; attempting grounded fallback correlationId=${correlationId} intent=${intentMeta.intent}`);
 
             // 1. Fallback for Uploaded Prescription Queries (Tests & Medicines)
             const isPrescriptionContextQuery =
@@ -912,22 +902,11 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
               }
             }
 
-            // 3. Fallback for Knowledge / Scheme Queries
+            // Retrieved knowledge is prompt-only internal data. If a provider
+            // cannot produce the governed response, never return a raw chunk,
+            // document label, or retrieval metadata to the patient.
             if (!aiResultText && knowledgePrompt && knowledgePrompt.trim().length > 0) {
-              const cleanFacts = knowledgePrompt
-                .replace(/\[AUTHORIZED KNOWLEDGE SOURCE[\s\S]*?\]/g, '')
-                .replace(/\[DETERMINISTIC SCHEME FACTS\]/g, '')
-                .replace(/\[.*?\]/g, '')
-                .trim();
-              const fallbackText = isHindi
-                ? `अधिकृत जानकारी के अनुसार:\n\n${cleanFacts.slice(0, 600)}`
-                : `According to authorized sources:\n\n${cleanFacts.slice(0, 600)}`;
-              aiResultText = fallbackText;
-              contentObj = {
-                summary: fallbackText,
-                [intentMeta.language]: fallbackText,
-                knowledge_sources: knowledgeSources,
-              };
+              throw new ServiceUnavailableException('KNOWLEDGE_RESPONSE_GENERATION_UNAVAILABLE');
             }
 
             // 3. Fallback for Uploaded Prescription Queries
@@ -1028,9 +1007,6 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
         if (!contentObj[intentMeta.language]) {
           contentObj[intentMeta.language] = finalOutputText;
         }
-      }
-      if (knowledgeSources && knowledgeSources.length > 0) {
-        contentObj['knowledge_sources'] = knowledgeSources;
       }
       if (facilityResults.length > 0 && !deterministicFacilityContent) {
         contentObj['facility_results'] = facilityResults.map((facility) => ({
