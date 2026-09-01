@@ -70,7 +70,17 @@ export interface LabResultContext {
   referenceRange: string | null;
   /** 'normal' | 'abnormal' | 'unknown' */
   interpretation: string | null;
+  /** Source labels are never treated as governed clinical interpretations. */
+  interpretationProvenance?: 'GOVERNED' | 'SOURCE_UNVERIFIED' | 'UNAVAILABLE';
   observationDate: Date | null;
+  sourceRef: string;
+  retrievedAt: Date;
+}
+
+export interface CarePlanContext {
+  category: string | null;
+  status: string | null;
+  activities: string[];
   sourceRef: string;
   retrievedAt: Date;
 }
@@ -108,6 +118,7 @@ export interface ClinicalContext {
   diagnoses?: DiagnosisContext[];
   labResults?: LabResultContext[];
   allergies?: AllergyContext[];
+  carePlans?: CarePlanContext[];
   /**
    * Categories that were requested but could not be retrieved.
    * AI must acknowledge unavailability rather than fabricating data.

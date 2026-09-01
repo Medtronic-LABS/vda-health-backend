@@ -28,8 +28,8 @@ export class AgentKnowledgeMapper {
     },
     'general-health-agent': {
       agentName: 'general-health-agent',
-      allowedDomains: ['preventive_health', 'lifestyle', 'public_health'],
-      defaultDomain: 'preventive_health',
+      allowedDomains: ['clinical_guidelines', 'preventive_health', 'lifestyle', 'public_health'],
+      defaultDomain: 'clinical_guidelines',
     },
     'scheme-agent': {
       agentName: 'scheme-agent',

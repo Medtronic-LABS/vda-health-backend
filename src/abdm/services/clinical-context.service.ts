@@ -23,6 +23,7 @@ import {
   DiagnosisContext,
   LabResultContext,
   AllergyContext,
+  CarePlanContext,
 } from '../models/clinical-context.models';
 import { IntentToRecordCategoryMapper } from '../mappers/intent-to-record-category.mapper';
 
@@ -38,6 +39,7 @@ const STALENESS_DAYS: Record<HealthRecordCategory, number | null> = {
   [HealthRecordCategory.LAB_REPORT]: 180,
   [HealthRecordCategory.INVESTIGATION]: 180,
   [HealthRecordCategory.ALLERGY]: null, // Allergies never expire
+  [HealthRecordCategory.CARE_PLAN]: 365,
 };
 
 @Injectable()
@@ -126,7 +128,9 @@ export class ClinicalContextService implements IClinicalContextService {
     });
 
     // ─── Step 2: Map intent → required categories ────────────────────────────
-    const categories = IntentToRecordCategoryMapper.getCategories(intent);
+    const categories = request.requiredRecordCategories?.length
+      ? request.requiredRecordCategories
+      : IntentToRecordCategoryMapper.getCategories(intent);
 
     // If intent maps to no categories, return empty context immediately
     if (categories.length === 0) {
@@ -212,6 +216,7 @@ export class ClinicalContextService implements IClinicalContextService {
     let diagnoses: DiagnosisContext[] | undefined;
     let labResults: LabResultContext[] | undefined;
     let allergies: AllergyContext[] | undefined;
+    let carePlans: CarePlanContext[] | undefined;
 
     for (const bundle of healthResult.bundles) {
       const records = this.applyStalnessFilter(
@@ -243,6 +248,9 @@ export class ClinicalContextService implements IClinicalContextService {
         case HealthRecordCategory.ALLERGY:
           allergies = deduped.map((r) => this.normalizeAllergy(r, now));
           break;
+        case HealthRecordCategory.CARE_PLAN:
+          carePlans = deduped.map((r) => this.normalizeCarePlan(r, now));
+          break;
       }
     }
 
@@ -262,6 +270,7 @@ export class ClinicalContextService implements IClinicalContextService {
     if (diagnoses !== undefined) context.diagnoses = diagnoses;
     if (labResults !== undefined) context.labResults = labResults;
     if (allergies !== undefined) context.allergies = allergies;
+    if (carePlans !== undefined) context.carePlans = carePlans;
 
     // ─── Audit: clinical context created ─────────────────────────────────────
     await this.emitClinicalContextCreatedAudit(
@@ -409,6 +418,12 @@ export class ClinicalContextService implements IClinicalContextService {
         p['interpretation'] != null
           ? this.safeStr(p['interpretation'], '')
           : null,
+      interpretationProvenance:
+        p['interpretationProvenance'] === 'GOVERNED'
+          ? 'GOVERNED'
+          : p['interpretationProvenance'] === 'SOURCE_UNVERIFIED'
+            ? 'SOURCE_UNVERIFIED'
+            : 'UNAVAILABLE',
       observationDate:
         p['observationDate'] instanceof Date ? p['observationDate'] : null,
       sourceRef: r.sourceRef,
@@ -424,6 +439,20 @@ export class ClinicalContextService implements IClinicalContextService {
         p['reactionType'] != null ? this.safeStr(p['reactionType'], '') : null,
       severity: p['severity'] != null ? this.safeStr(p['severity'], '') : null,
       status: this.safeStr(p['status'], 'unknown'),
+      sourceRef: r.sourceRef,
+      retrievedAt: now,
+    };
+  }
+
+  private normalizeCarePlan(r: RawHealthRecord, now: Date): CarePlanContext {
+    const p = r.payload;
+    const activities = Array.isArray(p['activities'])
+      ? p['activities'].filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).slice(0, 8)
+      : [];
+    return {
+      category: p['category'] != null ? this.safeStr(p['category'], '') || null : null,
+      status: p['status'] != null ? this.safeStr(p['status'], '') || null : null,
+      activities,
       sourceRef: r.sourceRef,
       retrievedAt: now,
     };
@@ -455,6 +484,7 @@ export class ClinicalContextService implements IClinicalContextService {
         diagnosisCount: context.diagnoses?.length ?? 0,
         labResultCount: context.labResults?.length ?? 0,
         allergyCount: context.allergies?.length ?? 0,
+        carePlanCount: context.carePlans?.length ?? 0,
         unavailableCategoryCount: context.unavailableCategories.length,
         partialResult: context.partialResult,
         // NO clinical values: no medication names, diagnoses, lab values

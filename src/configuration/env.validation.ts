@@ -252,6 +252,14 @@ export class EnvironmentVariables {
 
   @IsString()
   @IsOptional()
+  LOCAL_PATIENT_SUMMARY_PATH?: string;
+
+  @IsString()
+  @IsOptional()
+  LOCAL_PATIENT_BUNDLES_PATH?: string;
+
+  @IsString()
+  @IsOptional()
   AUDIT_HMAC_KEY_ID?: string;
 
   @IsString()

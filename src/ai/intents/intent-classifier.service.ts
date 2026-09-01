@@ -6,6 +6,7 @@ import { ILanguageProvider } from '../interfaces/language-provider.interface';
 import { IntentToRecordCategoryMapper } from '../../abdm/mappers/intent-to-record-category.mapper';
 import { HealthRecordCategory } from '../../abdm/interfaces/health-record-service.interface';
 import { AuditService } from '../../audit/audit.service';
+import { SemanticContextPlannerService } from '../context/semantic-context-planner.service';
 
 @Injectable()
 export class IntentClassifierService implements IIntentClassifier {
@@ -16,6 +17,7 @@ export class IntentClassifierService implements IIntentClassifier {
     @Inject('ILanguageProvider')
     private readonly languageProvider: ILanguageProvider,
     private readonly auditService: AuditService,
+    private readonly contextPlanner: SemanticContextPlannerService,
   ) {}
 
   async classifyIntent(
@@ -39,6 +41,9 @@ export class IntentClassifierService implements IIntentClassifier {
     let aiCategory = IntentType.UNKNOWN;
     let confidence = 0.5;
     let requirements: IntentMetadata['requirements'];
+    let semanticLanguage: 'hi' | 'en' | undefined;
+    let knowledgeRequired: boolean | undefined;
+    let responseRequirements: string[] | undefined;
 
     try {
       const candidates = Object.values(IntentType);
@@ -52,6 +57,9 @@ export class IntentClassifierService implements IIntentClassifier {
         aiCategory = aiResult.category as IntentType;
         confidence = aiResult.confidence;
         requirements = aiResult.requirements;
+        semanticLanguage = aiResult.language;
+        knowledgeRequired = aiResult.requirements?.knowledgeRequired;
+        responseRequirements = aiResult.requirements?.responseRequirements;
       }
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -63,10 +71,20 @@ export class IntentClassifierService implements IIntentClassifier {
     const metadata = this.buildMetadata(
       aiCategory,
       confidence,
-      detectedLang,
+      semanticLanguage || detectedLang,
       'AI_MODEL',
     );
     metadata.requirements = requirements;
+    const plan = this.contextPlanner.plan({
+      intent: aiCategory,
+      requestedCategories: aiResultRequirements(requirements),
+      knowledgeRequired,
+      responseRequirements,
+    });
+    metadata.requiredRecordCategories = plan.categories;
+    metadata.requiresClinicalContext = plan.categories.length > 0;
+    metadata.knowledgeRequired = plan.knowledgeRequired;
+    metadata.responseRequirements = plan.responseRequirements;
 
     // Audit Stage 2 classification
     await this.auditService.logEvent({
@@ -126,4 +144,9 @@ export class IntentClassifierService implements IIntentClassifier {
       classifiedBy,
     };
   }
+}
+
+function aiResultRequirements(value: IntentMetadata['requirements']): string[] | undefined {
+  const candidate = value as (IntentMetadata['requirements'] & { recordCategories?: string[] }) | undefined;
+  return candidate?.recordCategories;
 }

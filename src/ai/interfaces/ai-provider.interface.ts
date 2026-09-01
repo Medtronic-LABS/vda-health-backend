@@ -48,7 +48,13 @@ export interface AiClassifyResult {
     facilityType?: 'PUBLIC' | 'PRIVATE';
     scheme?: string;
     service?: string;
+    /** A bounded, semantic plan. Values are validated before any record access. */
+    recordCategories?: string[];
+    knowledgeRequired?: boolean;
+    responseRequirements?: string[];
   };
+  /** The language inferred from the current turn and its retained conversation. */
+  language?: 'hi' | 'en';
   provider: string;
 }
 

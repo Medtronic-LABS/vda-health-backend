@@ -268,6 +268,15 @@ export class ConfigurationService {
     return this.configService.get<string>('DEV_AUTH_CONTEXT_COMPLETENESS');
   }
 
+  /** Development-only file paths for the replaceable local patient-data adapter. */
+  get localPatientSummaryPath(): string | undefined {
+    return this.configService.get<string>('LOCAL_PATIENT_SUMMARY_PATH')?.trim() || undefined;
+  }
+
+  get localPatientBundlesPath(): string | undefined {
+    return this.configService.get<string>('LOCAL_PATIENT_BUNDLES_PATH')?.trim() || undefined;
+  }
+
   get contextCompleteness(): string {
     return this.devAuthContextCompleteness || 'COMPLETE';
   }

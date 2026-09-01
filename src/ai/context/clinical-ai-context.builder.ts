@@ -25,6 +25,7 @@ export interface MinimizedAiContext {
     value: string | null;
     unit: string | null;
     interpretation: string | null;
+    interpretationProvenance?: string;
     date: string | null;
   }>;
   allergies?: Array<{
@@ -33,6 +34,7 @@ export interface MinimizedAiContext {
     severity: string | null;
     status: string;
   }>;
+  carePlans?: Array<{ category: string | null; status: string | null; activities: string[] }>;
   unavailableCategories: string[];
   hasRecords: boolean;
 }
@@ -103,9 +105,19 @@ export class ClinicalAiContextBuilder {
         value: l.value,
         unit: l.unit,
         interpretation: l.interpretation,
+        interpretationProvenance: l.interpretationProvenance,
         date: l.observationDate
           ? l.observationDate.toISOString().split('T')[0]
           : null,
+      }));
+      minContext.hasRecords = true;
+    }
+
+    if (context.carePlans && context.carePlans.length > 0) {
+      minContext.carePlans = context.carePlans.map((plan) => ({
+        category: plan.category,
+        status: plan.status,
+        activities: plan.activities,
       }));
       minContext.hasRecords = true;
     }

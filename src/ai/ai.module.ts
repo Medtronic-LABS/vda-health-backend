@@ -15,6 +15,7 @@ import { SarvamProvider } from './providers/sarvam/sarvam.provider';
 
 import { IntentClassifierService } from './intents/intent-classifier.service';
 import { AiOrchestratorService } from './orchestration/ai-orchestrator.service';
+import { SemanticContextPlannerService } from './context/semantic-context-planner.service';
 
 import { ConversationResponseFormatter } from '../conversations/formatters/conversation-response.formatter';
 import { ConversationHistoryService } from '../conversations/services/conversation-history.service';
@@ -28,6 +29,7 @@ import { Session } from '../database/entities/session.entity';
 import { SyntheticPatient } from '../database/entities/synthetic-patient.entity';
 import { ConversationTurn } from '../database/entities/conversation-turn.entity';
 import { Prescription } from '../database/entities/prescription.entity';
+import { DevDemoModule } from '../dev/dev-demo.module';
 
 @Module({
   imports: [
@@ -42,6 +44,7 @@ import { Prescription } from '../database/entities/prescription.entity';
     SchemeModule,
     MedicationModule,
     EvaluationModule,
+    DevDemoModule,
     TypeOrmModule.forFeature([Session, SyntheticPatient, ConversationTurn, Prescription]),
   ],
   providers: [
@@ -51,6 +54,7 @@ import { Prescription } from '../database/entities/prescription.entity';
     SarvamProvider,
     ConversationResponseFormatter,
     ConversationHistoryService,
+    SemanticContextPlannerService,
     {
       provide: 'IAiProvider',
       useFactory: (

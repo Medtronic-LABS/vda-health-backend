@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/require-await */
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import {
   IHealthRecordService,
   HealthRecordRequest,
@@ -8,7 +8,7 @@ import {
   RawHealthRecord,
   RawHealthRecordBundle,
 } from '../interfaces/health-record-service.interface';
-import { SyntheticPatientService } from '../../dev/synthetic-patient.service';
+import { PATIENT_DATA_PROVIDER, PatientDataProvider, PatientClinicalProfile } from '../../dev/patient-data/patient-data-provider.interface';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { Session } from '../../database/entities/session.entity';
@@ -42,7 +42,10 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
   private static readonly DEV_TENANT_ID =
     '00000000-0000-0000-0000-000000000000';
 
-  constructor(@Optional() private readonly syntheticPatients?: SyntheticPatientService, @InjectDataSource() private readonly dataSource?: DataSource) {}
+  constructor(
+    @Optional() @Inject(PATIENT_DATA_PROVIDER) private readonly patientData?: PatientDataProvider,
+    @InjectDataSource() private readonly dataSource?: DataSource,
+  ) {}
 
   async fetchRecords(
     request: HealthRecordRequest,
@@ -57,17 +60,19 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
     // session supplies the server-authorized synthetic record reference. Never
     // accept a synthetic subject reference directly from patient input.
     const session = this.dataSource ? await this.dataSource.getRepository(Session).findOne({ where: { id: subjectContext.sessionId, tenantId: subjectContext.tenantId, externalId: subjectContext.subjectAbhaRef } }) : null;
-    const recordSubjectRef = session?.subjectAbhaRef.startsWith('synthetic:') ? session.subjectAbhaRef : subjectContext.subjectAbhaRef;
+    const recordSubjectRef = session && (session.subjectAbhaRef.startsWith('synthetic:') || session.subjectAbhaRef.startsWith('local-file:'))
+      ? session.subjectAbhaRef
+      : subjectContext.subjectAbhaRef;
     // Subject isolation: only serve records for development-authorized subjects and tenants
-    const syntheticPatient = this.syntheticPatients && recordSubjectRef.startsWith('synthetic:')
-      ? await this.syntheticPatients.getByReference(subjectContext.tenantId, recordSubjectRef)
+    const selectedPatient = this.patientData
+      ? await this.patientData.getPatientByReference(subjectContext.tenantId, recordSubjectRef)
       : null;
     if (
       ((subjectContext.subjectAbhaRef !==
         DevelopmentHealthRecordService.DEV_SUBJECT_REF &&
         subjectContext.subjectAbhaRef !== 'dev-host-user-123') ||
         subjectContext.tenantId !== DevelopmentHealthRecordService.DEV_TENANT_ID) &&
-      !syntheticPatient
+      !selectedPatient
     ) {
       this.logger.warn(
         `[DEV] Subject or tenant mismatch — returning empty records`,
@@ -84,8 +89,8 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
     const now = new Date();
 
     for (const category of categories) {
-      const records = syntheticPatient
-        ? await this.getPatientRecords(syntheticPatient, category, now)
+      const records = selectedPatient
+        ? this.getPatientRecords(selectedPatient.clinicalProfile, category, now)
         : this.getSyntheticRecords(category, now, dateRangeStart);
       bundles.push({
         category,
@@ -102,10 +107,9 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
     };
   }
 
-  private async getPatientRecords(patient: { tenantId: string; syntheticPatientId: string; clinicalProfile: Record<string, unknown> }, category: HealthRecordCategory, now: Date): Promise<RawHealthRecord[]> {
-    const profile = patient.clinicalProfile;
-    const records = (key: string) => Array.isArray(profile[key]) ? profile[key] as Array<Record<string, unknown>> : [];
-    const source = 'synthetic-development-patient';
+  private getPatientRecords(profile: PatientClinicalProfile, category: HealthRecordCategory, now: Date): RawHealthRecord[] {
+    const records = (key: keyof PatientClinicalProfile) => profile[key];
+    const source = 'development-patient-provider';
     const map = (items: Array<Record<string, unknown>>, payload: (item: Record<string, unknown>) => Record<string, unknown>) =>
       items.map((item, index) => ({ category, sourceRef: `${source}-${category}-${index + 1}`, fetchedAt: now, payload: { ...payload(item), date: now } }));
     switch (category) {
@@ -123,7 +127,10 @@ export class DevelopmentHealthRecordService implements IHealthRecordService {
       case HealthRecordCategory.ALLERGY:
         return map(records('allergies'), (x) => ({ allergen: x.name, reactionType: x.reaction || null, severity: x.severity || null, status: 'active' }));
       case HealthRecordCategory.LAB_REPORT:
-        return map(records('labResults'), (x) => ({ testName: x.name, value: x.value, unit: x.unit || null, referenceRange: x.referenceRange || null, interpretation: x.interpretation || null, observationDate: x.observationDate || now }));
+        // A FHIR/source label is provenance, not a governed clinical conclusion.
+        return map(records('labResults'), (x) => ({ testName: x.name, value: x.value, unit: x.unit || null, referenceRange: x.referenceRange || null, interpretation: x.interpretationGoverned === true ? x.interpretation || null : null, interpretationProvenance: x.interpretationGoverned === true ? 'GOVERNED' : x.interpretation || x.sourceInterpretation ? 'SOURCE_UNVERIFIED' : 'UNAVAILABLE', observationDate: x.observationDate || now }));
+      case HealthRecordCategory.CARE_PLAN:
+        return map(records('carePlans'), (x) => ({ category: x.category || null, status: x.status || null, activities: Array.isArray(x.activities) ? x.activities : [] }));
       default:
         return [];
     }

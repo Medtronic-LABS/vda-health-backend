@@ -18,6 +18,22 @@ export interface PatientResponseContent {
 
 @Injectable()
 export class ConversationResponseFormatter {
+  /** Canonical text for history, TTS, and plain-text patient consumers. */
+  patientFacingText(content: PatientResponseContent): string {
+    const parts = [content.summary];
+    for (const section of content.sections || []) {
+      const sectionParts = [section.title, section.body, ...(section.bullets || []).map((bullet) => `• ${bullet}`)]
+        .filter((value): value is string => Boolean(value?.trim()));
+      if (sectionParts.length) parts.push(sectionParts.join('\n'));
+    }
+    for (const card of content.cards || []) {
+      const cardParts = [card.title, card.value, card.subtitle]
+        .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+      if (cardParts.length) parts.push(cardParts.join(': '));
+    }
+    return parts.join('\n\n');
+  }
+
   normalizeGeneratedContent(
     generated: unknown,
   ): PatientResponseContent | null {
@@ -32,10 +48,10 @@ export class ConversationResponseFormatter {
           .filter((s): s is Record<string, unknown> => !!s && typeof s === 'object')
           .slice(0, 3)
           .map((s) => ({
-            title: typeof s.title === 'string' ? s.title : undefined,
-            body: typeof s.body === 'string' ? s.body : undefined,
+            title: this.safePatientText(s.title),
+            body: this.safePatientText(s.body),
             bullets: Array.isArray(s.bullets)
-              ? s.bullets.filter((b): b is string => typeof b === 'string').slice(0, 4)
+              ? s.bullets.map((b) => this.safePatientText(b)).filter((b): b is string => Boolean(b)).slice(0, 4)
               : undefined,
           }))
       : undefined;
@@ -44,19 +60,31 @@ export class ConversationResponseFormatter {
           .filter((c): c is Record<string, unknown> => !!c && typeof c === 'object')
           .slice(0, 5)
           .map((c) => ({
-            title: typeof c.title === 'string' ? c.title : undefined,
-            value: typeof c.value === 'string' ? c.value : undefined,
-            subtitle: typeof c.subtitle === 'string' ? c.subtitle : undefined,
+            title: this.safePatientText(c.title),
+            value: this.safePatientText(c.value),
+            subtitle: this.safePatientText(c.subtitle),
           }))
       : undefined;
     const actions = Array.isArray(candidate.actions)
       ? candidate.actions
           .filter((a): a is Record<string, unknown> => !!a && typeof a === 'object' && typeof a.label === 'string' && typeof a.action === 'string')
           .slice(0, 2)
-          .map((a) => ({ label: String(a.label), action: String(a.action) }))
+          .map((a) => ({ label: this.safePatientText(a.label) || '', action: this.safePatientText(a.action) || '' }))
+          .filter((a) => Boolean(a.label && a.action))
       : undefined;
 
     return { summary, sections, cards, actions };
+  }
+
+  /** Enforces semantic response completeness, not question-specific templates. */
+  meetsResponseRequirements(content: PatientResponseContent, requirements: string[]): boolean {
+    if (requirements.includes('GROUNDED_GUIDANCE')) {
+      const bulletCount = (content.sections || []).reduce((count, section) => count + (section.bullets?.length || 0), 0);
+      if (bulletCount < 2) return false;
+    }
+    if (requirements.includes('ALL_RECORD_ITEMS') && !(content.cards?.length || content.sections?.length)) return false;
+    if (requirements.includes('CARE_PLAN_ITEMS') && !(content.sections?.length || content.cards?.length)) return false;
+    return true;
   }
 
   private wordCount(text: string): number {
@@ -67,6 +95,12 @@ export class ConversationResponseFormatter {
     return /(?:^|\n)\s*(?:title|source|domain|content)\s*:/i.test(text)
       || /\b[\w.-]+\.(?:pdf|docx|txt|md|csv)\b/i.test(text)
       || /\[(?:knowledge source|authorized knowledge source|deterministic scheme facts)\]/i.test(text);
+  }
+
+  private safePatientText(value: unknown): string | undefined {
+    if (typeof value !== 'string') return undefined;
+    const text = value.trim();
+    return text && !this.containsInternalRetrievalMaterial(text) ? text : undefined;
   }
 
   /**
@@ -89,7 +123,6 @@ export class ConversationResponseFormatter {
       selectedAgent,
       safetyStatus,
       clinicalContext,
-      inputText = '',
     } = options;
 
     const formattedContent: Record<string, unknown> = { ...content };
@@ -102,16 +135,6 @@ export class ConversationResponseFormatter {
       'sourceDocumentId', 'embedding',
     ]) {
       delete formattedContent[internalField];
-    }
-
-    // Gemini's governed response contract always renders through `summary`.
-    // Retain the language-keyed text for API compatibility and TTS only.
-    const summary = typeof formattedContent['summary'] === 'string'
-      ? formattedContent['summary']
-      : undefined;
-    if (summary) {
-      formattedContent['summary'] = summary;
-      formattedContent[options.language || 'en'] = summary;
     }
 
     // Embed structured cards based on ClinicalContext when available
@@ -131,8 +154,15 @@ export class ConversationResponseFormatter {
             status: m.status,
           }),
         );
-        // Medication values must come from authorized ClinicalContext, not LLM cards.
-        formattedContent['cards'] = [];
+        // Medication cards are derived only from authorized ClinicalContext,
+        // never from Gemini's optional cards.
+        formattedContent['cards'] = clinicalContext.medications.slice(0, 5).map(
+          (m) => ({
+            title: m.medicationName,
+            value: m.dosage || undefined,
+            subtitle: [m.frequency, m.route].filter(Boolean).join(' · ') || undefined,
+          }),
+        );
       }
 
       if (
@@ -142,23 +172,9 @@ export class ConversationResponseFormatter {
         clinicalContext.labResults &&
         clinicalContext.labResults.length > 0
       ) {
-        const lowerInput = inputText.toLowerCase();
-        const requestedLabs = clinicalContext.labResults.filter((l) => {
-          const testName = l.testName.toLowerCase();
-          if (/hba1c|एचबीए1सी/i.test(lowerInput)) {
-            return /hba1c/i.test(testName);
-          }
-          const hasBp = /bp|blood\s*pressure|pressure|रक्तचाप|बीपी|प्रेशर/i.test(lowerInput);
-          const hasGlucose = /glucose|sugar|fasting|ग्लूकोज|ग्लूकोस|शुगर|चीनी/i.test(lowerInput);
-
-          if (hasBp && !hasGlucose) {
-            return /pressure|bp|systolic|diastolic/i.test(testName);
-          }
-          if (hasGlucose && !hasBp) {
-            return /glucose|sugar|glycated/i.test(testName);
-          }
-          return true;
-        });
+        // The semantic classifier selects the record category. This shared
+        // formatter never routes individual lab questions by keyword rules.
+        const requestedLabs = clinicalContext.labResults;
         formattedContent['lab_results'] = requestedLabs.slice(0, 3).map(
           (l) => ({
             test_name: l.testName,
@@ -166,11 +182,17 @@ export class ConversationResponseFormatter {
             unit: l.unit,
             reference_range: l.referenceRange,
             observation_date: l.observationDate,
-            interpretation: l.interpretation,
+            interpretation: l.interpretationProvenance === 'GOVERNED' ? l.interpretation : null,
           }),
         );
-        // Lab values must come from authorized ClinicalContext, not LLM cards.
-        formattedContent['cards'] = [];
+        // Lab cards are likewise derived only from authorized ClinicalContext.
+        formattedContent['cards'] = requestedLabs.slice(0, 3).map((l) => ({
+          title: l.testName,
+          value: [l.value, l.unit].filter(Boolean).join(' '),
+          subtitle: l.interpretationProvenance === 'GOVERNED'
+            ? l.interpretation || l.referenceRange || undefined
+            : l.referenceRange || undefined,
+        }));
       }
 
       if (
@@ -220,6 +242,19 @@ export class ConversationResponseFormatter {
     const allergyVal = content['allergies'];
     if (allergyVal !== undefined) {
       formattedContent['allergies'] = allergyVal;
+    }
+
+    // Generate canonical plain text after ClinicalContext cards have been
+    // attached, so TTS/history consumers receive the same authorized details
+    // that the visual patient UI renders.
+    const summary = typeof formattedContent['summary'] === 'string'
+      ? formattedContent['summary']
+      : undefined;
+    if (summary) {
+      formattedContent['summary'] = summary;
+      const structured = formattedContent as unknown as PatientResponseContent;
+      formattedContent['patient_text'] = this.patientFacingText(structured);
+      formattedContent[options.language || 'en'] = formattedContent['patient_text'];
     }
 
     // Ensure text explanation key exists in primary language and english

@@ -252,10 +252,10 @@ export class GeminiProvider implements IAiProvider {
     options?: AiClassifyOptions,
   ): Promise<AiClassifyResult> {
     const candidates = options?.candidateCategories || [];
-    const prompt = `You classify one patient message for an NCD-focused VDA. Use the current query and the privacy-sanitized recent conversation only to resolve references such as "this", "it", or "ye". Select exactly ONE supported capability from: [${candidates.join(
+    const prompt = `You classify one patient message for an NCD-focused VDA. Use the current query and privacy-sanitized recent conversation to resolve references and follow-ups semantically. Select exactly ONE supported capability from: [${candidates.join(
       ', ',
-    )}]. Do not give medical advice or generate a patient answer. If the request is ambiguous or outside those capabilities, select UNKNOWN with low confidence. For a FACILITY_QUERY, extract only constraints actually expressed or established by recent context; do not infer a service, scheme, location, or facility capability. For all other categories, requirements must be empty.
-Output JSON only in this exact format: {"category": "<SELECTED_CATEGORY>", "confidence": <NUMBER_0_TO_1>, "explanation": "<SHORT_REASON>", "requirements":{"state":null,"district":null,"facilityType":null,"scheme":null,"service":null}}.
+    )}]. Do not give medical advice or generate a patient answer. If genuinely ambiguous or outside those capabilities, select UNKNOWN with low confidence. Infer language "hi" for Hindi/Hinglish and "en" for English. Choose only the minimum patient-record categories needed from MEDICATION, PRESCRIPTION, DIAGNOSIS, LAB_REPORT, INVESTIGATION, ALLERGY, CARE_PLAN; never request every category. Set knowledgeRequired only when governed knowledge is needed beyond patient records. For FACILITY_QUERY, extract only expressed or retained constraints; never infer service/capability. responseRequirements may only contain GROUNDED_GUIDANCE, ALL_RECORD_ITEMS, VALUE_AND_UNCERTAINTY, CARE_PLAN_ITEMS, PRESCRIPTION_DOCUMENT_CONTEXT.
+Output JSON only: {"category":"<SELECTED_CATEGORY>","confidence":<NUMBER_0_TO_1>,"language":"hi|en","explanation":"<SHORT_REASON>","requirements":{"state":null,"district":null,"facilityType":null,"scheme":null,"service":null,"recordCategories":[],"knowledgeRequired":false,"responseRequirements":[]}}.
 
 Recent conversation context (may be empty):
 ${options?.conversationContext || '(none)'}
@@ -279,6 +279,7 @@ Current query: "${text}"`;
       confidence,
       explanation: (parsed['explanation'] as string) || 'Gemini classification',
       requirements: this.parseRequirements(parsed['requirements']),
+      language: parsed['language'] === 'hi' || parsed['language'] === 'en' ? parsed['language'] : undefined,
       provider: 'gemini',
     };
   }
@@ -294,6 +295,9 @@ Current query: "${text}"`;
       facilityType: facilityType === 'PUBLIC' || facilityType === 'PRIVATE' ? facilityType : undefined,
       scheme: stringValue('scheme'),
       service: stringValue('service'),
+      recordCategories: Array.isArray(raw['recordCategories']) ? raw['recordCategories'].filter((entry): entry is string => typeof entry === 'string').slice(0, 4) : undefined,
+      knowledgeRequired: typeof raw['knowledgeRequired'] === 'boolean' ? raw['knowledgeRequired'] : undefined,
+      responseRequirements: Array.isArray(raw['responseRequirements']) ? raw['responseRequirements'].filter((entry): entry is string => typeof entry === 'string').slice(0, 3) : undefined,
     };
   }
 

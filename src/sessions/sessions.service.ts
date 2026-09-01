@@ -32,7 +32,7 @@ export class SessionsService {
     const isSyntheticDevelopmentSubject =
       this.config.nodeEnv === 'development' &&
       this.config.devAuthEnabled &&
-      dto.subject_abha_ref.startsWith('synthetic:');
+      (dto.subject_abha_ref.startsWith('synthetic:') || dto.subject_abha_ref.startsWith('local-file:'));
     if (dto.subject_abha_ref !== identity.subjectAbhaRef && !isSyntheticDevelopmentSubject) {
       // Log consent failure
       await this.auditService.logEvent({

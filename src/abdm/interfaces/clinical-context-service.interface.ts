@@ -16,6 +16,7 @@
  * It must NEVER directly call IHealthRecordService or access raw FHIR data.
  */
 import { ClinicalContext } from '../models/clinical-context.models';
+import { HealthRecordCategory } from './health-record-service.interface';
 
 export interface ClinicalContextRequest {
   sessionId: string;
@@ -37,6 +38,8 @@ export interface ClinicalContextRequest {
    * For Phase 5, callers pass the intent string directly.
    */
   intent: string;
+  /** Validated semantic plan from the classifier. When omitted, legacy intent mapping is used. */
+  requiredRecordCategories?: HealthRecordCategory[];
   correlationId: string;
   /**
    * ABDM consent artefact reference — required for live ABDM integration.

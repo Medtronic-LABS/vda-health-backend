@@ -8,6 +8,8 @@ import { ConsentArtifact } from '../database/entities/consent-artifact.entity';
 import { Tenant } from '../database/entities/tenant.entity';
 import { SessionsService } from '../sessions/sessions.service';
 import { SyntheticPatientInput, SyntheticPatientService } from './synthetic-patient.service';
+import { Inject } from '@nestjs/common';
+import { PATIENT_DATA_PROVIDER, PatientDataProvider, PatientClinicalProfile } from './patient-data/patient-data-provider.interface';
 
 @Controller('dev/demo')
 @UseGuards(AuthGuard)
@@ -18,6 +20,7 @@ export class DevDemoController {
     @InjectRepository(ConsentArtifact) private readonly consents: Repository<ConsentArtifact>,
     private readonly sessions: SessionsService,
     private readonly syntheticPatients: SyntheticPatientService,
+    @Inject(PATIENT_DATA_PROVIDER) private readonly patientData: PatientDataProvider,
   ) {}
 
   private assertEnabled() {
@@ -57,6 +60,41 @@ export class DevDemoController {
   async listPatients(@Req() req: Record<string, unknown>) {
     this.assertEnabled();
     return this.syntheticPatients.list((req['user'] as HostIdentity).tenantId);
+  }
+
+  /** Minimal, non-clinical selector data for Denis's local prototype export. */
+  @Get('patient-selection')
+  async listLocalPatients(@Req() req: Record<string, unknown>) {
+    this.assertEnabled();
+    return this.patientData.getPatients((req['user'] as HostIdentity).tenantId);
+  }
+
+  @Post('patient-selection/:id/session')
+  async startLocalPatientSession(@Param('id') id: string, @Req() req: Record<string, unknown>) {
+    this.assertEnabled();
+    const identity = req['user'] as HostIdentity;
+    const patient = await this.patientData.getPatient(identity.tenantId, id);
+    if (!patient || patient.source !== 'local-file') throw new NotFoundException('LOCAL_PATIENT_NOT_FOUND');
+    let tenant = await this.tenants.findOne({ where: { id: identity.tenantId } });
+    if (!tenant) tenant = await this.tenants.save(this.tenants.create({ id: identity.tenantId, name: 'VDA Development Demo', domain: 'dev.vda.local', status: 'ACTIVE' }));
+    const consent = await this.consents.save(this.consents.create({
+      tenantId: identity.tenantId,
+      subjectId: identity.externalId,
+      consentVersion: 'local-prototype-patient-v1',
+      scopes: ['record_read', 'conversation_retention'],
+      language: patient.language || 'en',
+      deliveryMode: 'text',
+      retentionInfo: { mode: 'local-prototype-patient' },
+      status: 'ACTIVE',
+    }));
+    const session = await this.sessions.createSession({
+      external_id: identity.externalId,
+      subject_abha_ref: `local-file:${patient.id}`,
+      speaker: 'self',
+      locale_hint: patient.language || 'en',
+      consent_artefact_id: consent.id,
+    }, identity, (req['correlationId'] as string) || 'local-patient-session');
+    return { session_id: session.id, locale: patient.language || 'en', development_demo: true, patient_data_source: 'local-file' };
   }
 
   @Post('patients')
@@ -100,8 +138,8 @@ export class DevDemoController {
   }
 
   /**
-   * Demo UI context is derived from the synthetic record bound to this session.
-   * It intentionally returns no opaque patient or session identifiers beyond the
+   * UI context is derived from the provider record bound to this session. It
+   * intentionally returns no opaque patient or session identifiers beyond the
    * requested session path, and it never reads a global/default patient.
    */
   @Get('sessions/:sessionId/patient-context')
@@ -110,19 +148,21 @@ export class DevDemoController {
     const identity = req['user'] as HostIdentity;
     const session = await this.sessions.getSessionById(sessionId);
     if (!session) throw new NotFoundException('SESSION_NOT_FOUND');
-    if (session.tenantId !== identity.tenantId || !session.subjectAbhaRef.startsWith('synthetic:')) {
+    if (session.tenantId !== identity.tenantId) {
       throw new ForbiddenException('TENANT_ACCESS_DENIED');
     }
-    const patient = await this.syntheticPatients.getByReference(identity.tenantId, session.subjectAbhaRef);
-    if (!patient) throw new NotFoundException('SYNTHETIC_PATIENT_NOT_FOUND');
-    const profile = patient.clinicalProfile || {};
-    const items = (key: string) => Array.isArray(profile[key]) ? profile[key] as Array<Record<string, unknown>> : [];
+    const patient = await this.patientData.getPatientByReference(identity.tenantId, session.subjectAbhaRef);
+    if (!patient) throw new NotFoundException('PATIENT_CONTEXT_NOT_FOUND');
+    const profile = patient.clinicalProfile;
+    const items = (key: keyof PatientClinicalProfile) => profile[key];
     return {
       development_demo: true,
       patient: {
         name: patient.name,
         age: patient.age,
+        gender: patient.gender,
         language: patient.language,
+        dataSource: patient.source,
         conditions: items('diagnoses').map((item) => item.name).filter((value): value is string => typeof value === 'string'),
         medications: items('medications').map((item) => ({ name: item.name, dosage: item.dosage, frequency: item.frequency })).filter((item) => typeof item.name === 'string'),
         labs: items('labResults').map((item) => ({ name: item.name, value: item.value, unit: item.unit })).filter((item) => typeof item.name === 'string'),

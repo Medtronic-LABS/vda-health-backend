@@ -22,6 +22,7 @@ export enum HealthRecordCategory {
   LAB_REPORT = 'LAB_REPORT',
   INVESTIGATION = 'INVESTIGATION',
   ALLERGY = 'ALLERGY',
+  CARE_PLAN = 'CARE_PLAN',
   // Future categories require DECISION_REQUIRED before adding:
   // ENCOUNTER, VITALS, CLINICAL_DOCUMENT, IMMUNIZATION
 }

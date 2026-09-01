@@ -31,5 +31,11 @@ export interface IntentMetadata {
     facilityType?: 'PUBLIC' | 'PRIVATE';
     scheme?: string;
     service?: string;
+    recordCategories?: string[];
+    knowledgeRequired?: boolean;
+    responseRequirements?: string[];
   };
+  /** Validated semantic plan; never populated from a keyword rule. */
+  knowledgeRequired?: boolean;
+  responseRequirements?: string[];
 }
