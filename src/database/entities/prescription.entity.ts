@@ -7,6 +7,8 @@ export class Prescription {
   @PrimaryGeneratedColumn('uuid') id!: string;
   @Column('uuid') tenantId!: string;
   @Column() patientRef!: string;
+  /** Current VDA session that is authorized to use this uploaded document context. */
+  @Column({ type: 'uuid', nullable: true }) sessionId!: string | null;
   @Column() prescriptionId!: string;
   @Column({ type: 'timestamp', nullable: true }) prescriptionDate?: Date | null;
   @Column({ type: 'varchar', nullable: true }) prescriberName?: string | null;

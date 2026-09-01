@@ -10,7 +10,7 @@ import { IAiProvider } from '../ai/interfaces/ai-provider.interface';
 export class PrescriptionService {
   private readonly logger = new Logger(PrescriptionService.name);
   constructor(@InjectRepository(Prescription) private readonly prescriptions: Repository<Prescription>, private readonly parser: MultiFormatParserService, @Inject('IAiProvider') private readonly aiProvider: IAiProvider) {}
-  async upload(tenantId: string, patientRef: string, file: { buffer: Buffer; filename: string; mimeType?: string }) {
+  async upload(tenantId: string, patientRef: string, sessionId: string | null, file: { buffer: Buffer; filename: string; mimeType?: string }) {
     if (!patientRef.startsWith('synthetic:') && !patientRef.startsWith('local-file:')) throw new BadRequestException('PRESCRIPTION_UPLOAD_REQUIRES_DEVELOPMENT_PATIENT');
     if (!file.buffer?.length) throw new BadRequestException('INVALID_FILE');
     if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'text/plain', 'text/markdown'].includes(file.mimeType || '')) throw new BadRequestException('UNSUPPORTED_FILE');
@@ -20,10 +20,11 @@ export class PrescriptionService {
     const documentId = randomUUID();
     const medications = extracted?.medicines || this.extractMedications(parsed.content);
     const investigations = extracted?.investigations || this.extractInvestigations(parsed.content);
-    const prescription = await this.prescriptions.save(this.prescriptions.create({ tenantId, patientRef, prescriptionId: randomUUID(), sourceDocumentId: documentId, filename: file.filename, checksum: parsed.checksum, extractedText: parsed.content, medications, investigations, extractionStatus: 'REVIEW_REQUIRED' }));
+    const prescription = await this.prescriptions.save(this.prescriptions.create({ tenantId, patientRef, sessionId, prescriptionId: randomUUID(), sourceDocumentId: documentId, filename: file.filename, checksum: parsed.checksum, extractedText: parsed.content, medications, investigations, extractionStatus: 'REVIEW_REQUIRED' }));
     return prescription;
   }
   async list(tenantId: string, patientRef?: string) { return this.prescriptions.find({ where: patientRef ? { tenantId, patientRef } : { tenantId }, order: { createdAt: 'DESC' } }); }
+  async listForSession(tenantId: string, patientRef: string, sessionId: string) { return this.prescriptions.find({ where: { tenantId, patientRef, sessionId }, order: { createdAt: 'DESC' } }); }
   async approve(tenantId: string, id: string) { const record = await this.prescriptions.findOne({ where: { id, tenantId } }); if (!record) throw new NotFoundException('PRESCRIPTION_NOT_FOUND'); record.extractionStatus = 'APPROVED'; return this.prescriptions.save(record); }
   async approvedForPatient(tenantId: string, patientRef: string) { return this.prescriptions.find({ where: { tenantId, patientRef, extractionStatus: 'APPROVED' }, order: { createdAt: 'DESC' } }); }
   private extractMedications(text: string): Array<Record<string, string | null>> {

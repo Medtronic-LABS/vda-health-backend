@@ -222,6 +222,25 @@ export class ConversationResponseFormatter {
       }
     }
 
+    // Uploaded prescription facts remain document context. When a prescription
+    // response contains structured medicines, preserve every extracted item as
+    // patient cards instead of relying on Gemini's summary to repeat them.
+    if (intent === 'PRESCRIPTION_QUERY') {
+      const prescription = content['prescription'];
+      const medicines = prescription && typeof prescription === 'object'
+        ? (prescription as Record<string, unknown>)['medications']
+        : undefined;
+      if (Array.isArray(medicines)) {
+        formattedContent['cards'] = medicines.slice(0, 12)
+          .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+          .map((item) => ({
+            title: typeof item['medicationName'] === 'string' ? item['medicationName'] : typeof item['name'] === 'string' ? item['name'] : undefined,
+            value: typeof item['dosage'] === 'string' ? item['dosage'] : typeof item['strength'] === 'string' ? item['strength'] : undefined,
+            subtitle: typeof item['frequency'] === 'string' ? item['frequency'] : typeof item['instructions'] === 'string' ? item['instructions'] : undefined,
+          }));
+      }
+    }
+
     // Preserve existing card structures if already present in content
     const medVal = content['medications'];
     if (medVal !== undefined) {

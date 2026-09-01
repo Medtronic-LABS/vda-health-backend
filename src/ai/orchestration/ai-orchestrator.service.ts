@@ -25,7 +25,6 @@ import { Facility, } from '../../database/entities/facility.entity';
 import { FacilitySearchService } from '../../facilities/facility-search.service';
 import { Scheme } from '../../database/entities/scheme.entity';
 import { SchemeService } from '../../schemes/scheme.service';
-import { MedicationService } from '../../medications/medication.service';
 import { Session } from '../../database/entities/session.entity';
 import { Prescription } from '../../database/entities/prescription.entity';
 import { ConversationTurn } from '../../database/entities/conversation-turn.entity';
@@ -58,7 +57,6 @@ export class AiOrchestratorService implements IAiOrchestrator {
     private readonly knowledgeQueryNormalizer?: KnowledgeQueryNormalizerService,
     @Optional() private readonly facilitySearch?: FacilitySearchService,
     @Optional() private readonly schemeService?: SchemeService,
-    @Optional() private readonly medicationService?: MedicationService,
     @Optional() @InjectRepository(Session) private readonly sessions?: Repository<Session>,
     @Optional() @InjectRepository(Prescription) private readonly prescriptions?: Repository<Prescription>,
     @Optional() @Inject(PATIENT_DATA_PROVIDER) private readonly patientData?: PatientDataProvider,
@@ -159,6 +157,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
           where: {
             tenantId: identity.tenantId,
             patientRef: patientRef,
+            sessionId,
           },
           order: { createdAt: 'DESC' },
         });
@@ -277,14 +276,6 @@ export class AiOrchestratorService implements IAiOrchestrator {
       classificationHistory,
     );
 
-    // Explicit adherence confirmation and medication references are application
-    // state transitions. They never depend on Gemini or raw-history inference.
-    const medicationConversation = this.medicationService
-      ? await this.medicationService.handleConversation(sessionId, identity.tenantId, resolvedInputText, intentMeta.language)
-      : null;
-    if (medicationConversation) {
-      return { responseType: 'text', content: { summary: medicationConversation.summary, [intentMeta.language]: medicationConversation.summary, medication_id: medicationConversation.medicationId, ...(medicationConversation.adherenceEvent ? { adherence_event: { id: medicationConversation.adherenceEvent.id, status: medicationConversation.adherenceEvent.status, schedule_date: medicationConversation.adherenceEvent.scheduledDate, schedule_slot: medicationConversation.adherenceEvent.scheduleSlot } } : {}) }, intent: medicationConversation.intent, selectedAgent: 'medication-agent', safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
-    }
 
     // Deterministic prescription confirmation/rejection interceptor
     if (latestPrescription && latestPrescription.extractionStatus === 'REVIEW_REQUIRED') {
