@@ -14,6 +14,8 @@ import { KnowledgeEmbedding } from './entities/knowledge-embedding.entity';
 import { SyntheticPatient } from './entities/synthetic-patient.entity';
 import { SyntheticPatientFeedback } from './entities/synthetic-feedback.entity';
 import { Facility } from './entities/facility.entity';
+import { FacilityIphsOverlay } from './entities/facility-iphs-overlay.entity';
+import { FacilityDemoCapability } from './entities/facility-demo-capability.entity';
 import { FacilityScheme } from './entities/facility-scheme.entity';
 import { Scheme } from './entities/scheme.entity';
 import { Prescription } from './entities/prescription.entity';
@@ -49,6 +51,8 @@ export class DatabaseConfigService implements TypeOrmOptionsFactory {
         SyntheticPatient,
         SyntheticPatientFeedback,
         Facility,
+        FacilityIphsOverlay,
+        FacilityDemoCapability,
         FacilityScheme,
         Scheme,
         Prescription,

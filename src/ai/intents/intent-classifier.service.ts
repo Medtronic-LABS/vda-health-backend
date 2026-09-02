@@ -63,6 +63,27 @@ export class IntentClassifierService implements IIntentClassifier {
         responseRequirements = aiResult.requirements?.responseRequirements;
         schemeInformationType = aiResult.requirements?.schemeInformationType as SchemeInformationType | undefined;
       }
+
+      if (aiCategory === IntentType.FACILITY_QUERY || aiCategory === IntentType.REFERRAL_QUERY) {
+        if (!requirements) requirements = {};
+        if (!requirements.service) {
+          const lower = text.toLowerCase();
+          if (/x-?ray|x\s*ray|radiology/i.test(lower)) requirements.service = 'X-ray';
+          else if (/ultrasound|usg|sonography/i.test(lower)) requirements.service = 'Ultrasound';
+          else if (/hba1c|glycosylated/i.test(lower)) requirements.service = 'HbA1c';
+          else if (/cbc|complete blood count/i.test(lower)) requirements.service = 'CBC';
+          else if (/blood glucose|blood sugar|sugar test/i.test(lower)) requirements.service = 'Blood glucose';
+          else if (/blood test|blood/i.test(lower)) requirements.service = 'Blood test';
+        }
+        if (
+          !requirements.costPreference &&
+          /\b(?:low\s*cost|affordable|free|cheap|less\s*(?:money|cost|expense)|kam\s*(?:paise|paiso|kharch)|sasta)\b|कम\s*(?:पैसे|पैसो|खर्च)|सस्ता|कम\s*खर्च/i.test(
+            text,
+          )
+        ) {
+          requirements.costPreference = 'LOW_COST';
+        }
+      }
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
       this.logger.warn(

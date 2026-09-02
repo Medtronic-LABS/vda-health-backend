@@ -31,14 +31,27 @@ export class GeminiProvider implements IAiProvider {
     for (let attempt = 0; attempt < candidates.length; attempt++) {
       const candidate = candidates[attempt];
       try {
-        return await this.generateForKey(prompt, options, candidate.key, candidate.slot, attempt + 1);
+        return await this.generateForKey(
+          prompt,
+          options,
+          candidate.key,
+          candidate.slot,
+          attempt + 1,
+        );
       } catch (err: unknown) {
         finalError = err instanceof Error ? err : new Error(String(err));
         const status = this.statusFromError(finalError);
-        const retryable = status !== undefined && [401, 403, 408, 429, 500, 502, 503, 504].includes(status);
+        const retryable =
+          status !== undefined &&
+          [401, 403, 408, 429, 500, 502, 503, 504].includes(status);
         if (!retryable) throw finalError;
-        this.unavailableUntil.set(candidate.slot, Date.now() + this.config.geminiKeyCooldownSeconds * 1000);
-        this.logger.warn(`[GeminiTelemetry] provider=gemini keySlot=${candidate.slot} status=${status} failover=${attempt < candidates.length - 1} attempt=${attempt + 1}`);
+        this.unavailableUntil.set(
+          candidate.slot,
+          Date.now() + this.config.geminiKeyCooldownSeconds * 1000,
+        );
+        this.logger.warn(
+          `[GeminiTelemetry] provider=gemini keySlot=${candidate.slot} status=${status} failover=${attempt < candidates.length - 1} attempt=${attempt + 1}`,
+        );
       }
     }
     throw finalError || new Error('GEMINI_PROVIDER_UNAVAILABLE');
@@ -62,9 +75,10 @@ export class GeminiProvider implements IAiProvider {
     const emitDiagnostics = Boolean(
       telemetryLabel && this.config.nodeEnv === 'development',
     );
-    const inlineMimeTypes = (options?.inlineData || [])
-      .map((attachment) => attachment.mimeType)
-      .join(',') || 'none';
+    const inlineMimeTypes =
+      (options?.inlineData || [])
+        .map((attachment) => attachment.mimeType)
+        .join(',') || 'none';
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
@@ -91,9 +105,16 @@ export class GeminiProvider implements IAiProvider {
         : {}),
       generationConfig: {
         temperature: options?.temperature ?? 0.2,
-        maxOutputTokens: Number(options?.maxTokens || this.config.aiMaxOutputLength),
+        maxOutputTokens: Number(
+          options?.maxTokens || this.config.aiMaxOutputLength,
+        ),
         ...(options?.responseFormat === 'json'
-          ? { responseMimeType: 'application/json', ...(options.jsonSchema ? { responseSchema: options.jsonSchema } : {}) }
+          ? {
+              responseMimeType: 'application/json',
+              ...(options.jsonSchema
+                ? { responseSchema: options.jsonSchema }
+                : {}),
+            }
           : {}),
         ...(options?.thinkingLevel
           ? { thinkingConfig: { thinkingLevel: options.thinkingLevel } }
@@ -121,9 +142,16 @@ export class GeminiProvider implements IAiProvider {
         clearTimeout(timer);
 
         if (!res.ok) {
-          const failure = (await res.json().catch(() => ({}))) as Record<string, any>;
-          const providerError = failure['error'] as Record<string, unknown> | undefined;
-          const providerCategory = this.classifyHttpStatus(res.status, providerError?.['status']);
+          const failure = (await res.json().catch(() => ({}))) as Record<
+            string,
+            any
+          >;
+          const providerError = failure['error'] as
+            Record<string, unknown> | undefined;
+          const providerCategory = this.classifyHttpStatus(
+            res.status,
+            providerError?.['status'],
+          );
           const providerMessage =
             typeof providerError?.['message'] === 'string'
               ? providerError['message'].replace(/[\r\n]+/g, ' ').slice(0, 240)
@@ -133,7 +161,9 @@ export class GeminiProvider implements IAiProvider {
               `[${telemetryLabel}] model=${model} mime=${inlineMimeTypes} response_format=${options?.responseFormat || 'text'} response_schema=${Boolean(options?.jsonSchema)} request=completed provider_status=${res.status} provider_category=${providerCategory} provider_message=${providerMessage} elapsed_ms=${Date.now() - requestStartedAt}`,
             );
           }
-          throw new Error(`Gemini API returned status ${res.status} (${providerCategory})`);
+          throw new Error(
+            `Gemini API returned status ${res.status} (${providerCategory})`,
+          );
         }
 
         const data = (await res.json()) as Record<string, unknown>;
@@ -149,13 +179,17 @@ export class GeminiProvider implements IAiProvider {
               Record<string, unknown>
             >) || [];
           const candidateText = parts
-            .filter((part) => part['thought'] !== true && typeof part['text'] === 'string')
+            .filter(
+              (part) =>
+                part['thought'] !== true && typeof part['text'] === 'string',
+            )
             .map((part) => part['text'] as string)
             .join('\n');
           if (candidateText) {
             textContent = candidateText;
             finishReason =
-              (typeof candidate['finishReason'] === 'string' && candidate['finishReason']) ||
+              (typeof candidate['finishReason'] === 'string' &&
+                candidate['finishReason']) ||
               'UNKNOWN';
             break;
           }
@@ -202,7 +236,9 @@ export class GeminiProvider implements IAiProvider {
         this.logger.warn(
           `[GeminiTelemetry] provider=gemini keySlot=${keySlot} status=failed category=${this.classifyHttpStatus(status)} response_format=${options?.responseFormat || 'text'} response_schema=${Boolean(options?.jsonSchema)} attempt=${attempt}/${maxRetries} duration_ms=${Date.now() - requestStartedAt} prompt_chars=${prompt.length} system_chars=${options?.systemPrompt?.length || 0} error=${lastError.message}`,
         );
-        const retryable = status === undefined || [408, 429, 500, 502, 503, 504].includes(status);
+        const retryable =
+          status === undefined ||
+          [408, 429, 500, 502, 503, 504].includes(status);
         if (attempt < maxRetries && retryable) {
           await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 200));
         } else if (!retryable) {
@@ -219,22 +255,34 @@ export class GeminiProvider implements IAiProvider {
     return match ? Number(match[1]) : undefined;
   }
 
-  private classifyHttpStatus(status?: number, providerStatus?: unknown): string {
+  private classifyHttpStatus(
+    status?: number,
+    providerStatus?: unknown,
+  ): string {
     if (status === 400) return 'INVALID_ARGUMENT';
     if (status === 401) return 'AUTHENTICATION';
     if (status === 403) return 'AUTHORIZATION';
     if (status === 429) return 'RATE_LIMITED';
     if (status !== undefined && status >= 500) return 'PROVIDER_ERROR';
-    return typeof providerStatus === 'string' ? providerStatus : status === undefined ? 'TRANSPORT_ERROR' : `HTTP_${status}`;
+    return typeof providerStatus === 'string'
+      ? providerStatus
+      : status === undefined
+        ? 'TRANSPORT_ERROR'
+        : `HTTP_${status}`;
   }
 
   /** Transport-only normalization. It never converts prose into a response. */
   private parseStructuredJson(text: string): Record<string, any> | undefined {
-    const trimmed = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    const trimmed = text
+      .trim()
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
     const candidates = [trimmed];
     const start = trimmed.indexOf('{');
     const end = trimmed.lastIndexOf('}');
-    if (start >= 0 && end > start) candidates.push(trimmed.slice(start, end + 1));
+    if (start >= 0 && end > start)
+      candidates.push(trimmed.slice(start, end + 1));
     for (const candidate of candidates) {
       try {
         const parsed = JSON.parse(candidate) as unknown;
@@ -255,8 +303,8 @@ export class GeminiProvider implements IAiProvider {
     const candidates = options?.candidateCategories || [];
     const prompt = `You classify one patient message for an NCD-focused VDA. Use the current query and privacy-sanitized recent conversation to resolve references and follow-ups semantically. Select exactly ONE supported capability from: [${candidates.join(
       ', ',
-    )}]. Do not give medical advice or generate a patient answer. If genuinely ambiguous or outside those capabilities, select UNKNOWN with low confidence. Infer language "hi" for Hindi/Hinglish and "en" for English. Choose only the minimum patient-record categories needed from MEDICATION, PRESCRIPTION, DIAGNOSIS, LAB_REPORT, INVESTIGATION, ALLERGY, CARE_PLAN; never request every category. Set knowledgeRequired only when governed knowledge is needed beyond patient records. For FACILITY_QUERY, extract only expressed or retained constraints; never infer service/capability. For GOVERNMENT_SCHEME_QUERY, classify the requested information semantically as exactly one of SCHEME_OVERVIEW, SCHEME_AVAILABILITY, SCHEME_ELIGIBILITY, SCHEME_DOCUMENTS, SCHEME_APPLICATION, SCHEME_BENEFITS, SCHEME_FACILITY, SCHEME_COMPARISON, or SCHEME_UNKNOWN. Resolve references such as "iske" from the retained conversation; do not infer a scheme name that was not stated or retained. responseRequirements may only contain GROUNDED_GUIDANCE, ALL_RECORD_ITEMS, VALUE_AND_UNCERTAINTY, CARE_PLAN_ITEMS, PRESCRIPTION_DOCUMENT_CONTEXT.
-Output JSON only: {"category":"<SELECTED_CATEGORY>","confidence":<NUMBER_0_TO_1>,"language":"hi|en","explanation":"<SHORT_REASON>","requirements":{"state":null,"district":null,"facilityType":null,"scheme":null,"service":null,"recordCategories":[],"knowledgeRequired":false,"responseRequirements":[],"schemeInformationType":null}}.
+    )}]. Do not give medical advice or generate a patient answer. If genuinely ambiguous or outside those capabilities, select UNKNOWN with low confidence. Infer language "hi" for Hindi/Hinglish and "en" for English. Choose only the minimum patient-record categories needed from MEDICATION, PRESCRIPTION, DIAGNOSIS, LAB_REPORT, INVESTIGATION, ALLERGY, CARE_PLAN; never request every category. Set knowledgeRequired only when governed knowledge is needed beyond patient records. For FACILITY_QUERY and REFERRAL_QUERY, extract only expressed or retained constraints. When the patient explicitly asks where to obtain a diagnostic, treatment, or other health service, put the concise requested service in requirements.service and at most five unambiguous names, spellings, or acronyms for that same service in requirements.serviceAliases. Do not add broader departments, related tests, or capabilities the patient did not request. Set costPreference to LOW_COST only when the patient explicitly requests an affordable, low-cost, free, or low-expense option, including Hindi/Hinglish equivalents. This is an access preference, not proof that a service is free or covered. Normalize an explicitly requested facility level to HWC_SHC, HWC_PHC, CHC, SDH, or DH. Normalize an explicitly requested referral tier to PRIMARY, SECONDARY, or DISTRICT. For GOVERNMENT_SCHEME_QUERY, classify the requested information semantically as exactly one of SCHEME_OVERVIEW, SCHEME_AVAILABILITY, SCHEME_ELIGIBILITY, SCHEME_DOCUMENTS, SCHEME_APPLICATION, SCHEME_BENEFITS, SCHEME_FACILITY, SCHEME_COMPARISON, or SCHEME_UNKNOWN. Resolve references such as "iske" from the retained conversation; do not infer a scheme name that was not stated or retained. responseRequirements may only contain GROUNDED_GUIDANCE, ALL_RECORD_ITEMS, VALUE_AND_UNCERTAINTY, CARE_PLAN_ITEMS, PRESCRIPTION_DOCUMENT_CONTEXT.
+Output JSON only: {"category":"<SELECTED_CATEGORY>","confidence":<NUMBER_0_TO_1>,"language":"hi|en","explanation":"<SHORT_REASON>","requirements":{"state":null,"district":null,"facilityType":null,"costPreference":null,"iphsLevel":null,"referralLevel":null,"scheme":null,"service":null,"serviceAliases":[],"recordCategories":[],"knowledgeRequired":false,"responseRequirements":[],"schemeInformationType":null}}.
 
 Recent conversation context (may be empty):
 ${options?.conversationContext || '(none)'}
@@ -280,32 +328,85 @@ Current query: "${text}"`;
       confidence,
       explanation: (parsed['explanation'] as string) || 'Gemini classification',
       requirements: this.parseRequirements(parsed['requirements']),
-      language: parsed['language'] === 'hi' || parsed['language'] === 'en' ? parsed['language'] : undefined,
+      language:
+        parsed['language'] === 'hi' || parsed['language'] === 'en'
+          ? parsed['language']
+          : undefined,
       provider: 'gemini',
     };
   }
 
   private parseRequirements(value: unknown): AiClassifyResult['requirements'] {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      return undefined;
     const raw = value as Record<string, unknown>;
-    const stringValue = (key: string) => typeof raw[key] === 'string' && raw[key].trim() ? raw[key].trim().slice(0, 120) : undefined;
+    const stringValue = (key: string) =>
+      typeof raw[key] === 'string' && raw[key].trim()
+        ? raw[key].trim().slice(0, 120)
+        : undefined;
     const facilityType = stringValue('facilityType')?.toUpperCase();
+    const costPreference = stringValue('costPreference')?.toUpperCase();
+    const iphsLevel = stringValue('iphsLevel')?.toUpperCase();
+    const referralLevel = stringValue('referralLevel')?.toUpperCase();
     const schemeInformationType = stringValue('schemeInformationType');
     return {
       state: stringValue('state'),
       district: stringValue('district'),
-      facilityType: facilityType === 'PUBLIC' || facilityType === 'PRIVATE' ? facilityType : undefined,
+      facilityType:
+        facilityType === 'PUBLIC' || facilityType === 'PRIVATE'
+          ? facilityType
+          : undefined,
+      costPreference:
+        costPreference === 'LOW_COST' ? costPreference : undefined,
+      iphsLevel: ['HWC_SHC', 'HWC_PHC', 'CHC', 'SDH', 'DH'].includes(
+        iphsLevel || '',
+      )
+        ? (iphsLevel as NonNullable<
+            AiClassifyResult['requirements']
+          >['iphsLevel'])
+        : undefined,
+      referralLevel: ['PRIMARY', 'SECONDARY', 'DISTRICT'].includes(
+        referralLevel || '',
+      )
+        ? (referralLevel as NonNullable<
+            AiClassifyResult['requirements']
+          >['referralLevel'])
+        : undefined,
       scheme: stringValue('scheme'),
       service: stringValue('service'),
-      recordCategories: Array.isArray(raw['recordCategories']) ? raw['recordCategories'].filter((entry): entry is string => typeof entry === 'string').slice(0, 4) : undefined,
-      knowledgeRequired: typeof raw['knowledgeRequired'] === 'boolean' ? raw['knowledgeRequired'] : undefined,
-      responseRequirements: Array.isArray(raw['responseRequirements']) ? raw['responseRequirements'].filter((entry): entry is string => typeof entry === 'string').slice(0, 3) : undefined,
+      serviceAliases: Array.isArray(raw['serviceAliases'])
+        ? raw['serviceAliases']
+            .filter((entry): entry is string => typeof entry === 'string')
+            .map((entry) => entry.trim().slice(0, 120))
+            .filter(Boolean)
+            .slice(0, 5)
+        : undefined,
+      recordCategories: Array.isArray(raw['recordCategories'])
+        ? raw['recordCategories']
+            .filter((entry): entry is string => typeof entry === 'string')
+            .slice(0, 4)
+        : undefined,
+      knowledgeRequired:
+        typeof raw['knowledgeRequired'] === 'boolean'
+          ? raw['knowledgeRequired']
+          : undefined,
+      responseRequirements: Array.isArray(raw['responseRequirements'])
+        ? raw['responseRequirements']
+            .filter((entry): entry is string => typeof entry === 'string')
+            .slice(0, 3)
+        : undefined,
       schemeInformationType: [
-        'SCHEME_OVERVIEW', 'SCHEME_AVAILABILITY', 'SCHEME_ELIGIBILITY',
-        'SCHEME_DOCUMENTS', 'SCHEME_APPLICATION', 'SCHEME_BENEFITS',
-        'SCHEME_FACILITY', 'SCHEME_COMPARISON', 'SCHEME_UNKNOWN',
+        'SCHEME_OVERVIEW',
+        'SCHEME_AVAILABILITY',
+        'SCHEME_ELIGIBILITY',
+        'SCHEME_DOCUMENTS',
+        'SCHEME_APPLICATION',
+        'SCHEME_BENEFITS',
+        'SCHEME_FACILITY',
+        'SCHEME_COMPARISON',
+        'SCHEME_UNKNOWN',
       ].includes(schemeInformationType || '')
-        ? schemeInformationType as SchemeInformationType
+        ? (schemeInformationType as SchemeInformationType)
         : undefined,
     };
   }

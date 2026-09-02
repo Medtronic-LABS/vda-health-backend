@@ -8,7 +8,11 @@ export class AgentKnowledgeMapper {
   private static readonly MAPPINGS: Record<string, AgentDomainMapping> = {
     'adherence-agent': {
       agentName: 'adherence-agent',
-      allowedDomains: ['medication_education', 'preventive_health', 'public_health'],
+      allowedDomains: [
+        'medication_education',
+        'preventive_health',
+        'public_health',
+      ],
       defaultDomain: 'preventive_health',
     },
     'medication-agent': {
@@ -28,7 +32,12 @@ export class AgentKnowledgeMapper {
     },
     'general-health-agent': {
       agentName: 'general-health-agent',
-      allowedDomains: ['clinical_guidelines', 'preventive_health', 'lifestyle', 'public_health'],
+      allowedDomains: [
+        'clinical_guidelines',
+        'preventive_health',
+        'lifestyle',
+        'public_health',
+      ],
       defaultDomain: 'clinical_guidelines',
     },
     'scheme-agent': {
@@ -41,20 +50,34 @@ export class AgentKnowledgeMapper {
       allowedDomains: [
         'healthcare_facilities',
         'clinics',
+        'HWC_SHC',
+        'HWC_PHC',
         'PHC',
         'CHC',
+        'SDH',
+        'DH',
         'hospitals',
       ],
       defaultDomain: 'healthcare_facilities',
     },
     'referral-agent': {
       agentName: 'referral-agent',
-      allowedDomains: ['referral_protocols', 'healthcare_facilities'],
+      allowedDomains: [
+        'referral_protocols',
+        'healthcare_facilities',
+        'CHC',
+        'SDH',
+        'DH',
+      ],
       defaultDomain: 'referral_protocols',
     },
     'teleconsultation-agent': {
       agentName: 'teleconsultation-agent',
-      allowedDomains: ['telemedicine', 'teleconsultation', 'referral_protocols'],
+      allowedDomains: [
+        'telemedicine',
+        'teleconsultation',
+        'referral_protocols',
+      ],
       defaultDomain: 'telemedicine',
     },
   };

@@ -1,0 +1,1341 @@
+{
+  "schemaVersion": "1.0.0",
+  "dataset": {
+    "id": "haryana-faridabad-pmjay-facilities",
+    "name": "Faridabad PM-JAY Facility Directory",
+    "purpose": "Read-only VDA pilot facility directory for facility discovery and facility-related questions.",
+    "source": "NHA PM-JAY HEM listing supplied by user",
+    "scope": {
+      "government": 23,
+      "private": 18,
+      "uniqueFacilities": 41
+    },
+    "rules": [
+      "Use facility identity, ownership, address, contact, PM-JAY scheme and supplied speciality labels from this dataset.",
+      "Do not claim a specific test or procedure is available unless an explicit verified source capability mapping exists.",
+      "Do not translate speciality abbreviations into diagnostic tests without an authoritative code mapping.",
+      "IPHS level is inferred only from explicit facility naming such as PHC, CHC, SDH or UHC; UNKNOWN means no safe classification from the supplied listing.",
+      "Missing location coordinates remain null; never invent distance or travel time.",
+      "For service-specific questions, combine this directory with the separate VDA pilot capability mapping.",
+      "This dataset is not a real-time availability feed."
+    ]
+  },
+  "specialityAbbreviationNote": "The NHA UI supplied labels such as ER, MG, SE, etc. They are preserved exactly as supplied. Their clinical meaning should be resolved only through an authoritative NHA mapping before being used as a service claim.",
+  "facilities": [
+    {
+      "facilityId": "HOSP6G25141742",
+      "name": "UHC Mewla Maharajpur",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "Urban Health Center, Sector 45, fbd,",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9999982534",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "14-11-2025",
+      "scheme": "PMJAY",
+      "iphsLevel": "HWC_SHC",
+      "specialities": [
+        "MC",
+        "ER",
+        "MG",
+        "SG",
+        "MN",
+        "SO",
+        "SE",
+        "SM",
+        "SB",
+        "SL",
+        "MP",
+        "SU"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G25194950",
+      "name": "UHC SGM Nagar",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "Near Police Chowki,Sector - 21 D",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9899995486",
+      "dateOfEstablishment": "03-09-2013",
+      "empanelmentDate": "17-07-2025",
+      "scheme": "PMJAY",
+      "iphsLevel": "HWC_SHC",
+      "specialities": [
+        "ER",
+        "MG",
+        "MN",
+        "SO",
+        "SE",
+        "SL"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G25232658",
+      "name": "uphcdabua",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "halwai chowk near lezer velly park dabua colony",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9999094158",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "07-11-2025",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "ER",
+        "MG",
+        "MN",
+        "SO"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G02631",
+      "name": "B K Civil Hospital",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "B.k Chowk,",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9899692259",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "14-08-2018",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "BM",
+        "MC",
+        "SV",
+        "ER",
+        "MG",
+        "SG",
+        "IN",
+        "MO",
+        "MM",
+        "MN",
+        "SN",
+        "SO",
+        "SE",
+        "SM",
+        "SB",
+        "SL",
+        "MP",
+        "SS",
+        "SP",
+        "ST",
+        "MR",
+        "SC",
+        "SU",
+        "ID",
+        "OT"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G02634",
+      "name": "SUB DIVISINAL HOSPITAL BALLABGARH",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "sdh ballabagrh,Near Dashera Ground",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "8168109296",
+      "dateOfEstablishment": "01-07-1965",
+      "empanelmentDate": "10-09-2018",
+      "scheme": "PMJAY",
+      "iphsLevel": "SDH",
+      "specialities": [
+        "ER",
+        "MG",
+        "SG",
+        "SO",
+        "SE",
+        "SB",
+        "SL",
+        "MP",
+        "SS",
+        "ID"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G03413",
+      "name": "FRU1",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "fru-1, sec-30,",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9810931369",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "03-12-2018",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "ER",
+        "MG",
+        "SO",
+        "SM",
+        "ID"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G03414",
+      "name": "CHC KHERI KALAN",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "VPO. KHERI KALAN ,",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "8814094202",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "25-01-2019",
+      "scheme": "PMJAY",
+      "iphsLevel": "CHC",
+      "specialities": [
+        "ER",
+        "MG",
+        "ID"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G03438",
+      "name": "FRU2",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "FRU-2,SEC-3,FARIDABAD,",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9711447527",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "03-12-2018",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "MG",
+        "MN",
+        "SO",
+        "SM",
+        "MP",
+        "ID"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G03756",
+      "name": "ESI HOSPITAL SECTOR 8 FARIDABAD",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "ESI HOSPITAL SECTOR 8 FARIDABAD",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "8168109296",
+      "dateOfEstablishment": "01-01-1993",
+      "empanelmentDate": "14-08-2018",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "ER",
+        "MG",
+        "SG",
+        "SO",
+        "SE",
+        "SB",
+        "MP",
+        "ID"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G178176",
+      "name": "PHC FATEHPUR TAGGA FARIDABAD",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "Village Fatehpur Taga,village fatehpur taga",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "8510885927",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "31-10-2023",
+      "scheme": "PMJAY",
+      "iphsLevel": "HWC_PHC",
+      "specialities": [
+        "MG"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G178181",
+      "name": "PHC Seekri",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "Village Seekri",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9991655919",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "30-10-2023",
+      "scheme": "PMJAY",
+      "iphsLevel": "HWC_PHC",
+      "specialities": [
+        "ER",
+        "MG"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G178194",
+      "name": "P.H.C, Mohna",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "Faridabad, Ballagarh, Mohna,village mohna",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9953235956",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "19-10-2023",
+      "scheme": "PMJAY",
+      "iphsLevel": "HWC_PHC",
+      "specialities": [
+        "ER",
+        "MG",
+        "SO",
+        "SM"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G178316",
+      "name": "PHCDHOUJ",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "VILLAGE DHOUJ,DHOUJ",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "8168109296",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "19-10-2023",
+      "scheme": "PMJAY",
+      "iphsLevel": "HWC_PHC",
+      "specialities": [
+        "ER",
+        "MG"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G178352",
+      "name": "PHC Dayalpur",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "Dayalpur Village, Near Tehsil Dayalpur",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9717579134",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "31-10-2023",
+      "scheme": "PMJAY",
+      "iphsLevel": "HWC_PHC",
+      "specialities": [
+        "ER",
+        "MG"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G178354",
+      "name": "P.H.C, Chhainsa, Ballabgarh",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "Faridabad, Ballabgarh, Chhainsa,",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "8606499214",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "31-10-2023",
+      "scheme": "PMJAY",
+      "iphsLevel": "HWC_PHC",
+      "specialities": [
+        "ER",
+        "MG"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G178496",
+      "name": "PHC FATEHPUR BILLOCH",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "VPO FATEHPUR BILLOCH",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9582396960",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "31-10-2023",
+      "scheme": "PMJAY",
+      "iphsLevel": "HWC_PHC",
+      "specialities": [
+        "ER",
+        "MG"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G178500",
+      "name": "Primary Health Centre,Anagpur",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "Vill. Anangpur, Faridabad,Village Anangpur",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "8168109296",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "30-10-2023",
+      "scheme": "PMJAY",
+      "iphsLevel": "HWC_PHC",
+      "specialities": [
+        "ER",
+        "MG"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G178540",
+      "name": "P.H.C, Panehra Khurd",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "Faridabad, Ballabgarh, Panehra Khurd,",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "8860608899",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "30-10-2023",
+      "scheme": "PMJAY",
+      "iphsLevel": "HWC_PHC",
+      "specialities": [
+        "ER",
+        "MG",
+        "SG",
+        "MM",
+        "MN",
+        "SO",
+        "SE",
+        "SM",
+        "SB",
+        "SL"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G178577",
+      "name": "Community Health Centre Pali",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "Village - Pali ,",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "7015531843",
+      "dateOfEstablishment": "01-01-1993",
+      "empanelmentDate": "30-10-2023",
+      "scheme": "PMJAY",
+      "iphsLevel": "CHC",
+      "specialities": [
+        "ER",
+        "MG"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G178989",
+      "name": "Community Health Center, Kurali",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "Vill Kurali Teh Ballabgarh Distt Faridabad,",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9953515333",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "31-10-2023",
+      "scheme": "PMJAY",
+      "iphsLevel": "CHC",
+      "specialities": [
+        "ER",
+        "MG"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G179009",
+      "name": "chc tigaon",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "village tigaon chc tigaon,",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "8130106018",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "31-10-2023",
+      "scheme": "PMJAY",
+      "iphsLevel": "CHC",
+      "specialities": [
+        "ER",
+        "MG",
+        "MN",
+        "SO",
+        "SB"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G179133",
+      "name": "Primary Health Centre,Palla",
+      "facilityType": "Hospital",
+      "ownership": "GOVERNMENT",
+      "address": "palla,faridabad,palla",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9717238949",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "31-10-2023",
+      "scheme": "PMJAY",
+      "iphsLevel": "HWC_PHC",
+      "specialities": [
+        "ER",
+        "MG"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6G26143775",
+      "name": "Polyclinic Sector 55",
+      "facilityType": "Unknown",
+      "ownership": "GOVERNMENT",
+      "address": "Polyclinic Sector 55 Near Gauchi Tehsil,",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9999381102",
+      "dateOfEstablishment": null,
+      "empanelmentDate": "19-02-2026",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "ER",
+        "MG",
+        "SG",
+        "MN"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6P25128318",
+      "name": "DR Suraj Prakash Arogya Kendra",
+      "facilityType": "Hospital",
+      "ownership": "PRIVATE",
+      "address": "Site No-2 Sector-8 ,",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9811065081",
+      "dateOfEstablishment": "23-01-2025",
+      "empanelmentDate": "26-11-2025",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "MG",
+        "SG",
+        "MO",
+        "SO",
+        "SE",
+        "SB",
+        "SL",
+        "SU"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6P25139220",
+      "name": "gandhi eye centre",
+      "facilityType": "Daycare Centre",
+      "ownership": "PRIVATE",
+      "address": "sco 118,sector-10",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9818219196",
+      "dateOfEstablishment": "28-07-2023",
+      "empanelmentDate": "08-09-2025",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "SE"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6P01772",
+      "name": "Arsh Hospital",
+      "facilityType": "Hospital",
+      "ownership": "PRIVATE",
+      "address": "opp era redwood residency, tigaon road sector 78 faridabad",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9311545199",
+      "dateOfEstablishment": "12-10-2012",
+      "empanelmentDate": "21-11-2023",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "MG",
+        "SG"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6P02045",
+      "name": "Goyal Hospital",
+      "facilityType": "Hospital",
+      "ownership": "PRIVATE",
+      "address": "sITE nO 2,OPPOSITE HANUMAN MANDIR SECTOR-8",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9416068690",
+      "dateOfEstablishment": "01-06-2017",
+      "empanelmentDate": "22-10-2018",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "BM",
+        "MG",
+        "SG",
+        "SO"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6P03397",
+      "name": "Santosh Multispeciality Hospital",
+      "facilityType": "Hospital",
+      "ownership": "PRIVATE",
+      "address": "3F/139, N.I.T.,3f-139",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9711248940",
+      "dateOfEstablishment": "17-04-2012",
+      "empanelmentDate": "17-03-2021",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "MG",
+        "SG",
+        "MO",
+        "SO"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6P03654",
+      "name": "Apurva Nursing Home",
+      "facilityType": "Hospital",
+      "ownership": "PRIVATE",
+      "address": "2N/74, B.P. NIT",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9810057675",
+      "dateOfEstablishment": "01-10-2018",
+      "empanelmentDate": "17-09-2018",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "BM",
+        "MG",
+        "SG",
+        "SO"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6P03717",
+      "name": "AL FALAH SCHOOL OF MEDICAL SCIENCES AND RESEARCH CENTER",
+      "facilityType": "Hospital",
+      "ownership": "PRIVATE",
+      "address": "AL FALAH UNIVERSITY CAMPUS ,FATEHPUR TAGA ROAD",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9968261616",
+      "dateOfEstablishment": "15-03-2014",
+      "empanelmentDate": "03-12-2018",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "BM",
+        "MG",
+        "SG",
+        "MN"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6P04071",
+      "name": "Centre for Sight",
+      "facilityType": "Hospital",
+      "ownership": "PRIVATE",
+      "address": "Plot No. 1 Huda Market No.1 Beside Hanuman Mandir ,Sector 16A Near Old Faridabad Metro Station Faridabad",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9958422442",
+      "dateOfEstablishment": "07-05-2007",
+      "empanelmentDate": "17-03-2021",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "SE"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6P04763",
+      "name": "PAWAN HOSPITAL",
+      "facilityType": "Hospital",
+      "ownership": "PRIVATE",
+      "address": "plot no.1/2 , samaypur , near sec-56 faridabad,",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "8851014695",
+      "dateOfEstablishment": "09-05-2025",
+      "empanelmentDate": "17-03-2021",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6P13961",
+      "name": "HANDA MEDICALCENTRE",
+      "facilityType": "Hospital",
+      "ownership": "PRIVATE",
+      "address": "N.H.SITE NO 1 SECTOR -16 ,N.H.SITE NO 1 SECTOR -16 FARIDABAD HARYANA",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9910478209",
+      "dateOfEstablishment": "01-01-2000",
+      "empanelmentDate": "03-12-2018",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "SB",
+        "ID"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6P88062",
+      "name": "Doctor Today Multispecialty hospital",
+      "facilityType": "Hospital",
+      "ownership": "PRIVATE",
+      "address": "5C 2BP RAILWAY ROAD NIT ,",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "8826898788",
+      "dateOfEstablishment": "29-07-2015",
+      "empanelmentDate": "20-12-2019",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6P89582",
+      "name": "Manavta Hospitals Private Limited",
+      "facilityType": "Hospital",
+      "ownership": "PRIVATE",
+      "address": "HOUSE NO 494, PREAM NAGAR MOHANA ROAD, NEAR WOMANE ITI, UNCHA GAON, BALLABGARH, FARIDABAD, HARYANA",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9717300328",
+      "dateOfEstablishment": "20-08-2017",
+      "empanelmentDate": "30-08-2024",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "BM",
+        "MC",
+        "MG",
+        "SG",
+        "IN",
+        "MN",
+        "SO",
+        "SM",
+        "SB",
+        "SL",
+        "MP",
+        "SP",
+        "ST",
+        "SU",
+        "ID"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6P111368",
+      "name": "Supreme Hospital Private Limited",
+      "facilityType": "Hospital",
+      "ownership": "PRIVATE",
+      "address": "Eros Garden, Charmwood Village,Surajkund Road",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9818043535",
+      "dateOfEstablishment": "01-07-2019",
+      "empanelmentDate": "17-03-2021",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6P119714",
+      "name": "DRISHTI EYE CENTRE",
+      "facilityType": "Hospital",
+      "ownership": "PRIVATE",
+      "address": "20-21 F FRUIT GARDEN, GREEN BAJAJ AUTOMOBILE SHOWROOM NIT 5 FBD",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9810258228",
+      "dateOfEstablishment": "23-01-2004",
+      "empanelmentDate": "15-05-2026",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "SE"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6P121285",
+      "name": "AASTHA EYE CENTRE",
+      "facilityType": "Hospital",
+      "ownership": "PRIVATE",
+      "address": "5-R/5,NIT,",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9811605066",
+      "dateOfEstablishment": "01-03-1991",
+      "empanelmentDate": "24-04-2026",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "SE"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6P147601",
+      "name": "Amrita Institute of Medical Sciences and Research Centre",
+      "facilityType": "Medical College Hospital",
+      "ownership": "PRIVATE",
+      "address": "Amrita Hospital,Sector-88",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9213183001",
+      "dateOfEstablishment": "25-07-2022",
+      "empanelmentDate": "28-02-2023",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [
+        "MC",
+        "SV",
+        "ER",
+        "MG"
+      ],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6P26107980",
+      "name": "BATRA HEART AND MULTISPECIALITY HOSPITAL ( A UNIT OF WONDER HOSPITAL PRIVATE LIMITED)",
+      "facilityType": "Hospital",
+      "ownership": "PRIVATE",
+      "address": "Health Site, Spring Field Colony, Sector-31, Faridabad-121003, Haryana,",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9818283123",
+      "dateOfEstablishment": "04-09-2023",
+      "empanelmentDate": "30-04-2026",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    },
+    {
+      "facilityId": "HOSP6P26222023",
+      "name": "Sunshine Hospital",
+      "facilityType": "Hospital",
+      "ownership": "PRIVATE",
+      "address": "Sec-64 Saupura Road, Ballbaghad,",
+      "city": "Faridabad",
+      "district": "Faridabad",
+      "state": "Haryana",
+      "country": "India",
+      "contact": "9810396171",
+      "dateOfEstablishment": "31-01-2017",
+      "empanelmentDate": "02-06-2026",
+      "scheme": "PMJAY",
+      "iphsLevel": "UNKNOWN",
+      "specialities": [],
+      "location": {
+        "latitude": null,
+        "longitude": null
+      },
+      "source": {
+        "type": "NHA_PMJAY_HEM_LISTING",
+        "provider": "National Health Authority",
+        "stateCode": "6",
+        "districtCode": 60
+      }
+    }
+  ]
+}

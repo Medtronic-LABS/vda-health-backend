@@ -45,8 +45,13 @@ export interface IntentMetadata {
     state?: string;
     district?: string;
     facilityType?: 'PUBLIC' | 'PRIVATE';
+    /** Expressed affordability/access preference; never proof of coverage. */
+    costPreference?: 'LOW_COST';
+    iphsLevel?: 'HWC_SHC' | 'HWC_PHC' | 'CHC' | 'SDH' | 'DH';
+    referralLevel?: 'PRIMARY' | 'SECONDARY' | 'DISTRICT';
     scheme?: string;
     service?: string;
+    serviceAliases?: string[];
     recordCategories?: string[];
     knowledgeRequired?: boolean;
     responseRequirements?: string[];

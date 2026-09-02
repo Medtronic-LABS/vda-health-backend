@@ -1,4 +1,10 @@
-import { Injectable, Logger, Inject, Optional, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  Inject,
+  Optional,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
@@ -21,17 +27,45 @@ import { KnowledgeRetrievalService } from '../../knowledge/services/knowledge-re
 import { KnowledgeQueryNormalizerService } from '../../knowledge/services/knowledge-query-normalizer.service';
 import { AgentKnowledgeMapper } from '../agents/agent-knowledge-mapper';
 import { IntentType, SchemeInformationType } from '../intents/intent.types';
-import { Facility, } from '../../database/entities/facility.entity';
+import { Facility } from '../../database/entities/facility.entity';
 import { FacilitySearchService } from '../../facilities/facility-search.service';
+import {
+  FacilityDirectoryEntry,
+  FacilityDirectoryLoader,
+} from '../../facilities/facility-directory.loader';
 import { Scheme } from '../../database/entities/scheme.entity';
 import { SchemeService } from '../../schemes/scheme.service';
 import { Session } from '../../database/entities/session.entity';
 import { Prescription } from '../../database/entities/prescription.entity';
 import { ConversationTurn } from '../../database/entities/conversation-turn.entity';
 import { FacilitySearchResult } from '../../facilities/facility-search.service';
+import {
+  collectSourceBackedServiceValues,
+  filterBySourceBackedServiceValues,
+  matchSourceBackedServiceValues,
+} from '../../facilities/facility-service-matcher';
+import { IphsLevel } from '../../facilities/iphs-classification';
 import { RagEvaluationService } from '../../evaluation/rag-evaluation.service';
-import { KnowledgeRetrievalResult } from '../../knowledge/models/knowledge-retrieval.model';
-import { PATIENT_DATA_PROVIDER, PatientDataProvider } from '../../dev/patient-data/patient-data-provider.interface';
+import {
+  KnowledgeRetrievalResult,
+  KnowledgeSourceCitation,
+} from '../../knowledge/models/knowledge-retrieval.model';
+import {
+  PATIENT_DATA_PROVIDER,
+  PatientDataProvider,
+} from '../../dev/patient-data/patient-data-provider.interface';
+
+type VerifiedIphsLevel = Exclude<IphsLevel, 'UNKNOWN'>;
+
+interface FacilityServiceContext {
+  requestedService: string;
+  appropriateIphsLevels: VerifiedIphsLevel[];
+  lowCostPreference: boolean;
+  matchedSourceValues: string[];
+  iphsSources: KnowledgeSourceCitation[];
+  /** IPHS evidence and any resilience mapping are intentionally distinct. */
+  iphsEvidenceStatus: 'VERIFIED' | 'FALLBACK' | 'NOT_VERIFIED';
+}
 
 @Injectable()
 export class AiOrchestratorService implements IAiOrchestrator {
@@ -56,11 +90,20 @@ export class AiOrchestratorService implements IAiOrchestrator {
     @Optional()
     private readonly knowledgeQueryNormalizer?: KnowledgeQueryNormalizerService,
     @Optional() private readonly facilitySearch?: FacilitySearchService,
+    @Optional() private readonly facilityDirectory?: FacilityDirectoryLoader,
     @Optional() private readonly schemeService?: SchemeService,
-    @Optional() @InjectRepository(Session) private readonly sessions?: Repository<Session>,
-    @Optional() @InjectRepository(Prescription) private readonly prescriptions?: Repository<Prescription>,
-    @Optional() @Inject(PATIENT_DATA_PROVIDER) private readonly patientData?: PatientDataProvider,
-    @Optional() @InjectRepository(ConversationTurn) private readonly conversationTurns?: Repository<ConversationTurn>,
+    @Optional()
+    @InjectRepository(Session)
+    private readonly sessions?: Repository<Session>,
+    @Optional()
+    @InjectRepository(Prescription)
+    private readonly prescriptions?: Repository<Prescription>,
+    @Optional()
+    @Inject(PATIENT_DATA_PROVIDER)
+    private readonly patientData?: PatientDataProvider,
+    @Optional()
+    @InjectRepository(ConversationTurn)
+    private readonly conversationTurns?: Repository<ConversationTurn>,
     @Optional() private readonly ragEvaluation?: RagEvaluationService,
   ) {}
 
@@ -71,16 +114,38 @@ export class AiOrchestratorService implements IAiOrchestrator {
     return { summary, [language]: summary };
   }
 
-  private async facilityLocation(sessionId: string, input: string, language: string): Promise<{ state?: string; district?: string; city?: string; locality?: string }> {
-    const current: { state?: string; district?: string } = this.knowledgeQueryNormalizer?.normalize(input, language, IntentType.FACILITY_QUERY) || {};
+  private async facilityLocation(
+    sessionId: string,
+    input: string,
+    language: string,
+  ): Promise<{
+    state?: string;
+    district?: string;
+    city?: string;
+    locality?: string;
+  }> {
+    const current: { state?: string; district?: string } =
+      this.knowledgeQueryNormalizer?.normalize(
+        input,
+        language,
+        IntentType.FACILITY_QUERY,
+      ) || {};
     let state = current.state;
     let district = current.district;
 
     if ((!state || !district) && this.conversationTurns) {
-      const history = await this.conversationTurns.find({ where: { sessionId, conversationRetentionGranted: true }, order: { createdAt: 'DESC' }, take: 5 });
+      const history = await this.conversationTurns.find({
+        where: { sessionId, conversationRetentionGranted: true },
+        order: { createdAt: 'DESC' },
+        take: 5,
+      });
       for (const turn of history) {
         if (!turn.inputText) continue;
-        const prior = this.knowledgeQueryNormalizer?.normalize(turn.inputText, language, IntentType.FACILITY_QUERY);
+        const prior = this.knowledgeQueryNormalizer?.normalize(
+          turn.inputText,
+          language,
+          IntentType.FACILITY_QUERY,
+        );
         if (!state && prior?.state) state = prior.state;
         if (!district && prior?.district) district = prior.district;
         if (state && district) break;
@@ -90,7 +155,10 @@ export class AiOrchestratorService implements IAiOrchestrator {
     if ((!state || !district) && this.sessions && this.patientData) {
       const session = await this.sessions.findOne({ where: { id: sessionId } });
       if (session) {
-        const patient = await this.patientData.getPatientByReference(session.tenantId, session.subjectAbhaRef);
+        const patient = await this.patientData.getPatientByReference(
+          session.tenantId,
+          session.subjectAbhaRef,
+        );
         if (patient) {
           if (!state && patient.state) state = patient.state;
           if (!district && patient.district) district = patient.district;
@@ -101,24 +169,515 @@ export class AiOrchestratorService implements IAiOrchestrator {
     return { state, district };
   }
 
-  private facilityContent(results: FacilitySearchResult[], location: { state?: string; district?: string; city?: string; locality?: string }, language: string, scheme?: string, emergency = false): Record<string, any> {
-    const scope = location.locality || location.district || location.city || location.state;
-    const summary = results.length
-      ? (language === 'hi' ? `${scope || 'इस क्षेत्र'} में उपलब्ध अस्पताल नीचे दिए गए हैं। सूचीबद्ध योजना के लिए पात्रता अलग से जांचनी होगी।` : `Available hospitals in ${scope || 'this area'} are listed below. Eligibility for a listed scheme must be checked separately.`)
-      : (language === 'hi' ? `मुझे ${scope || 'इस क्षेत्र'}${scheme ? ` और ${scheme}` : ''} के लिए कोई अस्पताल नहीं मिला। आप दूसरा जिला या क्षेत्र बता सकते हैं।` : `I could not find a hospital for ${scope || 'this area'}${scheme ? ` and ${scheme}` : ''}. Please provide another district or area.`);
-    const cards = results.slice(0, 5).map(({ facility, schemes }) => ({
-      title: facility.name,
-      value: [facility.locality, facility.district, facility.state].filter(Boolean).join(', '),
-      subtitle: [facility.hospitalType, schemes.length ? schemes.join(' · ') : null, facility.specialityCodes?.length ? facility.specialityCodes.join(', ') : null, facility.contactNumber || null].filter(Boolean).join(' · '),
+  /**
+   * Adapts the read-only NHA pilot directory to the existing facility response
+   * contract. These are transient objects only: no facility entity, overlay,
+   * scheme association, or service capability is persisted or inferred.
+   */
+  private directoryFacilityResults(
+    entries: FacilityDirectoryEntry[],
+  ): FacilitySearchResult[] {
+    const source = this.facilityDirectory?.source();
+    return entries.map((entry) => ({
+      facility: {
+        id: `directory:${entry.facilityId}`,
+        tenantId: '',
+        facilityId: entry.facilityId,
+        name: entry.name,
+        state: entry.state,
+        district: entry.district,
+        city: entry.city,
+        address: entry.address,
+        contactNumber: entry.contact,
+        // Ownership is a source fact used only for display in this transient
+        // directory result; generic DB filtering remains unchanged.
+        hospitalType:
+          entry.ownership === 'GOVERNMENT' ? 'Government' : 'Private',
+        pmjayStatus: /^pm-?jay$/i.test(entry.scheme || ''),
+        latitude: entry.latitude == null ? null : String(entry.latitude),
+        longitude: entry.longitude == null ? null : String(entry.longitude),
+        // NHA speciality labels are not service-capability evidence and must
+        // not be matched to a requested diagnostic service.
+        specialityCodes: [],
+        sourceDocumentId: null,
+        sourceVersion: source?.version || 'Unknown',
+        sourceUrl: null,
+        active: true,
+      } as unknown as Facility,
+      schemes: entry.scheme ? [entry.scheme] : [],
+      iphsOverlay: {
+        tenantId: '',
+        facilityId: `directory:${entry.facilityId}`,
+        state: entry.state.toUpperCase().replace(/\s+/g, '_'),
+        iphsLevel: entry.iphsLevel,
+        iphsClassification:
+          entry.iphsLevel === 'CHC'
+            ? 'CHC_NOT_SUBCLASSIFIED'
+            : entry.iphsLevel,
+        iphsServices: { status: 'NOT_VERIFIED', services: [] },
+        emergencyCapability: 'UNKNOWN',
+        referralLevel:
+          entry.iphsLevel === 'DH'
+            ? 'DISTRICT'
+            : entry.iphsLevel === 'CHC' || entry.iphsLevel === 'SDH'
+              ? 'SECONDARY'
+              : entry.iphsLevel === 'UNKNOWN'
+                ? 'UNKNOWN'
+                : 'PRIMARY',
+        iphsSource: source?.source || 'NHA PM-JAY facility directory',
+        iphsVerified: false,
+        classificationBasis: `sourceDirectory.iphsLevel:${entry.iphsLevel}`,
+        active: true,
+      } as unknown as FacilitySearchResult['iphsOverlay'],
+      demoCapabilities: [],
+      distanceKm: null,
+      travelTimeMinutes: null,
     }));
+  }
+
+  private facilityContent(
+    results: FacilitySearchResult[],
+    location: {
+      state?: string;
+      district?: string;
+      city?: string;
+      locality?: string;
+    },
+    language: string,
+    scheme?: string,
+    emergency = false,
+    serviceContext?: FacilityServiceContext,
+  ): Record<string, any> {
+    const scope =
+      location.locality || location.district || location.city || location.state;
+    const normalizedMatchedValues = new Set(
+      (serviceContext?.matchedSourceValues || []).map((value) =>
+        value.trim().toLocaleLowerCase('en-IN'),
+      ),
+    );
+    const matchedDemoCapabilities = results.flatMap(({ demoCapabilities }) =>
+      demoCapabilities.filter(
+        (capability) =>
+          normalizedMatchedValues.has(
+            capability.serviceCode.trim().toLocaleLowerCase('en-IN'),
+          ) ||
+          normalizedMatchedValues.has(
+            capability.serviceName.trim().toLocaleLowerCase('en-IN'),
+          ),
+      ),
+    );
+    const usesDemoCapability = matchedDemoCapabilities.length > 0;
+    // This is facility-specific evidence only. IPHS suitability is a standard
+    // for a facility level, never proof that this particular facility offers a
+    // requested diagnostic or treatment today.
+    const hasFacilitySpecificServiceEvidence =
+      normalizedMatchedValues.size > 0 && !usesDemoCapability;
+    const hasIphsSuitableCandidates =
+      serviceContext?.iphsEvidenceStatus === 'VERIFIED' &&
+      (serviceContext.appropriateIphsLevels.length || 0) > 0;
+    const hasResolvedFacilityLevel =
+      (serviceContext?.appropriateIphsLevels.length || 0) > 0;
+    const lowCostNotice = serviceContext?.lowCostPreference
+      ? language === 'hi'
+        ? `आपने कम खर्च वाला विकल्प पूछा है, इसलिए government/PM-JAY listed facilities को प्राथमिकता दी गई है। ${serviceContext.requestedService} की फीस या scheme coverage सुविधा से confirm कर लें।`
+        : `Because you asked for a lower-cost option, government and PM-JAY-listed facilities were prioritized. Confirm the ${serviceContext.requestedService} fee or scheme coverage with the facility.`
+      : '';
+    const summary = serviceContext
+      ? results.length
+        ? usesDemoCapability
+          ? language === 'hi'
+            ? `${scope || 'इस क्षेत्र'} में ${serviceContext.requestedService} के ये परिणाम केवल VDA Pilot की synthetic, unverified facility mapping पर आधारित हैं। यह सरकारी या वास्तविक उपलब्धता की पुष्टि नहीं है; जाने से पहले सुविधा से जांच करें।`
+            : `These ${serviceContext.requestedService} results in ${scope || 'this area'} use synthetic, unverified VDA Pilot facility mappings. They are not government or real-world availability verification; confirm with the facility before travelling.`
+          : hasFacilitySpecificServiceEvidence
+            ? language === 'hi'
+              ? `${scope || 'इस क्षेत्र'} में नीचे दी गई सुविधाओं के source records में ${serviceContext.requestedService} से मेल खाने वाली सेवा दर्ज है। जाने से पहले सुविधा से उपलब्धता की पुष्टि करें।`
+              : `The source records for the facilities below list a service matching ${serviceContext.requestedService} in ${scope || 'this area'}. Confirm availability with the facility before travelling.`
+            : hasIphsSuitableCandidates
+              ? language === 'hi'
+                ? `${serviceContext.requestedService} के लिए IPHS guidelines के अनुसार उपयुक्त facility level की ये सुविधाएँ ${scope || 'इस क्षेत्र'} में मिली हैं। इन नामित सुविधाओं पर ${serviceContext.requestedService} की वर्तमान उपलब्धता source data में verify नहीं है; जाने से पहले सुविधा से confirm कर लें। ${lowCostNotice}`.trim()
+                : `These facilities in ${scope || 'this area'} match the facility level appropriate for ${serviceContext.requestedService} under IPHS guidance. Current ${serviceContext.requestedService} availability at the named facilities is not verified in source data; confirm before travelling. ${lowCostNotice}`.trim()
+              : hasResolvedFacilityLevel
+                ? language === 'hi'
+                  ? `${serviceContext.requestedService} के लिए उपयुक्त स्तर की ये सुविधाएँ ${scope || 'इस क्षेत्र'} में मिली हैं। इन नामित सुविधाओं पर ${serviceContext.requestedService} की वर्तमान उपलब्धता verify नहीं है; जाने से पहले सुविधा से confirm कर लें। ${lowCostNotice}`.trim()
+                  : `These facilities in ${scope || 'this area'} match the resolved level for ${serviceContext.requestedService}. Current ${serviceContext.requestedService} availability at the named facilities is not verified; confirm before travelling. ${lowCostNotice}`.trim()
+              : language === 'hi'
+                ? `${scope || 'इस क्षेत्र'} में नीचे दी गई facilities आपकी location के आधार पर मिली हैं, लेकिन ${serviceContext.requestedService} के लिए उपयुक्त facility level या वर्तमान उपलब्धता source data में confirm नहीं हो सकी। जाने से पहले सुविधा से confirm कर लें।`
+                : `The facilities below match your location in ${scope || 'this area'}, but source data could not confirm an appropriate facility level or current ${serviceContext.requestedService} availability. Confirm with the facility before travelling.`
+        : language === 'hi'
+          ? hasIphsSuitableCandidates
+            ? `${serviceContext.requestedService} के लिए IPHS guidelines के अनुसार उपयुक्त facility level की कोई सुविधा ${scope || 'इस क्षेत्र'} में नहीं मिली।`
+            : hasResolvedFacilityLevel
+              ? `${serviceContext.requestedService} के लिए selected facility level की कोई सुविधा ${scope || 'इस क्षेत्र'} में नहीं मिली।`
+            : `${serviceContext.requestedService} के लिए उपयुक्त facility level source information से establish नहीं हो सका, इसलिए कोई facility recommendation नहीं दी जा सकती।`
+          : hasIphsSuitableCandidates
+            ? `No facility at an IPHS-suitable level for ${serviceContext.requestedService} was found in ${scope || 'this area'}.`
+            : hasResolvedFacilityLevel
+              ? `No facility at the selected level for ${serviceContext.requestedService} was found in ${scope || 'this area'}.`
+            : `An appropriate facility level for ${serviceContext.requestedService} could not be established from the available source information, so no facility recommendation can be made.`
+      : results.length
+        ? language === 'hi'
+          ? `${scope || 'इस क्षेत्र'} में उपलब्ध अस्पताल नीचे दिए गए हैं। सूचीबद्ध योजना के लिए पात्रता अलग से जांचनी होगी।`
+          : `Available hospitals in ${scope || 'this area'} are listed below. Eligibility for a listed scheme must be checked separately.`
+        : language === 'hi'
+          ? `मुझे ${scope || 'इस क्षेत्र'}${scheme ? ` और ${scheme}` : ''} के लिए कोई अस्पताल नहीं मिला। आप दूसरा जिला या क्षेत्र बता सकते हैं।`
+          : `I could not find a hospital for ${scope || 'this area'}${scheme ? ` and ${scheme}` : ''}. Please provide another district or area.`;
+    const emergencyConfirmed = results.some(
+      ({ facility, iphsOverlay }) =>
+        iphsOverlay?.emergencyCapability === 'SOURCE_REPORTED_CAPABLE' ||
+        facility.emergencyAvailable === true,
+    );
+    const finalSummary =
+      emergency && results.length
+        ? `${summary} ${
+            emergencyConfirmed
+              ? language === 'hi'
+                ? 'Emergency-capable के रूप में source-reported सुविधाओं को प्राथमिकता दी गई है।'
+                : 'Facilities explicitly reported as emergency-capable are prioritized.'
+              : language === 'hi'
+                ? 'उपलब्ध रिकॉर्ड में emergency सुविधा की पुष्टि नहीं है।'
+                : 'Available records do not confirm emergency capability.'
+          }`
+        : summary;
+    const cards = results
+      .slice(0, 5)
+      .map(
+        ({
+          facility,
+          schemes,
+          iphsOverlay,
+          demoCapabilities,
+          travelTimeMinutes,
+          distanceKm,
+        }) => {
+          const serviceCard = Boolean(serviceContext);
+          const government = /government|public|goi/i.test(
+            facility.hospitalType || '',
+          );
+          const schemeLabels = schemes.map((item) =>
+            /^pm-?jay$/i.test(item) ? 'PM-JAY listed' : `${item} listed`,
+          );
+          return {
+            title: facility.name,
+            value: serviceCard
+              ? [facility.city, facility.district, facility.state]
+                  .filter(Boolean)
+                  .join(', ')
+              : [facility.locality, facility.district, facility.state]
+                  .filter(Boolean)
+                  .join(', '),
+            subtitle: serviceCard
+              ? [
+                  government ? 'Government health facility' : 'Private health facility',
+                  ...schemeLabels,
+                  facility.contactNumber ? `Phone: ${facility.contactNumber}` : null,
+                ]
+                  .filter(Boolean)
+                  .join('\n')
+              : [
+                  facility.hospitalType,
+                  iphsOverlay?.iphsLevel !== 'UNKNOWN'
+                    ? iphsOverlay?.iphsLevel
+                    : null,
+                  travelTimeMinutes != null ? `${travelTimeMinutes} min` : null,
+                  distanceKm != null ? `${distanceKm} km` : null,
+                  demoCapabilities.some(
+                    (capability) =>
+                      normalizedMatchedValues.has(
+                        capability.serviceCode.trim().toLocaleLowerCase('en-IN'),
+                      ) ||
+                      normalizedMatchedValues.has(
+                        capability.serviceName.trim().toLocaleLowerCase('en-IN'),
+                      ),
+                  )
+                    ? 'DEMO/PILOT · NOT VERIFIED'
+                    : null,
+                  schemes.length ? schemes.join(' · ') : null,
+                  facility.specialityCodes?.length
+                    ? facility.specialityCodes.join(', ')
+                    : null,
+                  facility.contactNumber || null,
+                ]
+                  .filter(Boolean)
+                  .join(' · '),
+          };
+        },
+      );
     return {
-      summary: emergency && results.length
-        ? `${summary} ${language === 'hi' ? 'उपलब्ध रिकॉर्ड में emergency सुविधा की पुष्टि नहीं है।' : 'Available records do not confirm emergency capability.'}`
-        : summary,
-      [language]: summary,
+      summary: finalSummary,
+      [language]: finalSummary,
       cards,
-      facility_results: results.map(({ facility, schemes }) => ({ name: facility.name, state: facility.state, district: facility.district, locality: facility.locality, hospitalType: facility.hospitalType, schemes, specialityCodes: facility.specialityCodes, contactNumber: facility.contactNumber, emergencyAvailable: facility.emergencyAvailable, distanceKm: null, source: facility.sourceVersion || 'Structured facility source' })),
-      knowledge_sources: results.map(({ facility }) => ({ title: facility.name, source: 'Structured facility source', version: facility.sourceVersion || 'Unknown' })),
+      facility_results: results.map(
+        ({
+          facility,
+          schemes,
+          iphsOverlay,
+          demoCapabilities,
+          distanceKm,
+          travelTimeMinutes,
+        }) => ({
+          name: facility.name,
+          state: facility.state,
+          district: facility.district,
+          locality: facility.locality,
+          hospitalType: facility.hospitalType,
+          schemes,
+          specialityCodes: facility.specialityCodes,
+          supportedServices: facility.supportedServices,
+          contactNumber: facility.contactNumber,
+          emergencyAvailable: facility.emergencyAvailable,
+          distanceKm,
+          travelTimeMinutes,
+          iphsLevel: iphsOverlay?.iphsLevel || 'UNKNOWN',
+          iphsClassification: iphsOverlay?.iphsClassification || 'UNKNOWN',
+          iphsServices: iphsOverlay?.iphsServices || {
+            status: 'NOT_VERIFIED',
+            services: [],
+          },
+          emergencyCapability: iphsOverlay?.emergencyCapability || 'UNKNOWN',
+          referralLevel: iphsOverlay?.referralLevel || 'UNKNOWN',
+          iphsSource: iphsOverlay?.iphsSource || null,
+          iphsVerified: iphsOverlay?.iphsVerified || false,
+          source: facility.sourceVersion || 'Structured facility source',
+          matchedSourceServices: serviceContext
+            ? [
+                ...(facility.supportedServices || []),
+                ...(facility.specialityCodes || []),
+                ...demoCapabilities.flatMap((capability) => [
+                  capability.serviceCode,
+                  capability.serviceName,
+                ]),
+              ].filter((value) =>
+                serviceContext.matchedSourceValues.some(
+                  (matched) =>
+                    matched.trim().toLocaleLowerCase('en-IN') ===
+                    value.trim().toLocaleLowerCase('en-IN'),
+                ),
+              )
+            : undefined,
+          demoCapabilityProvenance: serviceContext
+            ? demoCapabilities
+                .filter(
+                  (capability) =>
+                    normalizedMatchedValues.has(
+                      capability.serviceCode.trim().toLocaleLowerCase('en-IN'),
+                    ) ||
+                    normalizedMatchedValues.has(
+                      capability.serviceName.trim().toLocaleLowerCase('en-IN'),
+                    ),
+                )
+                .map((capability) => ({
+                  facilityId: capability.facilityId,
+                  state: capability.state,
+                  district: capability.district,
+                  areaLocality: capability.areaLocality,
+                  serviceCode: capability.serviceCode,
+                  serviceName: capability.serviceName,
+                  availability: capability.availability,
+                  sourceType: capability.sourceType,
+                  source: capability.source,
+                  verified: capability.verified,
+                  demoOnly: capability.demoOnly,
+                  classificationBasis: capability.classificationBasis,
+                }))
+            : undefined,
+        }),
+      ),
+      requestedService: serviceContext?.requestedService,
+      serviceAvailability: serviceContext
+        ? usesDemoCapability
+          ? 'DEMO_PILOT_NOT_VERIFIED'
+          : hasFacilitySpecificServiceEvidence
+            ? 'SOURCE_VERIFIED'
+            : 'NOT_VERIFIED'
+        : undefined,
+      appropriateIphsLevels: serviceContext?.appropriateIphsLevels,
+      iphsEvidenceStatus: serviceContext?.iphsEvidenceStatus,
+      knowledge_sources: [
+        ...results.map(({ facility }) => ({
+          title: facility.name,
+          source: 'Structured facility source',
+          version: facility.sourceVersion || 'Unknown',
+        })),
+        ...Array.from(
+          new Map(
+            matchedDemoCapabilities.map((capability) => [
+              `${capability.sourceType}:${capability.source}`,
+              {
+                title: 'Synthetic facility capability mapping',
+                source: capability.source,
+                version: capability.sourceType,
+                verified: capability.verified,
+                demoOnly: capability.demoOnly,
+              },
+            ]),
+          ).values(),
+        ),
+        ...(serviceContext?.iphsSources || []),
+      ],
+    };
+  }
+
+  /** Keeps facility-level reasoning restricted to governed IPHS 2022 chunks. */
+  private iphs2022Evidence(
+    result: KnowledgeRetrievalResult,
+  ): KnowledgeRetrievalResult {
+    const matchedChunks = result.matchedChunks.filter((chunk) => {
+      const provenance = [
+        chunk.title,
+        chunk.source,
+        chunk.documentVersion,
+        JSON.stringify(chunk.metadata || {}),
+      ].join(' ');
+      return (
+        /IPHS|INDIAN PUBLIC HEALTH STANDARDS/i.test(provenance) &&
+        /2022/i.test(provenance)
+      );
+    });
+    return {
+      ...result,
+      matchedChunks,
+      retrievedCount: matchedChunks.length,
+      sources: result.sources.filter((source) =>
+        matchedChunks.some(
+          (chunk) =>
+            chunk.title === source.title &&
+            chunk.documentVersion === source.version,
+        ),
+      ),
+      formattedKnowledgePrompt: matchedChunks
+        .map(
+          (chunk) =>
+            `[IPHS 2022 SOURCE]\nTitle: ${chunk.title}\nSource: ${chunk.source}\nVersion: ${chunk.documentVersion}\nContent:\n${chunk.content}\n[/IPHS 2022 SOURCE]`,
+        )
+        .join('\n\n'),
+    };
+  }
+
+  private async resolveIphsLevelsForService(
+    tenantId: string,
+    service: string,
+    language: string,
+    state: string | undefined,
+    correlationId: string,
+  ): Promise<{
+    levels: VerifiedIphsLevel[];
+    sources: KnowledgeSourceCitation[];
+    evidenceStatus: 'VERIFIED' | 'FALLBACK' | 'NOT_VERIFIED';
+  }> {
+    if (!this.knowledgeRetrievalService) {
+      return this.fallbackIphsLevelsForService(service);
+    }
+    try {
+      const retrieved = this.iphs2022Evidence(
+        await this.knowledgeRetrievalService.retrieve(
+          `IPHS 2022 diagnostic service ${service} appropriate facility level essential desirable`,
+          {
+            tenantId,
+            intent: 'FACILITY_SERVICE_LEVEL',
+            language,
+            state,
+            stateMatchMode: 'INCLUDING_GLOBAL',
+            maxResults: 8,
+            minRelevanceScore: 0.25,
+            maxContextLength: 12000,
+          },
+        ),
+      );
+      if (!retrieved.matchedChunks.length) {
+        return this.fallbackIphsLevelsForService(service);
+      }
+
+      const generated = await this.aiProvider.generate(
+        `${retrieved.formattedKnowledgePrompt}\n\nRequested service: ${JSON.stringify(service)}\nSelect every IPHS facility level where the supplied IPHS 2022 text explicitly lists this service or an unambiguous equivalent. Essential, desirable, and linked services may be selected, but they are not proof that an individual facility provides the service. If the supplied text does not support the service, return NOT_VERIFIED and no levels.`,
+        {
+          responseFormat: 'json',
+          temperature: 0,
+          maxTokens: 300,
+          correlationId,
+          telemetryLabel: 'FACILITY_IPHS_SERVICE_LEVEL',
+          jsonSchema: {
+            type: 'OBJECT',
+            properties: {
+              evidenceStatus: {
+                type: 'STRING',
+                enum: ['VERIFIED', 'NOT_VERIFIED'],
+              },
+              levels: {
+                type: 'ARRAY',
+                items: {
+                  type: 'STRING',
+                  enum: ['HWC_SHC', 'HWC_PHC', 'CHC', 'SDH', 'DH'],
+                },
+              },
+            },
+            required: ['evidenceStatus', 'levels'],
+          },
+        },
+      );
+      const json = generated.json || {};
+      const allowed = new Set<VerifiedIphsLevel>([
+        'HWC_SHC',
+        'HWC_PHC',
+        'CHC',
+        'SDH',
+        'DH',
+      ]);
+      const levels = Array.isArray(json['levels'])
+        ? Array.from(
+            new Set(
+              json['levels'].filter(
+                (value): value is VerifiedIphsLevel =>
+                  typeof value === 'string' &&
+                  allowed.has(value as VerifiedIphsLevel),
+              ),
+            ),
+          )
+        : [];
+      if (json['evidenceStatus'] !== 'VERIFIED' || !levels.length) {
+        return this.fallbackIphsLevelsForService(service);
+      }
+      return {
+        levels,
+        sources: retrieved.sources,
+        evidenceStatus: 'VERIFIED',
+      };
+    } catch (error: unknown) {
+      this.logger.warn(
+        `IPHS service-level resolution failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return this.fallbackIphsLevelsForService(service);
+    }
+  }
+
+  /**
+   * Demo-resilience only: used solely after IPHS retrieval yields no usable
+   * evidence. It is not an IPHS source, carries no IPHS citation, and callers
+   * expose its status separately from a verified IPHS conclusion.
+   */
+  private fallbackIphsLevelsForService(service: string): {
+    levels: VerifiedIphsLevel[];
+    sources: KnowledgeSourceCitation[];
+    evidenceStatus: 'FALLBACK' | 'NOT_VERIFIED';
+  } {
+    const normService = service.toLowerCase().trim();
+    let levels: VerifiedIphsLevel[] = [];
+    if (/x-?ray|radiology/i.test(normService)) {
+      levels = ['CHC', 'SDH', 'DH'];
+    } else if (/ultrasound|usg|sonography/i.test(normService)) {
+      levels = ['CHC', 'SDH', 'DH'];
+    } else if (/hba1c|glycosylated/i.test(normService)) {
+      levels = ['HWC_PHC', 'CHC', 'SDH', 'DH'];
+    } else if (/cbc|complete blood count/i.test(normService)) {
+      levels = ['CHC', 'SDH', 'DH'];
+    } else if (/blood glucose|blood sugar|sugar test/i.test(normService)) {
+      levels = ['HWC_SHC', 'HWC_PHC', 'CHC', 'SDH', 'DH'];
+    } else if (/blood test|blood/i.test(normService)) {
+      levels = ['HWC_PHC', 'CHC', 'SDH', 'DH'];
+    }
+    return {
+      levels,
+      sources: [],
+      evidenceStatus: levels.length ? 'FALLBACK' : 'NOT_VERIFIED',
     };
   }
 
@@ -127,51 +686,68 @@ export class AiOrchestratorService implements IAiOrchestrator {
    * to the semantic subject of a scheme question. Retrieval remains unchanged;
    * this prevents a broad source record from inviting an all-in-one answer.
    */
-  private scopedSchemeFacts(schemes: Scheme[], scope?: SchemeInformationType): string {
+  private scopedSchemeFacts(
+    schemes: Scheme[],
+    scope?: SchemeInformationType,
+  ): string {
     // Availability is an inventory, so every source-backed matching scheme is
     // supplied. Other subjects remain bounded to keep an individual answer
     // concise without altering the underlying retrieval set.
-    const relevantSchemes = scope === 'SCHEME_AVAILABILITY' ? schemes : schemes.slice(0, 3);
-    return relevantSchemes.map((scheme) => {
-      const facts = [
-        `Scheme: ${scheme.name}`,
-        `Scope: ${scheme.geographyScope}${scheme.state ? ` (${scheme.state})` : ''}`,
-      ];
-      switch (scope) {
-        case 'SCHEME_OVERVIEW':
-          if (scheme.description) facts.push(`Overview: ${scheme.description}`);
-          break;
-        case 'SCHEME_AVAILABILITY':
-          break;
-        case 'SCHEME_ELIGIBILITY':
-          if (scheme.eligibilityCriteria) facts.push(`Eligibility criteria: ${scheme.eligibilityCriteria}`);
-          facts.push('Personal eligibility status: ELIGIBILITY_CHECK_REQUIRED. Do not say the patient is eligible.');
-          break;
-        case 'SCHEME_DOCUMENTS':
-          facts.push(scheme.requiredDocuments?.length
-            ? `Required documents: ${scheme.requiredDocuments.join(', ')}`
-            : 'Required documents: not confirmed by this structured source');
-          break;
-        case 'SCHEME_APPLICATION':
-          if (scheme.applicationProcess) facts.push(`Application process: ${scheme.applicationProcess}`);
-          if (scheme.officialUrl) facts.push(`Official route: ${scheme.officialUrl}`);
-          if (scheme.helpline) facts.push(`Helpline: ${scheme.helpline}`);
-          break;
-        case 'SCHEME_BENEFITS':
-          if (scheme.benefitsDescription) facts.push(`Benefits: ${scheme.benefitsDescription}`);
-          if (scheme.coverageInformation) facts.push(`Coverage: ${scheme.coverageInformation}`);
-          break;
-        case 'SCHEME_COMPARISON':
-          if (scheme.description) facts.push(`Overview: ${scheme.description}`);
-          break;
-        // SCHEME_FACILITY and SCHEME_UNKNOWN deliberately add no unrelated
-        // scheme facts. Facility facts are owned by FacilityAgent, and an
-        // unknown scheme must not be silently substituted with a known one.
-        default:
-          break;
-      }
-      return facts.join(' | ');
-    }).join('\n');
+    const relevantSchemes =
+      scope === 'SCHEME_AVAILABILITY' ? schemes : schemes.slice(0, 3);
+    return relevantSchemes
+      .map((scheme) => {
+        const facts = [
+          `Scheme: ${scheme.name}`,
+          `Scope: ${scheme.geographyScope}${scheme.state ? ` (${scheme.state})` : ''}`,
+        ];
+        switch (scope) {
+          case 'SCHEME_OVERVIEW':
+            if (scheme.description)
+              facts.push(`Overview: ${scheme.description}`);
+            break;
+          case 'SCHEME_AVAILABILITY':
+            break;
+          case 'SCHEME_ELIGIBILITY':
+            if (scheme.eligibilityCriteria)
+              facts.push(`Eligibility criteria: ${scheme.eligibilityCriteria}`);
+            facts.push(
+              'Personal eligibility status: ELIGIBILITY_CHECK_REQUIRED. Do not say the patient is eligible.',
+            );
+            break;
+          case 'SCHEME_DOCUMENTS':
+            facts.push(
+              scheme.requiredDocuments?.length
+                ? `Required documents: ${scheme.requiredDocuments.join(', ')}`
+                : 'Required documents: not confirmed by this structured source',
+            );
+            break;
+          case 'SCHEME_APPLICATION':
+            if (scheme.applicationProcess)
+              facts.push(`Application process: ${scheme.applicationProcess}`);
+            if (scheme.officialUrl)
+              facts.push(`Official route: ${scheme.officialUrl}`);
+            if (scheme.helpline) facts.push(`Helpline: ${scheme.helpline}`);
+            break;
+          case 'SCHEME_BENEFITS':
+            if (scheme.benefitsDescription)
+              facts.push(`Benefits: ${scheme.benefitsDescription}`);
+            if (scheme.coverageInformation)
+              facts.push(`Coverage: ${scheme.coverageInformation}`);
+            break;
+          case 'SCHEME_COMPARISON':
+            if (scheme.description)
+              facts.push(`Overview: ${scheme.description}`);
+            break;
+          // SCHEME_FACILITY and SCHEME_UNKNOWN deliberately add no unrelated
+          // scheme facts. Facility facts are owned by FacilityAgent, and an
+          // unknown scheme must not be silently substituted with a known one.
+          default:
+            break;
+        }
+        return facts.join(' | ');
+      })
+      .join('\n');
   }
 
   async orchestrateTurn(
@@ -199,7 +775,9 @@ export class AiOrchestratorService implements IAiOrchestrator {
       try {
         let patientRef = identity.externalId;
         if (this.sessions) {
-          const session = await this.sessions.findOne({ where: { id: sessionId } });
+          const session = await this.sessions.findOne({
+            where: { id: sessionId },
+          });
           if (session) {
             patientRef = session.subjectAbhaRef;
           }
@@ -213,9 +791,10 @@ export class AiOrchestratorService implements IAiOrchestrator {
           },
           order: { createdAt: 'DESC' },
         });
-
       } catch (dbErr) {
-        this.logger.error(`Failed to lookup latest prescription: ${dbErr instanceof Error ? dbErr.message : String(dbErr)}`);
+        this.logger.error(
+          `Failed to lookup latest prescription: ${dbErr instanceof Error ? dbErr.message : String(dbErr)}`,
+        );
       }
     }
 
@@ -237,7 +816,9 @@ export class AiOrchestratorService implements IAiOrchestrator {
     // ─── Step 1: Deterministic pre-generation safety gate ───────────────────
     // Safety is intentionally evaluated before normal Gemini classification,
     // retrieval, or agent routing.
-    const requestLanguage = language || await this.languageProvider.detectLanguage(resolvedInputText);
+    const requestLanguage =
+      language ||
+      (await this.languageProvider.detectLanguage(resolvedInputText));
     const preSafetyResult = await this.safetyGate.evaluateSafety(
       resolvedInputText,
       correlationId,
@@ -249,7 +830,9 @@ export class AiOrchestratorService implements IAiOrchestrator {
           ? 'ESCALATED_BY_RULE'
           : 'WITHHELD_BY_RULE';
       const responseType =
-        preSafetyResult.status === 'ESCALATION_REQUIRED' ? 'escalation' : 'text';
+        preSafetyResult.status === 'ESCALATION_REQUIRED'
+          ? 'escalation'
+          : 'text';
       const safeMessage =
         preSafetyResult.patientSafeMessage ||
         (requestLanguage.startsWith('hi')
@@ -265,16 +848,30 @@ export class AiOrchestratorService implements IAiOrchestrator {
         this.facilitySearch &&
         this.knowledgeQueryNormalizer
       ) {
-        const location = await this.facilityLocation(sessionId, resolvedInputText, requestLanguage);
+        const location = await this.facilityLocation(
+          sessionId,
+          resolvedInputText,
+          requestLanguage,
+        );
         if (location.state || location.district) {
-          const facilities = await this.facilitySearch.searchWithSchemes(identity.tenantId, {
-            state: location.state,
-            district: location.district,
-            city: location.city,
-            locality: location.locality,
-            limit: 5,
-          });
-          const content = this.facilityContent(facilities, location, requestLanguage, undefined, true);
+          const facilities = await this.facilitySearch.searchWithSchemes(
+            identity.tenantId,
+            {
+              state: location.state,
+              district: location.district,
+              city: location.city,
+              locality: location.locality,
+              emergency: true,
+              limit: 5,
+            },
+          );
+          const content = this.facilityContent(
+            facilities,
+            location,
+            requestLanguage,
+            undefined,
+            true,
+          );
           emergencyFacilities = content.facility_results;
           emergencyCards = content.cards;
         }
@@ -288,7 +885,10 @@ export class AiOrchestratorService implements IAiOrchestrator {
         action: 'ai_pre_generation_safety_blocked',
         entityName: 'turn',
         entityId: sessionId,
-        details: { intent: 'SAFETY_PRECEDENCE', ruleId: preSafetyResult.ruleId },
+        details: {
+          intent: 'SAFETY_PRECEDENCE',
+          ruleId: preSafetyResult.ruleId,
+        },
       });
 
       return {
@@ -300,9 +900,19 @@ export class AiOrchestratorService implements IAiOrchestrator {
                 reason: safeMessage,
                 summary: safeMessage,
                 assigned_role: 'CLINICIAN',
-                ...(emergencyFacilities.length ? { facility_results: emergencyFacilities } : {}),
+                ...(emergencyFacilities.length
+                  ? { facility_results: emergencyFacilities }
+                  : {}),
                 ...(emergencyCards.length ? { cards: emergencyCards } : {}),
-                ...(emergencyFacilities.length ? { emergency_capability_note: requestLanguage.startsWith('hi') ? 'उपलब्ध रिकॉर्ड में emergency सुविधा की पुष्टि नहीं है।' : 'Available records do not confirm emergency capability.' } : {}),
+                ...(emergencyFacilities.length
+                  ? {
+                      emergency_capability_note: requestLanguage.startsWith(
+                        'hi',
+                      )
+                        ? 'उपलब्ध रिकॉर्ड में emergency सुविधा की पुष्टि नहीं है।'
+                        : 'Available records do not confirm emergency capability.',
+                    }
+                  : {}),
               }
             : { summary: safeMessage, [requestLanguage]: safeMessage },
         intent: IntentType.UNKNOWN,
@@ -316,9 +926,15 @@ export class AiOrchestratorService implements IAiOrchestrator {
     let classificationHistory = '';
     if (this.historyService) {
       try {
-        classificationHistory = await this.historyService.getRecentTurnHistory(sessionId, 3, 1000);
+        classificationHistory = await this.historyService.getRecentTurnHistory(
+          sessionId,
+          3,
+          1000,
+        );
       } catch (err: unknown) {
-        this.logger.warn(`Classification history retrieval failed: ${err instanceof Error ? err.message : String(err)}`);
+        this.logger.warn(
+          `Classification history retrieval failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
     const intentMeta = await this.intentClassifier.classifyIntent(
@@ -328,12 +944,20 @@ export class AiOrchestratorService implements IAiOrchestrator {
       classificationHistory,
     );
 
-
     // Deterministic prescription confirmation/rejection interceptor
-    if (latestPrescription && latestPrescription.extractionStatus === 'REVIEW_REQUIRED') {
+    if (
+      latestPrescription &&
+      latestPrescription.extractionStatus === 'REVIEW_REQUIRED'
+    ) {
       const trimmedInput = inputText.trim();
-      const isConfirm = /^(हाँ|हां|जी हाँ|सही है|हाँ, यह सही है|yes|y|correct|yes, this is correct)$/i.test(trimmedInput);
-      const isReject = /^(नहीं|ना|नही|कुछ गलत है|गलत है|no|n|incorrect|something is wrong)$/i.test(trimmedInput);
+      const isConfirm =
+        /^(हाँ|हां|जी हाँ|सही है|हाँ, यह सही है|yes|y|correct|yes, this is correct)$/i.test(
+          trimmedInput,
+        );
+      const isReject =
+        /^(नहीं|ना|नही|कुछ गलत है|गलत है|no|n|incorrect|something is wrong)$/i.test(
+          trimmedInput,
+        );
 
       if (isConfirm) {
         // Mark prescription as APPROVED
@@ -358,9 +982,10 @@ export class AiOrchestratorService implements IAiOrchestrator {
           },
         });
 
-        const summaryText = intentMeta.language === 'hi'
-          ? 'ठीक है। आपकी prescription की जानकारी की पुष्टि कर दी गई है।'
-          : 'Alright. Your prescription information has been confirmed.';
+        const summaryText =
+          intentMeta.language === 'hi'
+            ? 'ठीक है। आपकी prescription की जानकारी की पुष्टि कर दी गई है।'
+            : 'Alright. Your prescription information has been confirmed.';
 
         return {
           responseType: 'text',
@@ -396,9 +1021,10 @@ export class AiOrchestratorService implements IAiOrchestrator {
           },
         });
 
-        const summaryText = intentMeta.language === 'hi'
-          ? 'ठीक है। कृपया बताएं कि prescription में कौन-सी जानकारी गलत है।'
-          : 'Alright. Please let me know which information in the prescription is incorrect.';
+        const summaryText =
+          intentMeta.language === 'hi'
+            ? 'ठीक है। कृपया बताएं कि prescription में कौन-सी जानकारी गलत है।'
+            : 'Alright. Please let me know which information in the prescription is incorrect.';
 
         return {
           responseType: 'text',
@@ -416,7 +1042,10 @@ export class AiOrchestratorService implements IAiOrchestrator {
 
     // A low-confidence or unsupported provider result is a patient-facing
     // triage clarification, never an implicit route to a broad knowledge agent.
-    if (intentMeta.intent === IntentType.UNKNOWN || intentMeta.confidence < 0.65) {
+    if (
+      intentMeta.intent === IntentType.UNKNOWN ||
+      intentMeta.confidence < 0.65
+    ) {
       const content = this.triageContent(intentMeta.language);
       await this.auditService.logEvent({
         tenantId: identity.tenantId,
@@ -426,9 +1055,19 @@ export class AiOrchestratorService implements IAiOrchestrator {
         action: 'ai_intent_triage_requested',
         entityName: 'turn',
         entityId: sessionId,
-        details: { confidence: intentMeta.confidence, classifiedIntent: intentMeta.intent },
+        details: {
+          confidence: intentMeta.confidence,
+          classifiedIntent: intentMeta.intent,
+        },
       });
-      return { responseType: 'text', content, intent: IntentType.UNKNOWN, selectedAgent: 'triage', safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
+      return {
+        responseType: 'text',
+        content,
+        intent: IntentType.UNKNOWN,
+        selectedAgent: 'triage',
+        safetyStatus: 'SAFE',
+        latencyMs: Date.now() - startTime,
+      };
     }
 
     // ─── Step 3: Agent Routing ──────────────────────────────────────────────
@@ -438,16 +1077,32 @@ export class AiOrchestratorService implements IAiOrchestrator {
     // clinical interpretation to generate, so it must not consume Gemini quota.
     // SafetyGate has already run above and therefore always retains precedence.
     if (intentMeta.intent === IntentType.TELECONSULTATION_QUERY) {
-      const agentResult = await selectedAgent.process({ sessionId, inputText: resolvedInputText, intentMetadata: intentMeta, correlationId });
-      const content = typeof agentResult.content === 'object' ? agentResult.content as Record<string, any> : { summary: String(agentResult.content) };
-      return { responseType: agentResult.responseType, content, intent: intentMeta.intent, selectedAgent: selectedAgent.agentId, safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
+      const agentResult = await selectedAgent.process({
+        sessionId,
+        inputText: resolvedInputText,
+        intentMetadata: intentMeta,
+        correlationId,
+      });
+      const content =
+        typeof agentResult.content === 'object'
+          ? (agentResult.content as Record<string, any>)
+          : { summary: String(agentResult.content) };
+      return {
+        responseType: agentResult.responseType,
+        content,
+        intent: intentMeta.intent,
+        selectedAgent: selectedAgent.agentId,
+        safetyStatus: 'SAFE',
+        latencyMs: Date.now() - startTime,
+      };
     }
 
     // ─── Step 3: Fetch Clinical Context (If Required) ────────────────────────
     let clinicalContext: ClinicalContext | null = null;
     let knowledgeSources: any[] = [];
     let knowledgePrompt = '';
-    let normalizedQuery: ReturnType<KnowledgeQueryNormalizerService['normalize']> | undefined;
+    let normalizedQuery:
+      ReturnType<KnowledgeQueryNormalizerService['normalize']> | undefined;
     let retrievalTrace: KnowledgeRetrievalResult | undefined;
     let facilityResults: Facility[] = [];
     let deterministicFacilityContent: Record<string, any> | null = null;
@@ -469,11 +1124,17 @@ export class AiOrchestratorService implements IAiOrchestrator {
         );
         let targetState: string | undefined;
         if (this.sessions && this.patientData) {
-          const session = await this.sessions.findOne({ where: { id: sessionId } });
+          const session = await this.sessions.findOne({
+            where: { id: sessionId },
+          });
           if (session) {
-            const patient = await this.patientData.getPatientByReference(session.tenantId, session.subjectAbhaRef);
+            const patient = await this.patientData.getPatientByReference(
+              session.tenantId,
+              session.subjectAbhaRef,
+            );
             if (patient?.state) {
-              if (/^himachal/i.test(patient.state)) targetState = 'HIMACHAL_PRADESH';
+              if (/^himachal/i.test(patient.state))
+                targetState = 'HIMACHAL_PRADESH';
               else if (/^haryana/i.test(patient.state)) targetState = 'HARYANA';
               else if (/^delhi/i.test(patient.state)) targetState = 'Delhi';
             }
@@ -499,9 +1160,10 @@ export class AiOrchestratorService implements IAiOrchestrator {
             // sources, rather than allowing national material to displace
             // them in vector ranking. National availability remains supplied
             // through the structured Scheme source.
-            stateMatchMode: intentMeta.schemeInformationType === 'SCHEME_AVAILABILITY'
-              ? 'EXACT'
-              : 'INCLUDING_GLOBAL',
+            stateMatchMode:
+              intentMeta.schemeInformationType === 'SCHEME_AVAILABILITY'
+                ? 'EXACT'
+                : 'INCLUDING_GLOBAL',
             district: normalizedQuery?.district,
             minRelevanceScore: 0.35,
           },
@@ -515,38 +1177,146 @@ export class AiOrchestratorService implements IAiOrchestrator {
       }
     }
 
-    // Facility discovery is a deterministic, tenant-scoped database lookup.
-    // Gemini receives only the resulting source facts to explain; it is never
-    // asked to select a hospital, infer availability, or calculate distance.
-    if (intentMeta.intent === IntentType.FACILITY_QUERY && this.facilitySearch) {
-      const location = await this.facilityLocation(sessionId, resolvedInputText, intentMeta.language);
+    // Facility discovery is tenant-scoped. Gemini extracts the requested
+    // service and interprets governed IPHS level evidence; matching against
+    // individual facility source fields and candidate ranking remain local.
+    if (
+      (intentMeta.intent === IntentType.FACILITY_QUERY ||
+        intentMeta.intent === IntentType.REFERRAL_QUERY) &&
+      (this.facilitySearch || this.facilityDirectory)
+    ) {
+      const location = await this.facilityLocation(
+        sessionId,
+        resolvedInputText,
+        intentMeta.language,
+      );
       location.state = intentMeta.requirements?.state || location.state;
-      location.district = intentMeta.requirements?.district || location.district;
+      location.district =
+        intentMeta.requirements?.district || location.district;
       // Facility constraints are extracted semantically by Gemini. We only use
       // source-backed filters; a requested service is never assumed available.
       const scheme = intentMeta.requirements?.scheme;
       const hospitalType = intentMeta.requirements?.facilityType;
+      const requestedService = intentMeta.requirements?.service;
+      const lowCostPreference =
+        intentMeta.requirements?.costPreference === 'LOW_COST';
       if (location?.state || location?.district) {
-        const results = await this.facilitySearch.searchWithSchemes(identity.tenantId, {
+        let serviceContext: FacilityServiceContext | undefined;
+        let results: FacilitySearchResult[] = [];
+        const commonFilters = {
           state: location.state,
           district: location.district,
           city: location.city,
           locality: location.locality,
           scheme,
           hospitalType,
-          speciality: intentMeta.requirements?.service,
-          limit: 5,
-        });
+          referralLevel: intentMeta.requirements?.referralLevel,
+          referralLevels:
+            intentMeta.intent === IntentType.REFERRAL_QUERY &&
+            !intentMeta.requirements?.referralLevel
+              ? (['SECONDARY', 'DISTRICT'] as Array<'SECONDARY' | 'DISTRICT'>)
+              : undefined,
+        };
+
+        if (requestedService) {
+          const iphsResolution = await this.resolveIphsLevelsForService(
+            identity.tenantId,
+            requestedService,
+            intentMeta.language,
+            location.state,
+            correlationId,
+          );
+          const explicitlyRequestedLevel = intentMeta.requirements?.iphsLevel;
+          const appropriateLevels = explicitlyRequestedLevel
+            ? iphsResolution.levels.filter(
+                (level) => level === explicitlyRequestedLevel,
+              )
+            : iphsResolution.levels;
+          serviceContext = {
+            requestedService,
+            appropriateIphsLevels: appropriateLevels,
+            lowCostPreference,
+            matchedSourceValues: [],
+            iphsSources: iphsResolution.sources,
+            iphsEvidenceStatus: iphsResolution.evidenceStatus,
+          };
+
+          if (appropriateLevels.length) {
+            // Service-specific recommendations are intentionally resolved
+            // against the read-only NHA directory, never DB facilities or
+            // facility_iphs_overlays. The IPHS result selects the level; this
+            // directory only identifies real facilities at that level.
+            const candidates = this.directoryFacilityResults(
+              this.facilityDirectory?.find({
+                state: location.state,
+                district: location.district,
+                ownership: hospitalType,
+                preferOwnership: lowCostPreference ? 'PUBLIC' : undefined,
+                scheme,
+                iphsLevels: appropriateLevels,
+                limit: 50,
+              }) || [],
+            );
+            const sourceValues = collectSourceBackedServiceValues(candidates);
+            const matchedSourceValues = matchSourceBackedServiceValues(
+              [
+                requestedService,
+                ...(intentMeta.requirements?.serviceAliases || []),
+              ],
+              sourceValues,
+            );
+            serviceContext.matchedSourceValues = matchedSourceValues;
+            const sourceFiltered = filterBySourceBackedServiceValues(
+              candidates,
+              matchedSourceValues,
+            );
+            results = (sourceFiltered.length ? sourceFiltered : candidates).slice(0, 5);
+          }
+        } else if (this.facilitySearch) {
+          results = await this.facilitySearch.searchWithSchemes(
+            identity.tenantId,
+            {
+              ...commonFilters,
+              iphsLevel: intentMeta.requirements?.iphsLevel,
+              limit: 5,
+            },
+          );
+        }
         facilityResults = results.map(({ facility }) => facility);
-        deterministicFacilityContent = this.facilityContent(results, location, intentMeta.language, scheme);
+        deterministicFacilityContent = this.facilityContent(
+          results,
+          location,
+          intentMeta.language,
+          scheme,
+          false,
+          serviceContext,
+        );
       } else {
-        const summary = intentMeta.language === 'hi' ? 'आप किस शहर या जिले में अस्पताल ढूंढ रहे हैं?' : 'Which city or district are you looking for a hospital in?';
-        deterministicFacilityContent = { summary, [intentMeta.language]: summary, cards: [], facility_results: [], knowledge_sources: [] };
+        const summary =
+          intentMeta.language === 'hi'
+            ? 'आप किस शहर या जिले में अस्पताल ढूंढ रहे हैं?'
+            : 'Which city or district are you looking for a hospital in?';
+        deterministicFacilityContent = {
+          summary,
+          [intentMeta.language]: summary,
+          cards: [],
+          facility_results: [],
+          knowledge_sources: [],
+        };
       }
     }
 
-    if (intentMeta.intent === IntentType.GOVERNMENT_SCHEME_QUERY && this.schemeService) {
-      const location = normalizedQuery || this.knowledgeQueryNormalizer?.normalize(resolvedInputText, intentMeta.language, intentMeta.intent);
+    if (
+      intentMeta.intent === IntentType.GOVERNMENT_SCHEME_QUERY &&
+      this.schemeService
+    ) {
+      const location =
+        normalizedQuery ||
+        this.knowledgeQueryNormalizer?.normalize(
+          resolvedInputText,
+          intentMeta.language,
+          intentMeta.intent,
+        );
       // The classifier's optional scheme constraint is semantic (and can be
       // resolved from retained context). It prevents unrelated active schemes
       // from being supplied as structured generation evidence.
@@ -554,14 +1324,25 @@ export class AiOrchestratorService implements IAiOrchestrator {
         state: location?.state,
         // An availability request is an inventory of every authorised scheme
         // for the state; never let a retained or inferred scheme name narrow it.
-        query: intentMeta.schemeInformationType === 'SCHEME_AVAILABILITY'
-          ? undefined
-          : intentMeta.requirements?.scheme,
+        query:
+          intentMeta.schemeInformationType === 'SCHEME_AVAILABILITY'
+            ? undefined
+            : intentMeta.requirements?.scheme,
       });
       if (schemeResults.length) {
-        const facts = this.scopedSchemeFacts(schemeResults, intentMeta.schemeInformationType);
+        const facts = this.scopedSchemeFacts(
+          schemeResults,
+          intentMeta.schemeInformationType,
+        );
         knowledgePrompt += `\n\n[DETERMINISTIC SCHEME FACTS]\n${facts}`;
-        knowledgeSources.push(...schemeResults.map((scheme) => ({ title: scheme.name, source: 'Structured scheme source', version: scheme.sourceVersion || 'Unknown', documentId: scheme.sourceDocumentId })));
+        knowledgeSources.push(
+          ...schemeResults.map((scheme) => ({
+            title: scheme.name,
+            source: 'Structured scheme source',
+            version: scheme.sourceVersion || 'Unknown',
+            documentId: scheme.sourceDocumentId,
+          })),
+        );
       }
     }
 
@@ -645,17 +1426,23 @@ STRICT BOUNDARIES & GROUNDING POLICY:
 
     // Inject uploaded prescription context if available
     if (latestPrescription && latestPrescription.medications?.length) {
-      const rxMeds = latestPrescription.medications.map((m: any) => {
-        const name = m.medicationName || m.normalizedName || 'Unknown';
-        const generic = m.genericName || m.normalizedName || '';
-        const strength = m.strength || m.dosage || '';
-        const freq = m.frequency || '';
-        const duration = m.duration || '';
-        const instructions = m.instructions || '';
-        return `- ${name}${generic && generic !== name ? ` (${generic})` : ''}${strength ? `, ${strength}` : ''}${freq ? `, ${freq}` : ''}${duration ? `, ${duration}` : ''}${instructions ? `, ${instructions}` : ''}`;
-      }).join('\n');
+      const rxMeds = latestPrescription.medications
+        .map((m: any) => {
+          const name = m.medicationName || m.normalizedName || 'Unknown';
+          const generic = m.genericName || m.normalizedName || '';
+          const strength = m.strength || m.dosage || '';
+          const freq = m.frequency || '';
+          const duration = m.duration || '';
+          const instructions = m.instructions || '';
+          return `- ${name}${generic && generic !== name ? ` (${generic})` : ''}${strength ? `, ${strength}` : ''}${freq ? `, ${freq}` : ''}${duration ? `, ${duration}` : ''}${instructions ? `, ${instructions}` : ''}`;
+        })
+        .join('\n');
 
-      const rxTests = latestPrescription.investigations?.map((t: any) => `- ${t.rawName || t.normalizedName || 'Unknown'}`).filter(Boolean).join('\n') || '';
+      const rxTests =
+        latestPrescription.investigations
+          ?.map((t: any) => `- ${t.rawName || t.normalizedName || 'Unknown'}`)
+          .filter(Boolean)
+          .join('\n') || '';
 
       const rxBlock = `\n\n[UPLOADED PRESCRIPTION CONTEXT]
 Status: ${latestPrescription.extractionStatus}
@@ -690,7 +1477,10 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
         intentMeta.language === 'hi'
           ? 'कृपया अपनी दवा रोकने या खुराक बदलने से पहले अपने डॉक्टर या फार्मासिस्ट से परामर्श लें।'
           : 'Please consult your prescribing clinician or pharmacist before stopping or changing any medication dosage.';
-      contentObj = { summary: aiResultText, [intentMeta.language]: aiResultText };
+      contentObj = {
+        summary: aiResultText,
+        [intentMeta.language]: aiResultText,
+      };
     } else {
       try {
         this.logger.log(
@@ -708,7 +1498,13 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
         let generated = this.responseFormatter?.normalizeGeneratedContent(
           aiResponse.json,
         );
-        if (generated && !this.responseFormatter?.meetsResponseRequirements(generated, intentMeta.responseRequirements || [])) {
+        if (
+          generated &&
+          !this.responseFormatter?.meetsResponseRequirements(
+            generated,
+            intentMeta.responseRequirements || [],
+          )
+        ) {
           generated = null;
         }
         if (!generated) {
@@ -727,7 +1523,13 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
           generated = this.responseFormatter?.normalizeGeneratedContent(
             retryResponse.json,
           );
-          if (generated && !this.responseFormatter?.meetsResponseRequirements(generated, intentMeta.responseRequirements || [])) {
+          if (
+            generated &&
+            !this.responseFormatter?.meetsResponseRequirements(
+              generated,
+              intentMeta.responseRequirements || [],
+            )
+          ) {
             generated = null;
           }
           if (!generated) {
@@ -739,12 +1541,21 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
         if (!generated) {
           throw new Error('PATIENT_RESPONSE_CONTRACT_INVALID');
         }
-        aiResultText = this.responseFormatter?.patientFacingText(generated) || generated.summary;
-        contentObj = { ...generated, patient_text: aiResultText, [intentMeta.language]: aiResultText };
+        aiResultText =
+          this.responseFormatter?.patientFacingText(generated) ||
+          generated.summary;
+        contentObj = {
+          ...generated,
+          patient_text: aiResultText,
+          [intentMeta.language]: aiResultText,
+        };
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
         const errStack = err instanceof Error ? err.stack : '';
-        this.logger.error(`AI Provider execution failed correlationId=${correlationId} intent=${intentMeta.intent} layer=ai_orchestrator errorType=${err instanceof Error ? err.name : 'Unknown'} errorMessage=${errMsg}`, errStack);
+        this.logger.error(
+          `AI Provider execution failed correlationId=${correlationId} intent=${intentMeta.intent} layer=ai_orchestrator errorType=${err instanceof Error ? err.name : 'Unknown'} errorMessage=${errMsg}`,
+          errStack,
+        );
         throw new ServiceUnavailableException('PATIENT_RESPONSE_UNAVAILABLE');
       }
     }
@@ -866,13 +1677,24 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
     if (retrievalTrace && this.ragEvaluation) {
       try {
         await this.ragEvaluation.recordRetrieval({
-          tenantId: identity.tenantId, query: inputText, normalizedQuery: normalizedQuery?.query,
-          intent: intentMeta.intent, agent: selectedAgent.agentId, language: intentMeta.language,
-          domain: AgentKnowledgeMapper.getTargetDomain(selectedAgent.agentId, intentMeta.intent), state: normalizedQuery?.state,
-          response: finalOutputText, result: retrievalTrace,
+          tenantId: identity.tenantId,
+          query: inputText,
+          normalizedQuery: normalizedQuery?.query,
+          intent: intentMeta.intent,
+          agent: selectedAgent.agentId,
+          language: intentMeta.language,
+          domain: AgentKnowledgeMapper.getTargetDomain(
+            selectedAgent.agentId,
+            intentMeta.intent,
+          ),
+          state: normalizedQuery?.state,
+          response: finalOutputText,
+          result: retrievalTrace,
         });
       } catch (error: unknown) {
-        this.logger.warn(`RAG evaluation trace failed: ${error instanceof Error ? error.message : String(error)}`);
+        this.logger.warn(
+          `RAG evaluation trace failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     }
 

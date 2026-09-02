@@ -46,8 +46,13 @@ export interface AiClassifyResult {
     state?: string;
     district?: string;
     facilityType?: 'PUBLIC' | 'PRIVATE';
+    costPreference?: 'LOW_COST';
+    iphsLevel?: 'HWC_SHC' | 'HWC_PHC' | 'CHC' | 'SDH' | 'DH';
+    referralLevel?: 'PRIMARY' | 'SECONDARY' | 'DISTRICT';
     scheme?: string;
     service?: string;
+    /** Bounded, unambiguous names/acronyms for the explicitly requested service. */
+    serviceAliases?: string[];
     /** A bounded, semantic plan. Values are validated before any record access. */
     recordCategories?: string[];
     knowledgeRequired?: boolean;

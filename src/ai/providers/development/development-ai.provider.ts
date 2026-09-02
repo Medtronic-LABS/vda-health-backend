@@ -164,6 +164,13 @@ export class DevelopmentAiProvider implements IAiProvider {
     ) {
       selected = candidates.find((c) => c.includes('ALLERGY')) || selected;
     } else if (
+      lower.includes('hospital') ||
+      lower.includes('facility') ||
+      lower.includes('अस्पताल') ||
+      /\b(?:phc|chc|sdh|dh|shc|hwc)\b/.test(lower)
+    ) {
+      selected = candidates.find((c) => c.includes('FACILITY')) || selected;
+    } else if (
       lower.includes('नमस्ते') ||
       lower.includes('hello') ||
       lower.includes('hi')
@@ -171,11 +178,37 @@ export class DevelopmentAiProvider implements IAiProvider {
       selected = candidates.find((c) => c.includes('GREETING')) || selected;
     }
 
+    const iphsLevel = /\b(?:shc|hwc|uhwc)\b/.test(lower)
+      ? ('HWC_SHC' as const)
+      : /\b(?:phc|uphc)\b/.test(lower)
+        ? ('HWC_PHC' as const)
+        : /\bchc\b/.test(lower)
+          ? ('CHC' as const)
+          : /\bsdh\b/.test(lower)
+            ? ('SDH' as const)
+            : /\b(?:dh|district hospital)\b/.test(lower)
+              ? ('DH' as const)
+              : undefined;
+
     return {
       category: selected,
       confidence: 0.95,
       explanation:
         'Deterministic rule-based classification in development AI provider',
+      requirements: selected.includes('FACILITY')
+        ? {
+            facilityType: /\b(?:government|public|सरकारी)\b/.test(lower)
+              ? 'PUBLIC'
+              : undefined,
+            costPreference:
+              /\b(?:low\s*cost|affordable|free|cheap|less\s*(?:money|cost|expense)|kam\s*(?:paise|paiso|kharch)|sasta)\b|कम\s*(?:पैसे|पैसो|खर्च)|सस्ता|कम\s*खर्च/i.test(
+                lower,
+              )
+                ? 'LOW_COST'
+                : undefined,
+            iphsLevel,
+          }
+        : undefined,
       provider: 'development',
     };
   }
