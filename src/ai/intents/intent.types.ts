@@ -1,5 +1,21 @@
 import { HealthRecordCategory } from '../../abdm/interfaces/health-record-service.interface';
 
+/**
+ * Semantic subject of a government-scheme question.  This is classified by the
+ * AI provider and only constrains response generation; it never routes by a
+ * scheme name or changes governed retrieval.
+ */
+export type SchemeInformationType =
+  | 'SCHEME_OVERVIEW'
+  | 'SCHEME_AVAILABILITY'
+  | 'SCHEME_ELIGIBILITY'
+  | 'SCHEME_DOCUMENTS'
+  | 'SCHEME_APPLICATION'
+  | 'SCHEME_BENEFITS'
+  | 'SCHEME_FACILITY'
+  | 'SCHEME_COMPARISON'
+  | 'SCHEME_UNKNOWN';
+
 export enum IntentType {
   ADHERENCE_QUERY = 'ADHERENCE_QUERY',
   MEDICATION_QUERY = 'MEDICATION_QUERY',
@@ -34,8 +50,10 @@ export interface IntentMetadata {
     recordCategories?: string[];
     knowledgeRequired?: boolean;
     responseRequirements?: string[];
+    schemeInformationType?: SchemeInformationType;
   };
   /** Validated semantic plan; never populated from a keyword rule. */
   knowledgeRequired?: boolean;
   responseRequirements?: string[];
+  schemeInformationType?: SchemeInformationType;
 }

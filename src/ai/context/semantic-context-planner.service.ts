@@ -1,18 +1,20 @@
 import { Injectable } from '@nestjs/common';
 import { HealthRecordCategory } from '../../abdm/interfaces/health-record-service.interface';
-import { IntentType } from '../intents/intent.types';
+import { IntentType, SchemeInformationType } from '../intents/intent.types';
 
 export interface SemanticContextPlanInput {
   intent: IntentType;
   requestedCategories?: string[];
   knowledgeRequired?: boolean;
   responseRequirements?: string[];
+  schemeInformationType?: SchemeInformationType;
 }
 
 export interface SemanticContextPlan {
   categories: HealthRecordCategory[];
   knowledgeRequired: boolean;
   responseRequirements: string[];
+  schemeInformationType?: SchemeInformationType;
 }
 
 /**
@@ -48,10 +50,19 @@ export class SemanticContextPlannerService {
     const responseRequirements = (input.responseRequirements || [])
       .filter((item) => ['GROUNDED_GUIDANCE', 'ALL_RECORD_ITEMS', 'VALUE_AND_UNCERTAINTY', 'CARE_PLAN_ITEMS', 'PRESCRIPTION_DOCUMENT_CONTEXT'].includes(item))
       .slice(0, 3);
+    const schemeInformationType = input.intent === IntentType.GOVERNMENT_SCHEME_QUERY
+      && [
+        'SCHEME_OVERVIEW', 'SCHEME_AVAILABILITY', 'SCHEME_ELIGIBILITY',
+        'SCHEME_DOCUMENTS', 'SCHEME_APPLICATION', 'SCHEME_BENEFITS',
+        'SCHEME_FACILITY', 'SCHEME_COMPARISON', 'SCHEME_UNKNOWN',
+      ].includes(input.schemeInformationType || '')
+      ? input.schemeInformationType
+      : undefined;
     return {
       categories,
       knowledgeRequired: input.knowledgeRequired === true || input.intent === IntentType.GENERAL_HEALTH_QUERY || input.intent === IntentType.GOVERNMENT_SCHEME_QUERY,
       responseRequirements,
+      schemeInformationType,
     };
   }
 }

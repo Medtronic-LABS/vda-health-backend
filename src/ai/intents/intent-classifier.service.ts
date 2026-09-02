@@ -1,6 +1,6 @@
 import { Injectable, Logger, Inject } from '@nestjs/common';
 import { IIntentClassifier } from './intent-classifier.interface';
-import { IntentType, IntentMetadata } from './intent.types';
+import { IntentType, IntentMetadata, SchemeInformationType } from './intent.types';
 import { IAiProvider } from '../interfaces/ai-provider.interface';
 import { ILanguageProvider } from '../interfaces/language-provider.interface';
 import { IntentToRecordCategoryMapper } from '../../abdm/mappers/intent-to-record-category.mapper';
@@ -44,6 +44,7 @@ export class IntentClassifierService implements IIntentClassifier {
     let semanticLanguage: 'hi' | 'en' | undefined;
     let knowledgeRequired: boolean | undefined;
     let responseRequirements: string[] | undefined;
+    let schemeInformationType: SchemeInformationType | undefined;
 
     try {
       const candidates = Object.values(IntentType);
@@ -60,6 +61,7 @@ export class IntentClassifierService implements IIntentClassifier {
         semanticLanguage = aiResult.language;
         knowledgeRequired = aiResult.requirements?.knowledgeRequired;
         responseRequirements = aiResult.requirements?.responseRequirements;
+        schemeInformationType = aiResult.requirements?.schemeInformationType as SchemeInformationType | undefined;
       }
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -80,11 +82,13 @@ export class IntentClassifierService implements IIntentClassifier {
       requestedCategories: aiResultRequirements(requirements),
       knowledgeRequired,
       responseRequirements,
+      schemeInformationType,
     });
     metadata.requiredRecordCategories = plan.categories;
     metadata.requiresClinicalContext = plan.categories.length > 0;
     metadata.knowledgeRequired = plan.knowledgeRequired;
     metadata.responseRequirements = plan.responseRequirements;
+    metadata.schemeInformationType = plan.schemeInformationType;
 
     // Audit Stage 2 classification
     await this.auditService.logEvent({

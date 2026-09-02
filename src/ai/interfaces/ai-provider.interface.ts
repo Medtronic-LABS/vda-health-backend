@@ -52,6 +52,7 @@ export interface AiClassifyResult {
     recordCategories?: string[];
     knowledgeRequired?: boolean;
     responseRequirements?: string[];
+    schemeInformationType?: SchemeInformationType;
   };
   /** The language inferred from the current turn and its retained conversation. */
   language?: 'hi' | 'en';
@@ -76,3 +77,4 @@ export interface IAiProvider {
 
   healthCheck(): Promise<ProviderHealth>;
 }
+import type { SchemeInformationType } from '../intents/intent.types';

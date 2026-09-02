@@ -115,7 +115,7 @@ export class KnowledgeRetrievalService implements IKnowledgeRetrievalService {
       addFilter('domain', options?.domain);
       addFilter('category', options?.category);
       addFilter('role', options?.role, true);
-      addFilter('state', options?.state, true);
+      addFilter('state', options?.state, options?.stateMatchMode !== 'EXACT');
       addFilter('district', options?.district, true);
       // Language is a preference, not an exclusion. The governed corpus can be
       // English while a patient asks in Hindi; an exact filter would hide all

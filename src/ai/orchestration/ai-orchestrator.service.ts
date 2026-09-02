@@ -20,7 +20,7 @@ import { ConversationResponseFormatter } from '../../conversations/formatters/co
 import { KnowledgeRetrievalService } from '../../knowledge/services/knowledge-retrieval.service';
 import { KnowledgeQueryNormalizerService } from '../../knowledge/services/knowledge-query-normalizer.service';
 import { AgentKnowledgeMapper } from '../agents/agent-knowledge-mapper';
-import { IntentType } from '../intents/intent.types';
+import { IntentType, SchemeInformationType } from '../intents/intent.types';
 import { Facility, } from '../../database/entities/facility.entity';
 import { FacilitySearchService } from '../../facilities/facility-search.service';
 import { Scheme } from '../../database/entities/scheme.entity';
@@ -120,6 +120,58 @@ export class AiOrchestratorService implements IAiOrchestrator {
       facility_results: results.map(({ facility, schemes }) => ({ name: facility.name, state: facility.state, district: facility.district, locality: facility.locality, hospitalType: facility.hospitalType, schemes, specialityCodes: facility.specialityCodes, contactNumber: facility.contactNumber, emergencyAvailable: facility.emergencyAvailable, distanceKm: null, source: facility.sourceVersion || 'Structured facility source' })),
       knowledge_sources: results.map(({ facility }) => ({ title: facility.name, source: 'Structured facility source', version: facility.sourceVersion || 'Unknown' })),
     };
+  }
+
+  /**
+   * Gives the response generator only the governed structured fields relevant
+   * to the semantic subject of a scheme question. Retrieval remains unchanged;
+   * this prevents a broad source record from inviting an all-in-one answer.
+   */
+  private scopedSchemeFacts(schemes: Scheme[], scope?: SchemeInformationType): string {
+    // Availability is an inventory, so every source-backed matching scheme is
+    // supplied. Other subjects remain bounded to keep an individual answer
+    // concise without altering the underlying retrieval set.
+    const relevantSchemes = scope === 'SCHEME_AVAILABILITY' ? schemes : schemes.slice(0, 3);
+    return relevantSchemes.map((scheme) => {
+      const facts = [
+        `Scheme: ${scheme.name}`,
+        `Scope: ${scheme.geographyScope}${scheme.state ? ` (${scheme.state})` : ''}`,
+      ];
+      switch (scope) {
+        case 'SCHEME_OVERVIEW':
+          if (scheme.description) facts.push(`Overview: ${scheme.description}`);
+          break;
+        case 'SCHEME_AVAILABILITY':
+          break;
+        case 'SCHEME_ELIGIBILITY':
+          if (scheme.eligibilityCriteria) facts.push(`Eligibility criteria: ${scheme.eligibilityCriteria}`);
+          facts.push('Personal eligibility status: ELIGIBILITY_CHECK_REQUIRED. Do not say the patient is eligible.');
+          break;
+        case 'SCHEME_DOCUMENTS':
+          facts.push(scheme.requiredDocuments?.length
+            ? `Required documents: ${scheme.requiredDocuments.join(', ')}`
+            : 'Required documents: not confirmed by this structured source');
+          break;
+        case 'SCHEME_APPLICATION':
+          if (scheme.applicationProcess) facts.push(`Application process: ${scheme.applicationProcess}`);
+          if (scheme.officialUrl) facts.push(`Official route: ${scheme.officialUrl}`);
+          if (scheme.helpline) facts.push(`Helpline: ${scheme.helpline}`);
+          break;
+        case 'SCHEME_BENEFITS':
+          if (scheme.benefitsDescription) facts.push(`Benefits: ${scheme.benefitsDescription}`);
+          if (scheme.coverageInformation) facts.push(`Coverage: ${scheme.coverageInformation}`);
+          break;
+        case 'SCHEME_COMPARISON':
+          if (scheme.description) facts.push(`Overview: ${scheme.description}`);
+          break;
+        // SCHEME_FACILITY and SCHEME_UNKNOWN deliberately add no unrelated
+        // scheme facts. Facility facts are owned by FacilityAgent, and an
+        // unknown scheme must not be silently substituted with a known one.
+        default:
+          break;
+      }
+      return facts.join(' | ');
+    }).join('\n');
   }
 
   async orchestrateTurn(
@@ -443,6 +495,13 @@ export class AiOrchestratorService implements IAiOrchestrator {
             language: intentMeta.language,
             tenantId: identity.tenantId,
             state: normalizedQuery?.state || targetState,
+            // State-availability questions must discover state-authorised
+            // sources, rather than allowing national material to displace
+            // them in vector ranking. National availability remains supplied
+            // through the structured Scheme source.
+            stateMatchMode: intentMeta.schemeInformationType === 'SCHEME_AVAILABILITY'
+              ? 'EXACT'
+              : 'INCLUDING_GLOBAL',
             district: normalizedQuery?.district,
             minRelevanceScore: 0.35,
           },
@@ -488,17 +547,20 @@ export class AiOrchestratorService implements IAiOrchestrator {
 
     if (intentMeta.intent === IntentType.GOVERNMENT_SCHEME_QUERY && this.schemeService) {
       const location = normalizedQuery || this.knowledgeQueryNormalizer?.normalize(resolvedInputText, intentMeta.language, intentMeta.intent);
-      schemeResults = await this.schemeService.list(identity.tenantId, { state: location?.state });
+      // The classifier's optional scheme constraint is semantic (and can be
+      // resolved from retained context). It prevents unrelated active schemes
+      // from being supplied as structured generation evidence.
+      schemeResults = await this.schemeService.list(identity.tenantId, {
+        state: location?.state,
+        // An availability request is an inventory of every authorised scheme
+        // for the state; never let a retained or inferred scheme name narrow it.
+        query: intentMeta.schemeInformationType === 'SCHEME_AVAILABILITY'
+          ? undefined
+          : intentMeta.requirements?.scheme,
+      });
       if (schemeResults.length) {
-        const facts = schemeResults.slice(0, 3).map((scheme) => [
-          `Scheme: ${scheme.name}`,
-          `Scope: ${scheme.geographyScope}${scheme.state ? ` (${scheme.state})` : ''}`,
-          scheme.benefitsDescription ? `Benefits: ${scheme.benefitsDescription}` : '',
-          scheme.coverageInformation ? `Coverage: ${scheme.coverageInformation}` : '',
-          scheme.requiredDocuments?.length ? `Required documents: ${scheme.requiredDocuments.join(', ')}` : 'Required documents: unknown in source',
-          'Eligibility status: ELIGIBILITY_CHECK_REQUIRED. Do not say the patient is eligible.',
-        ].filter(Boolean).join(' | '));
-        knowledgePrompt += `\n\n[DETERMINISTIC SCHEME FACTS]\n${facts.join('\n')}`;
+        const facts = this.scopedSchemeFacts(schemeResults, intentMeta.schemeInformationType);
+        knowledgePrompt += `\n\n[DETERMINISTIC SCHEME FACTS]\n${facts}`;
         knowledgeSources.push(...schemeResults.map((scheme) => ({ title: scheme.name, source: 'Structured scheme source', version: scheme.sourceVersion || 'Unknown', documentId: scheme.sourceDocumentId })));
       }
     }
@@ -574,7 +636,7 @@ STRICT BOUNDARIES & GROUNDING POLICY:
 6. Preserving Units & Numbers: When discussing laboratory values, preserve the exact authorized numbers and units.
 7. Answer the patient's actual question completely. Use simple ${intentMeta.language.startsWith('hi') ? 'Hindi or Hinglish, matching the patient' : 'English'}. Lead with the most important answer. When authorised record facts are supplied, state every relevant supplied record item rather than saying only that records exist. When governed knowledge contains actionable guidance, include the supported steps in sections or bullets; do not return an introductory sentence without the requested information. Do not repeat the question, add generic disclaimers, mention internal systems, or recommend medication changes.
 8. Use only supplied authorized ClinicalContext, uploaded prescription context, and retrieved knowledge. If a location has no exact facility match, say so; do not broaden it to a different district.
-9. Scheme Information: Use only the authorized structured source or retrieved knowledge supplied in this request. Clearly distinguish scheme availability from personal eligibility. Do not assert eligibility or invent documents, benefits, or application procedures when the supplied evidence does not support them.
+9. Scheme Information: Use only the authorized structured source or retrieved knowledge supplied in this request. Clearly distinguish scheme availability from personal eligibility. Do not assert eligibility or invent documents, benefits, or application procedures when the supplied evidence does not support them. For a GOVERNMENT_SCHEME_QUERY, the semantic subject is ${intentMeta.schemeInformationType || 'SCHEME_UNKNOWN'}. Answer only that subject completely and concisely. Sections, cards, and actions are optional: include only those directly relevant to this subject. Never automatically add other scheme subjects (overview, eligibility, documents, application, benefits, or facilities). If the subject is SCHEME_UNKNOWN or the requested scheme is not supported by the supplied authorised evidence, say that the available authorised information does not confirm it; never substitute another scheme.
 10. A source interpretation marked SOURCE_UNVERIFIED is not a clinical conclusion. Never call it normal, high, low, or abnormal solely from that label. Use only a governed interpretation or authorised knowledge; otherwise state the recorded value without diagnosing it.
 11. Semantic response requirements for this turn: ${intentMeta.responseRequirements?.join(', ') || 'STANDARD'}. If GROUNDED_GUIDANCE is required, provide at least two useful evidence-backed steps in sections/bullets. If ALL_RECORD_ITEMS is required, include every relevant authorised record item. If VALUE_AND_UNCERTAINTY is required, preserve the authorised value/unit and say when a governed interpretation is unavailable. If CARE_PLAN_ITEMS is required, include the actual care-plan activities or say no care plan is available.
 12. Return exactly one valid JSON object and nothing else. Use this contract: {"summary":"short patient-facing answer","sections":[{"title":"optional","body":"optional","bullets":["optional"]}],"cards":[{"title":"optional","value":"optional","subtitle":"optional"}],"actions":[{"label":"optional","action":"optional"}]}. "summary" is required. Default response must be under 120 words, with no more than 3 sections, 5 cards, or 2 actions. Do not use Markdown, code fences, headings, sources, domain labels, or internal implementation terms.`;

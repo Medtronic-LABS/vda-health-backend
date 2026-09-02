@@ -8,6 +8,7 @@ import {
   AiClassifyResult,
   ProviderHealth,
 } from '../../interfaces/ai-provider.interface';
+import type { SchemeInformationType } from '../../intents/intent.types';
 
 @Injectable()
 export class GeminiProvider implements IAiProvider {
@@ -254,8 +255,8 @@ export class GeminiProvider implements IAiProvider {
     const candidates = options?.candidateCategories || [];
     const prompt = `You classify one patient message for an NCD-focused VDA. Use the current query and privacy-sanitized recent conversation to resolve references and follow-ups semantically. Select exactly ONE supported capability from: [${candidates.join(
       ', ',
-    )}]. Do not give medical advice or generate a patient answer. If genuinely ambiguous or outside those capabilities, select UNKNOWN with low confidence. Infer language "hi" for Hindi/Hinglish and "en" for English. Choose only the minimum patient-record categories needed from MEDICATION, PRESCRIPTION, DIAGNOSIS, LAB_REPORT, INVESTIGATION, ALLERGY, CARE_PLAN; never request every category. Set knowledgeRequired only when governed knowledge is needed beyond patient records. For FACILITY_QUERY, extract only expressed or retained constraints; never infer service/capability. responseRequirements may only contain GROUNDED_GUIDANCE, ALL_RECORD_ITEMS, VALUE_AND_UNCERTAINTY, CARE_PLAN_ITEMS, PRESCRIPTION_DOCUMENT_CONTEXT.
-Output JSON only: {"category":"<SELECTED_CATEGORY>","confidence":<NUMBER_0_TO_1>,"language":"hi|en","explanation":"<SHORT_REASON>","requirements":{"state":null,"district":null,"facilityType":null,"scheme":null,"service":null,"recordCategories":[],"knowledgeRequired":false,"responseRequirements":[]}}.
+    )}]. Do not give medical advice or generate a patient answer. If genuinely ambiguous or outside those capabilities, select UNKNOWN with low confidence. Infer language "hi" for Hindi/Hinglish and "en" for English. Choose only the minimum patient-record categories needed from MEDICATION, PRESCRIPTION, DIAGNOSIS, LAB_REPORT, INVESTIGATION, ALLERGY, CARE_PLAN; never request every category. Set knowledgeRequired only when governed knowledge is needed beyond patient records. For FACILITY_QUERY, extract only expressed or retained constraints; never infer service/capability. For GOVERNMENT_SCHEME_QUERY, classify the requested information semantically as exactly one of SCHEME_OVERVIEW, SCHEME_AVAILABILITY, SCHEME_ELIGIBILITY, SCHEME_DOCUMENTS, SCHEME_APPLICATION, SCHEME_BENEFITS, SCHEME_FACILITY, SCHEME_COMPARISON, or SCHEME_UNKNOWN. Resolve references such as "iske" from the retained conversation; do not infer a scheme name that was not stated or retained. responseRequirements may only contain GROUNDED_GUIDANCE, ALL_RECORD_ITEMS, VALUE_AND_UNCERTAINTY, CARE_PLAN_ITEMS, PRESCRIPTION_DOCUMENT_CONTEXT.
+Output JSON only: {"category":"<SELECTED_CATEGORY>","confidence":<NUMBER_0_TO_1>,"language":"hi|en","explanation":"<SHORT_REASON>","requirements":{"state":null,"district":null,"facilityType":null,"scheme":null,"service":null,"recordCategories":[],"knowledgeRequired":false,"responseRequirements":[],"schemeInformationType":null}}.
 
 Recent conversation context (may be empty):
 ${options?.conversationContext || '(none)'}
@@ -289,6 +290,7 @@ Current query: "${text}"`;
     const raw = value as Record<string, unknown>;
     const stringValue = (key: string) => typeof raw[key] === 'string' && raw[key].trim() ? raw[key].trim().slice(0, 120) : undefined;
     const facilityType = stringValue('facilityType')?.toUpperCase();
+    const schemeInformationType = stringValue('schemeInformationType');
     return {
       state: stringValue('state'),
       district: stringValue('district'),
@@ -298,6 +300,13 @@ Current query: "${text}"`;
       recordCategories: Array.isArray(raw['recordCategories']) ? raw['recordCategories'].filter((entry): entry is string => typeof entry === 'string').slice(0, 4) : undefined,
       knowledgeRequired: typeof raw['knowledgeRequired'] === 'boolean' ? raw['knowledgeRequired'] : undefined,
       responseRequirements: Array.isArray(raw['responseRequirements']) ? raw['responseRequirements'].filter((entry): entry is string => typeof entry === 'string').slice(0, 3) : undefined,
+      schemeInformationType: [
+        'SCHEME_OVERVIEW', 'SCHEME_AVAILABILITY', 'SCHEME_ELIGIBILITY',
+        'SCHEME_DOCUMENTS', 'SCHEME_APPLICATION', 'SCHEME_BENEFITS',
+        'SCHEME_FACILITY', 'SCHEME_COMPARISON', 'SCHEME_UNKNOWN',
+      ].includes(schemeInformationType || '')
+        ? schemeInformationType as SchemeInformationType
+        : undefined,
     };
   }
 

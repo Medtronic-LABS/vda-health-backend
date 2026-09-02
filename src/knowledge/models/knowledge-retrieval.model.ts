@@ -7,6 +7,8 @@ export interface KnowledgeRetrievalOptions {
   category?: string;
   role?: string;
   state?: string;
+  /** Exact state evidence is required for a state-availability inventory. */
+  stateMatchMode?: 'INCLUDING_GLOBAL' | 'EXACT';
   district?: string;
   maxResults?: number;
   minRelevanceScore?: number;
