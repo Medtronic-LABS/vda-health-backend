@@ -1,11 +1,30 @@
-import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, IsNull, Repository } from 'typeorm';
 import { AuditService } from '../audit/audit.service';
 import { HostIdentity } from '../auth/host-identity.context';
 import { ClinicalEscalation, ClinicalEscalationOutcome, ClinicalEscalationStatus, ClinicalResponseReviewDecision } from '../database/entities/clinical-escalation.entity';
 import { ConversationTurn } from '../database/entities/conversation-turn.entity';
+import { Session } from '../database/entities/session.entity';
+import { FacilitySearchService } from '../facilities/facility-search.service';
+import { PATIENT_DATA_PROVIDER, PatientDataProvider } from '../dev/patient-data/patient-data-provider.interface';
 import { SafetyResult } from '../safety/interfaces/safety-gate.interface';
+
+const CLINICIAN_RESPONSE_WINDOW_MS = 30_000;
+
+type EmergencyFacilityOption = {
+  name: string;
+  state: string | null;
+  district: string | null;
+  city: string | null;
+  address: string | null;
+  contactNumber: string | null;
+  hospitalType: string | null;
+  schemes: string[];
+  emergencyCapabilityVerified: boolean;
+  distanceKm: number | null;
+  travelTimeMinutes: number | null;
+};
 
 @Injectable()
 export class EscalationService {
@@ -13,6 +32,13 @@ export class EscalationService {
     @InjectRepository(ClinicalEscalation) private readonly escalations: Repository<ClinicalEscalation>,
     @InjectRepository(ConversationTurn) private readonly turns: Repository<ConversationTurn>,
     private readonly auditService: AuditService,
+    @Optional()
+    @InjectRepository(Session)
+    private readonly sessions?: Repository<Session>,
+    @Optional() private readonly facilitySearch?: FacilitySearchService,
+    @Optional()
+    @Inject(PATIENT_DATA_PROVIDER)
+    private readonly patientData?: PatientDataProvider,
     @Optional() private readonly dataSource?: DataSource,
   ) {}
 
@@ -52,6 +78,41 @@ export class EscalationService {
   }
 
   /**
+   * Emergency recommendations stay inside the existing structured facility
+   * search. Patient location is resolved from the session's authorized subject
+   * reference; no location, distance, service capability, or facility fact is
+   * inferred here.
+   */
+  private async nearbyEmergencyFacilities(tenantId: string, sessionId: string): Promise<EmergencyFacilityOption[]> {
+    if (!this.sessions || !this.patientData || !this.facilitySearch) return [];
+    const session = await this.sessions.findOne({ where: { id: sessionId, tenantId } });
+    if (!session) return [];
+    const patient = await this.patientData.getPatientByReference(tenantId, session.subjectAbhaRef);
+    if (!patient?.state && !patient?.district) return [];
+    const results = await this.facilitySearch.searchWithSchemes(tenantId, {
+      state: patient.state,
+      district: patient.district,
+      emergency: true,
+      limit: 5,
+    });
+    return results.map((result) => ({
+      name: result.facility.name,
+      state: result.facility.state || null,
+      district: result.facility.district || null,
+      city: result.facility.city || null,
+      address: result.facility.address || null,
+      contactNumber: result.facility.contactNumber || null,
+      hospitalType: result.facility.hospitalType || null,
+      schemes: result.schemes,
+      emergencyCapabilityVerified:
+        result.facility.emergencyAvailable === true ||
+        result.iphsOverlay?.emergencyCapability === 'SOURCE_REPORTED_CAPABLE',
+      distanceKm: result.distanceKm,
+      travelTimeMinutes: result.travelTimeMinutes,
+    }));
+  }
+
+  /**
    * The browser may poll this state, but the server alone determines eligibility
    * from the persisted escalation timestamp. There is deliberately no provider
    * call here: the current project has no real teleconsultation integration.
@@ -60,6 +121,11 @@ export class EscalationService {
     reviewRequested: boolean;
     teleconsultationOffered: boolean;
     teleconsultationConfigured: boolean;
+    clinicalChatState: 'WAITING_FOR_CLINICIAN' | 'CLINICIAN_CONNECTED' | 'ENDED';
+    clinicianResponseDeadline: Date | null;
+    firstClinicianResponseAt: Date | null;
+    fallbackShownAt: Date | null;
+    nearbyFacilities: EmergencyFacilityOption[];
     messages: Array<{ speaker: 'PATIENT' | 'CLINICIAN'; text: string; createdAt: Date }>;
   }> {
     const escalation = await this.escalations.findOne({
@@ -67,16 +133,25 @@ export class EscalationService {
       order: { createdAt: 'DESC' },
     });
     if (!escalation) {
-      return { reviewRequested: false, teleconsultationOffered: false, teleconsultationConfigured: false, messages: [] };
+      return {
+        reviewRequested: false, teleconsultationOffered: false, teleconsultationConfigured: false,
+        clinicalChatState: 'ENDED', clinicianResponseDeadline: null, firstClinicianResponseAt: null,
+        fallbackShownAt: null, nearbyFacilities: [], messages: [],
+      };
     }
     const messages = await this.clinicalConversation(escalation);
     if (escalation.status !== 'OPEN' || escalation.clinicalConversationClosedAt) {
-      return { reviewRequested: false, teleconsultationOffered: false, teleconsultationConfigured: false, messages };
+      return {
+        reviewRequested: false, teleconsultationOffered: false, teleconsultationConfigured: false,
+        clinicalChatState: 'ENDED', clinicianResponseDeadline: null, firstClinicianResponseAt: null,
+        fallbackShownAt: null, nearbyFacilities: [], messages,
+      };
     }
-    const clinicianResponded = messages.some((message) => message.speaker === 'CLINICIAN');
+    const firstClinicianResponseAt = messages.find((message) => message.speaker === 'CLINICIAN')?.createdAt || null;
+    const clinicianResponded = Boolean(firstClinicianResponseAt);
+    const clinicianResponseDeadline = new Date(escalation.createdAt.getTime() + CLINICIAN_RESPONSE_WINDOW_MS);
 
-    const waitingMs = Date.now() - escalation.createdAt.getTime();
-    const eligible = waitingMs >= 60_000;
+    const eligible = Date.now() >= clinicianResponseDeadline.getTime();
     if (eligible && !clinicianResponded && !escalation.teleconsultationOfferedAt) {
       const marked = await this.escalations.update(
         { id: escalation.id, tenantId, status: 'OPEN', teleconsultationOfferedAt: IsNull() },
@@ -91,15 +166,26 @@ export class EscalationService {
           action: 'TELECONSULTATION_OFFERED',
           entityName: 'clinical_escalation',
           entityId: escalation.id,
-          details: { delayed_seconds: 60 },
+          details: { delayed_seconds: CLINICIAN_RESPONSE_WINDOW_MS / 1000 },
         });
         escalation.teleconsultationOfferedAt = new Date();
       }
     }
+    const fallbackShownAt = eligible && !clinicianResponded
+      ? escalation.teleconsultationOfferedAt || null
+      : null;
+    const nearbyFacilities = fallbackShownAt
+      ? await this.nearbyEmergencyFacilities(tenantId, sessionId)
+      : [];
     return {
       reviewRequested: true,
       teleconsultationOffered: eligible && !clinicianResponded,
       teleconsultationConfigured: false,
+      clinicalChatState: clinicianResponded ? 'CLINICIAN_CONNECTED' : 'WAITING_FOR_CLINICIAN',
+      clinicianResponseDeadline,
+      firstClinicianResponseAt,
+      fallbackShownAt,
+      nearbyFacilities,
       messages,
     };
   }
