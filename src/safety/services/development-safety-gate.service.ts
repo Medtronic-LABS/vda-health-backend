@@ -20,7 +20,7 @@ export class DevelopmentSafetyGate implements ISafetyGate {
 
   // unsafe medication action patterns mapping
   private readonly medicationPatterns = {
-    en: /\b(?:increase|decrease|stop|start|change|adjust)\s+(?:dose|dosage|medication|medicine|pill)\b|\b(?:self-medicate|taking double|double the dose)\b/i,
+    en: /\b(?:increase|decrease|stop|start|change|adjust)\b(?:\s+\w+){0,2}\s+(?:dose|dosage|medication|medicine|pill)\b|\b(?:self-medicate|taking double|double the dose)\b/i,
     hi: /(?:दवा (?:बढ़ाना|घटाना|बंद करना|बदलना|सुरू करना)|डबल खुराक|दवा बढ़ाएं|दवा घटाएं)/,
     hiLatn:
       /\b(?:dose|dawa|medicine|dosage|medication)\s+(?:increase|decrease|stop|start|change|adjust|double|kam|zyada|badhana|ghatana|band karna|badalna|double karna)\b|\b(?:self-medicate)\b/i,
