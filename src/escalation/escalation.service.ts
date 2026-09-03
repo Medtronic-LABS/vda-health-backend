@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, IsNull, Repository } from 'typeorm';
 import { AuditService } from '../audit/audit.service';
 import { HostIdentity } from '../auth/host-identity.context';
-import { ClinicalEscalation, ClinicalEscalationOutcome, ClinicalEscalationStatus, ClinicalResponseReviewDecision } from '../database/entities/clinical-escalation.entity';
+import { ClinicalEscalation, ClinicalEscalationOutcome, ClinicalResponseReviewDecision } from '../database/entities/clinical-escalation.entity';
 import { ConversationTurn } from '../database/entities/conversation-turn.entity';
 import { Session } from '../database/entities/session.entity';
 import { FacilitySearchService } from '../facilities/facility-search.service';
@@ -324,11 +324,16 @@ export class EscalationService {
   }
 
   async list(tenantId: string, filters: { status?: string; tier?: string; ruleId?: string }) {
-    const where: Record<string, string> = { tenantId };
-    if (filters.status) where.status = filters.status;
-    if (filters.tier) where.tier = filters.tier;
-    if (filters.ruleId) where.ruleId = filters.ruleId;
-    return this.escalations.find({ where, order: { createdAt: 'DESC' }, take: 100 });
+    const query = this.escalations
+      .createQueryBuilder('escalation')
+      .where('escalation."tenantId" = :tenantId', { tenantId });
+    if (filters.status) query.andWhere('escalation.status = :status', { status: filters.status });
+    // A response review can remain OPEN, but an ended clinician chat is no
+    // longer actionable. Keep those records available under All/history.
+    if (filters.status === 'OPEN') query.andWhere('escalation."clinicalConversationClosedAt" IS NULL');
+    if (filters.tier) query.andWhere('escalation.tier = :tier', { tier: filters.tier });
+    if (filters.ruleId) query.andWhere('escalation."ruleId" = :ruleId', { ruleId: filters.ruleId });
+    return query.orderBy('escalation."createdAt"', 'DESC').take(100).getMany();
   }
 
   private async findScoped(tenantId: string, id: string): Promise<ClinicalEscalation> {
@@ -343,14 +348,18 @@ export class EscalationService {
   }
 
   async openCount(tenantId: string): Promise<{ open: number }> {
-    return { open: await this.escalations.count({ where: { tenantId, status: 'OPEN' } }) };
+    return {
+      open: await this.escalations.count({
+        where: { tenantId, status: 'OPEN', clinicalConversationClosedAt: IsNull() },
+      }),
+    };
   }
 
   async review(tenantId: string, id: string, reviewer: HostIdentity, outcome: ClinicalEscalationOutcome, note?: string): Promise<ClinicalEscalation> {
     const escalation = await this.findScoped(tenantId, id);
     const reviewedAt = new Date();
-    const status: ClinicalEscalationStatus = outcome === 'TRUE_POSITIVE' ? 'TRUE_POSITIVE' : outcome === 'FALSE_POSITIVE' ? 'FALSE_POSITIVE' : 'REVIEWED';
-    escalation.status = status;
+    // Safety classification and clinician-chat lifecycle are independent. An
+    // active conversation stays OPEN until the existing end-chat workflow.
     escalation.reviewOutcome = outcome;
     escalation.reviewerId = reviewer.externalId;
     escalation.reviewerNote = note?.trim() || null;
@@ -386,7 +395,6 @@ export class EscalationService {
     escalation.correctedPatientResponse = decision === 'CORRECTED' ? normalizedCorrection! : null;
     escalation.responseReviewerId = reviewer.externalId;
     escalation.responseReviewedAt = reviewedAt;
-    if (escalation.status === 'OPEN') escalation.status = 'REVIEWED';
     escalation.reviewHistory = [
       ...(escalation.reviewHistory || []),
       {
