@@ -30,6 +30,7 @@ import { SyntheticPatient } from '../database/entities/synthetic-patient.entity'
 import { ConversationTurn } from '../database/entities/conversation-turn.entity';
 import { Prescription } from '../database/entities/prescription.entity';
 import { DevDemoModule } from '../dev/dev-demo.module';
+import { ObservabilityModule } from '../observability/observability.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { DevDemoModule } from '../dev/dev-demo.module';
     SafetyModule,
     AgentsModule,
     KnowledgeModule,
+    ObservabilityModule,
     PiiModule,
     FacilityModule,
     SchemeModule,

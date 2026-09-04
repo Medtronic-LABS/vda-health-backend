@@ -433,4 +433,34 @@ export class ConfigurationService {
       5000
     );
   }
+
+  get langsmithEnabled(): boolean {
+    return (
+      this.getBoolean('LANGCHAIN_TRACING_V2') ||
+      this.getBoolean('LANGSMITH_TRACING') ||
+      Boolean(this.langsmithApiKey)
+    );
+  }
+
+  get langsmithApiKey(): string | undefined {
+    return (
+      this.configService.get<string>('LANGCHAIN_API_KEY') ||
+      this.configService.get<string>('LANGSMITH_API_KEY')
+    );
+  }
+
+  get langsmithProject(): string {
+    return (
+      this.configService.get<string>('LANGCHAIN_PROJECT') ||
+      this.configService.get<string>('LANGSMITH_PROJECT') ||
+      'vda-health-backend'
+    );
+  }
+
+  get langsmithEndpoint(): string {
+    return (
+      this.configService.get<string>('LANGCHAIN_ENDPOINT') ||
+      'https://api.smith.langchain.com'
+    );
+  }
 }

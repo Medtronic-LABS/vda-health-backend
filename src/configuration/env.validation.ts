@@ -275,6 +275,32 @@ export class EnvironmentVariables {
   @IsNumber()
   @IsOptional()
   SESSION_EXPIRED_HTTP_STATUS = 410;
+
+  @IsOptional()
+  LANGCHAIN_TRACING_V2 = false;
+
+  @IsString()
+  @IsOptional()
+  LANGCHAIN_API_KEY?: string;
+
+  @IsString()
+  @IsOptional()
+  LANGCHAIN_PROJECT = 'vda-health-backend';
+
+  @IsString()
+  @IsOptional()
+  LANGCHAIN_ENDPOINT = 'https://api.smith.langchain.com';
+
+  @IsOptional()
+  LANGSMITH_TRACING = false;
+
+  @IsString()
+  @IsOptional()
+  LANGSMITH_API_KEY?: string;
+
+  @IsString()
+  @IsOptional()
+  LANGSMITH_PROJECT?: string;
 }
 
 export function validate(config: Record<string, unknown>) {

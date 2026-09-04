@@ -54,6 +54,10 @@ import {
   PATIENT_DATA_PROVIDER,
   PatientDataProvider,
 } from '../../dev/patient-data/patient-data-provider.interface';
+import {
+  LangSmithTracerService,
+  TurnTraceContext,
+} from '../../observability/langsmith-tracer.service';
 
 type VerifiedIphsLevel = Exclude<IphsLevel, 'UNKNOWN'>;
 
@@ -105,6 +109,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
     @InjectRepository(ConversationTurn)
     private readonly conversationTurns?: Repository<ConversationTurn>,
     @Optional() private readonly ragEvaluation?: RagEvaluationService,
+    @Optional() private readonly tracer?: LangSmithTracerService,
   ) {}
 
   private triageContent(language: string): Record<string, string> {
@@ -813,17 +818,79 @@ export class AiOrchestratorService implements IAiOrchestrator {
       },
     });
 
+    // ─── LangSmith Turn Tracing Context ─────────────────────────────────────
+    const traceContext = this.tracer
+      ? await this.tracer.startTurn({
+          sessionId,
+          correlationId,
+          inputText: resolvedInputText,
+          language,
+          tenantId: identity.tenantId,
+          externalId: identity.externalId,
+        })
+      : null;
+
     // ─── Step 1: Deterministic pre-generation safety gate ───────────────────
     // Safety is intentionally evaluated before normal Gemini classification,
     // retrieval, or agent routing.
-    const requestLanguage =
-      language ||
-      (await this.languageProvider.detectLanguage(resolvedInputText));
-    const preSafetyResult = await this.safetyGate.evaluateSafety(
-      resolvedInputText,
-      correlationId,
-      requestLanguage,
-    );
+    let requestLanguage = language;
+    if (!requestLanguage) {
+      if (traceContext && this.tracer) {
+        requestLanguage = await this.tracer.traceStep(
+          traceContext,
+          {
+            name: 'language_detection',
+            runType: 'tool',
+            provider: 'sarvam',
+            necessity: 'NECESSARY',
+            necessityReason:
+              'Language was not provided by client; required external Sarvam language detection.',
+          },
+          () => this.languageProvider.detectLanguage(resolvedInputText),
+        );
+      } else {
+        requestLanguage =
+          await this.languageProvider.detectLanguage(resolvedInputText);
+      }
+    } else if (traceContext && this.tracer) {
+      this.tracer.recordStepDirectly(
+        traceContext,
+        {
+          name: 'language_detection',
+          runType: 'tool',
+          provider: 'sarvam',
+          necessity: 'BYPASSED_SAFE',
+          necessityReason: `Client explicitly specified language "${language}"; avoided redundant Sarvam language detection.`,
+        },
+        { latencyMs: 0 },
+      );
+    }
+
+    const preSafetyResult =
+      traceContext && this.tracer
+        ? await this.tracer.traceStep(
+            traceContext,
+            {
+              name: 'safety_gate_pre_evaluation',
+              runType: 'tool',
+              provider: 'safety-gate',
+              necessity: 'NECESSARY',
+              necessityReason:
+                'Mandatory clinical safety gate evaluating cardiac, suicide, and clinical red flags.',
+            },
+            () =>
+              this.safetyGate.evaluateSafety(
+                resolvedInputText,
+                correlationId,
+                requestLanguage,
+              ),
+          )
+        : await this.safetyGate.evaluateSafety(
+            resolvedInputText,
+            correlationId,
+            requestLanguage,
+          );
+
     if (preSafetyResult.status !== 'SAFE') {
       const safetyStatus =
         preSafetyResult.status === 'ESCALATION_REQUIRED'
@@ -891,30 +958,42 @@ export class AiOrchestratorService implements IAiOrchestrator {
         },
       });
 
+      const earlySafeContent =
+        responseType === 'escalation'
+          ? {
+              escalation_id: preSafetyResult.ruleId || 'SAFETY_ESCALATION',
+              reason: safeMessage,
+              summary: safeMessage,
+              assigned_role: 'CLINICIAN',
+              ...(emergencyFacilities.length
+                ? { facility_results: emergencyFacilities }
+                : {}),
+              ...(emergencyCards.length ? { cards: emergencyCards } : {}),
+              ...(emergencyFacilities.length
+                ? {
+                    emergency_capability_note: requestLanguage.startsWith(
+                      'hi',
+                    )
+                      ? 'उपलब्ध रिकॉर्ड में emergency सुविधा की पुष्टि नहीं है।'
+                      : 'Available records do not confirm emergency capability.',
+                  }
+                : {}),
+            }
+          : { summary: safeMessage, [requestLanguage]: safeMessage };
+
+      if (traceContext && this.tracer) {
+        await this.tracer.endTurn(traceContext, {
+          responseType,
+          content: earlySafeContent,
+          intent: IntentType.UNKNOWN,
+          selectedAgent: 'safety-gate',
+          safetyStatus,
+        });
+      }
+
       return {
         responseType,
-        content:
-          responseType === 'escalation'
-            ? {
-                escalation_id: preSafetyResult.ruleId || 'SAFETY_ESCALATION',
-                reason: safeMessage,
-                summary: safeMessage,
-                assigned_role: 'CLINICIAN',
-                ...(emergencyFacilities.length
-                  ? { facility_results: emergencyFacilities }
-                  : {}),
-                ...(emergencyCards.length ? { cards: emergencyCards } : {}),
-                ...(emergencyFacilities.length
-                  ? {
-                      emergency_capability_note: requestLanguage.startsWith(
-                        'hi',
-                      )
-                        ? 'उपलब्ध रिकॉर्ड में emergency सुविधा की पुष्टि नहीं है।'
-                        : 'Available records do not confirm emergency capability.',
-                    }
-                  : {}),
-              }
-            : { summary: safeMessage, [requestLanguage]: safeMessage },
+        content: earlySafeContent,
         intent: IntentType.UNKNOWN,
         selectedAgent: 'safety-gate',
         safetyStatus,
@@ -937,12 +1016,33 @@ export class AiOrchestratorService implements IAiOrchestrator {
         );
       }
     }
-    const intentMeta = await this.intentClassifier.classifyIntent(
-      resolvedInputText,
-      requestLanguage,
-      correlationId,
-      classificationHistory,
-    );
+    const intentMeta =
+      traceContext && this.tracer
+        ? await this.tracer.traceStep(
+            traceContext,
+            {
+              name: 'intent_classification',
+              runType: 'llm',
+              provider: 'gemini',
+              model: 'gemini-3.5-flash',
+              necessity: 'NECESSARY',
+              necessityReason:
+                'Classifies patient intent and extracts semantic requirements.',
+            },
+            () =>
+              this.intentClassifier.classifyIntent(
+                resolvedInputText,
+                requestLanguage,
+                correlationId,
+                classificationHistory,
+              ),
+          )
+        : await this.intentClassifier.classifyIntent(
+            resolvedInputText,
+            requestLanguage,
+            correlationId,
+            classificationHistory,
+          );
 
     // Deterministic prescription confirmation/rejection interceptor
     if (
@@ -987,12 +1087,35 @@ export class AiOrchestratorService implements IAiOrchestrator {
             ? 'ठीक है। आपकी prescription की जानकारी की पुष्टि कर दी गई है।'
             : 'Alright. Your prescription information has been confirmed.';
 
+        const confirmContent = {
+          summary: summaryText,
+          [intentMeta.language]: summaryText,
+        };
+
+        if (traceContext && this.tracer) {
+          this.tracer.recordStepDirectly(
+            traceContext,
+            {
+              name: 'prescription_confirmation_interceptor',
+              runType: 'tool',
+              necessity: 'NECESSARY',
+              necessityReason:
+                'Deterministic confirmation of prescription without LLM generation cost',
+            },
+            { latencyMs: 0 },
+          );
+          await this.tracer.endTurn(traceContext, {
+            responseType: 'text',
+            content: confirmContent,
+            intent: 'PRESCRIPTION_CONFIRM',
+            selectedAgent: 'medication-agent',
+            safetyStatus: 'SAFE',
+          });
+        }
+
         return {
           responseType: 'text',
-          content: {
-            summary: summaryText,
-            [intentMeta.language]: summaryText,
-          },
+          content: confirmContent,
           intent: 'PRESCRIPTION_CONFIRM',
           selectedAgent: 'medication-agent',
           safetyStatus: 'SAFE',
@@ -1026,12 +1149,35 @@ export class AiOrchestratorService implements IAiOrchestrator {
             ? 'ठीक है। कृपया बताएं कि prescription में कौन-सी जानकारी गलत है।'
             : 'Alright. Please let me know which information in the prescription is incorrect.';
 
+        const rejectContent = {
+          summary: summaryText,
+          [intentMeta.language]: summaryText,
+        };
+
+        if (traceContext && this.tracer) {
+          this.tracer.recordStepDirectly(
+            traceContext,
+            {
+              name: 'prescription_rejection_interceptor',
+              runType: 'tool',
+              necessity: 'NECESSARY',
+              necessityReason:
+                'Deterministic rejection of prescription without LLM generation cost',
+            },
+            { latencyMs: 0 },
+          );
+          await this.tracer.endTurn(traceContext, {
+            responseType: 'text',
+            content: rejectContent,
+            intent: 'PRESCRIPTION_CORRECTION',
+            selectedAgent: 'medication-agent',
+            safetyStatus: 'SAFE',
+          });
+        }
+
         return {
           responseType: 'text',
-          content: {
-            summary: summaryText,
-            [intentMeta.language]: summaryText,
-          },
+          content: rejectContent,
           intent: 'PRESCRIPTION_CORRECTION',
           selectedAgent: 'medication-agent',
           safetyStatus: 'SAFE',
@@ -1060,6 +1206,17 @@ export class AiOrchestratorService implements IAiOrchestrator {
           classifiedIntent: intentMeta.intent,
         },
       });
+
+      if (traceContext && this.tracer) {
+        await this.tracer.endTurn(traceContext, {
+          responseType: 'text',
+          content,
+          intent: IntentType.UNKNOWN,
+          selectedAgent: 'triage',
+          safetyStatus: 'SAFE',
+        });
+      }
+
       return {
         responseType: 'text',
         content,
@@ -1087,6 +1244,28 @@ export class AiOrchestratorService implements IAiOrchestrator {
         typeof agentResult.content === 'object'
           ? (agentResult.content as Record<string, any>)
           : { summary: String(agentResult.content) };
+
+      if (traceContext && this.tracer) {
+        this.tracer.recordStepDirectly(
+          traceContext,
+          {
+            name: 'teleconsultation_governed_flow',
+            runType: 'tool',
+            necessity: 'NECESSARY',
+            necessityReason:
+              'Governed navigation flow executed deterministically, avoiding LLM generation cost.',
+          },
+          { latencyMs: 0 },
+        );
+        await this.tracer.endTurn(traceContext, {
+          responseType: agentResult.responseType,
+          content,
+          intent: intentMeta.intent,
+          selectedAgent: selectedAgent.agentId,
+          safetyStatus: 'SAFE',
+        });
+      }
+
       return {
         responseType: agentResult.responseType,
         content,
@@ -1148,26 +1327,62 @@ export class AiOrchestratorService implements IAiOrchestrator {
           targetState,
         );
 
-        const ragRes = await this.knowledgeRetrievalService.retrieve(
-          normalizedQuery?.query || resolvedInputText,
-          {
-            domain: targetDomain,
-            intent: intentMeta.intent,
-            language: intentMeta.language,
-            tenantId: identity.tenantId,
-            state: normalizedQuery?.state || targetState,
-            // State-availability questions must discover state-authorised
-            // sources, rather than allowing national material to displace
-            // them in vector ranking. National availability remains supplied
-            // through the structured Scheme source.
-            stateMatchMode:
-              intentMeta.schemeInformationType === 'SCHEME_AVAILABILITY'
-                ? 'EXACT'
-                : 'INCLUDING_GLOBAL',
-            district: normalizedQuery?.district,
-            minRelevanceScore: 0.35,
-          },
-        );
+        const ragRes =
+          traceContext && this.tracer
+            ? await this.tracer.traceStep(
+                traceContext,
+                {
+                  name: 'knowledge_retrieval',
+                  runType: 'retriever',
+                  provider: 'xenova',
+                  model: 'all-MiniLM-L6-v2',
+                  necessity: 'NECESSARY',
+                  necessityReason:
+                    'Vector retrieval of verified medical guidelines and IPHS standards.',
+                  inputs: {
+                    query: normalizedQuery?.query || resolvedInputText,
+                    domain: targetDomain,
+                  },
+                },
+                () =>
+                  this.knowledgeRetrievalService!.retrieve(
+                    normalizedQuery?.query || resolvedInputText,
+                    {
+                      domain: targetDomain,
+                      intent: intentMeta.intent,
+                      language: intentMeta.language,
+                      tenantId: identity.tenantId,
+                      state: normalizedQuery?.state || targetState,
+                      stateMatchMode:
+                        intentMeta.schemeInformationType ===
+                        'SCHEME_AVAILABILITY'
+                          ? 'EXACT'
+                          : 'INCLUDING_GLOBAL',
+                      district: normalizedQuery?.district,
+                      minRelevanceScore: 0.35,
+                    },
+                  ),
+              )
+            : await this.knowledgeRetrievalService.retrieve(
+                normalizedQuery?.query || resolvedInputText,
+                {
+                  domain: targetDomain,
+                  intent: intentMeta.intent,
+                  language: intentMeta.language,
+                  tenantId: identity.tenantId,
+                  state: normalizedQuery?.state || targetState,
+                  // State-availability questions must discover state-authorised
+                  // sources, rather than allowing national material to displace
+                  // them in vector ranking. National availability remains supplied
+                  // through the structured Scheme source.
+                  stateMatchMode:
+                    intentMeta.schemeInformationType === 'SCHEME_AVAILABILITY'
+                      ? 'EXACT'
+                      : 'INCLUDING_GLOBAL',
+                  district: normalizedQuery?.district,
+                  minRelevanceScore: 0.35,
+                },
+              );
         knowledgePrompt = ragRes.formattedKnowledgePrompt;
         knowledgeSources = ragRes.sources;
         retrievalTrace = ragRes;
@@ -1367,15 +1582,42 @@ export class AiOrchestratorService implements IAiOrchestrator {
           },
         });
 
-        clinicalContext = await this.clinicalContextService.buildContext({
-          sessionId,
-          tenantId: identity.tenantId,
-          subjectAbhaRef: identity.externalId,
-          vdaConsentArtifactId: consentId,
-          intent: intentMeta.intent,
-          requiredRecordCategories: intentMeta.requiredRecordCategories,
-          correlationId,
-        });
+        clinicalContext =
+          traceContext && this.tracer
+            ? await this.tracer.traceStep(
+                traceContext,
+                {
+                  name: 'clinical_context_retrieval',
+                  runType: 'tool',
+                  provider: 'abdm',
+                  necessity: 'NECESSARY',
+                  necessityReason:
+                    'Retrieves authorized patient health records from ABDM.',
+                  inputs: {
+                    categories: intentMeta.requiredRecordCategories,
+                  },
+                },
+                () =>
+                  this.clinicalContextService.buildContext({
+                    sessionId,
+                    tenantId: identity.tenantId,
+                    subjectAbhaRef: identity.externalId,
+                    vdaConsentArtifactId: consentId,
+                    intent: intentMeta.intent,
+                    requiredRecordCategories:
+                      intentMeta.requiredRecordCategories,
+                    correlationId,
+                  }),
+              )
+            : await this.clinicalContextService.buildContext({
+                sessionId,
+                tenantId: identity.tenantId,
+                subjectAbhaRef: identity.externalId,
+                vdaConsentArtifactId: consentId,
+                intent: intentMeta.intent,
+                requiredRecordCategories: intentMeta.requiredRecordCategories,
+                correlationId,
+              });
 
         const minimized = ClinicalAiContextBuilder.buildMinimizedContext({
           sessionId,
@@ -1472,6 +1714,19 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
     if (deterministicFacilityContent) {
       aiResultText = deterministicFacilityContent.summary;
       contentObj = deterministicFacilityContent;
+      if (traceContext && this.tracer) {
+        this.tracer.recordStepDirectly(
+          traceContext,
+          {
+            name: 'deterministic_facility_content',
+            runType: 'tool',
+            necessity: 'NECESSARY',
+            necessityReason:
+              'Handled via deterministic facility matcher, saving LLM tokens',
+          },
+          { latencyMs: 0 },
+        );
+      }
     } else if (asksMedChange) {
       aiResultText =
         intentMeta.language === 'hi'
@@ -1481,20 +1736,58 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
         summary: aiResultText,
         [intentMeta.language]: aiResultText,
       };
+      if (traceContext && this.tracer) {
+        this.tracer.recordStepDirectly(
+          traceContext,
+          {
+            name: 'medication_change_warning',
+            runType: 'tool',
+            necessity: 'NECESSARY',
+            necessityReason:
+              'Deterministic medication dosage change safety warning, avoiding LLM generation cost',
+          },
+          { latencyMs: 0 },
+        );
+      }
     } else {
       try {
         this.logger.log(
           `[RagPromptTelemetry] intent=${intentMeta.intent} agent=${selectedAgent.agentId} domain=${AgentKnowledgeMapper.getTargetDomain(selectedAgent.agentId, intentMeta.intent) || 'NONE'} chunks=${knowledgeSources.length} knowledge_chars=${knowledgePrompt.length} clinical_context_chars=${formattedContext.length - knowledgePrompt.length} history_chars=${historyPrompt.length} patient_query_chars=${resolvedInputText.length} total_prompt_chars=${userPrompt.length}`,
         );
-        const aiResponse = await this.aiProvider.generate(userPrompt, {
-          systemPrompt,
-          correlationId,
-          temperature: 0.2,
-          maxTokens: 1024,
-          responseFormat: 'json',
-          thinkingLevel: 'MINIMAL',
-          telemetryLabel: 'PATIENT_RESPONSE',
-        });
+        const aiResponse =
+          traceContext && this.tracer
+            ? await this.tracer.traceStep(
+                traceContext,
+                {
+                  name: 'patient_response_generation',
+                  runType: 'llm',
+                  provider: 'gemini',
+                  model: 'gemini-3.5-flash',
+                  necessity: 'NECESSARY',
+                  necessityReason:
+                    'Primary LLM synthesis of patient guidance conforming to JSON schema contract.',
+                  inputs: { promptLength: userPrompt.length },
+                },
+                () =>
+                  this.aiProvider.generate(userPrompt, {
+                    systemPrompt,
+                    correlationId,
+                    temperature: 0.2,
+                    maxTokens: 1024,
+                    responseFormat: 'json',
+                    thinkingLevel: 'MINIMAL',
+                    telemetryLabel: 'PATIENT_RESPONSE',
+                  }),
+              )
+            : await this.aiProvider.generate(userPrompt, {
+                systemPrompt,
+                correlationId,
+                temperature: 0.2,
+                maxTokens: 1024,
+                responseFormat: 'json',
+                thinkingLevel: 'MINIMAL',
+                telemetryLabel: 'PATIENT_RESPONSE',
+              });
         let generated = this.responseFormatter?.normalizeGeneratedContent(
           aiResponse.json,
         );
@@ -1511,15 +1804,40 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
           this.logger.warn(
             `[PatientResponseContract] correlationId=${correlationId} intent=${intentMeta.intent} agent=${selectedAgent.agentId} parser=${aiResponse.json ? 'parsed' : 'unparseable_json'} response_chars=${aiResponse.text.length} validation=${aiResponse.json ? 'missing_or_invalid_summary' : 'json_unavailable'}`,
           );
-          const retryResponse = await this.aiProvider.generate(userPrompt, {
-            systemPrompt: `${systemPrompt}\nYour previous output was invalid. Return only valid concise JSON matching the contract.`,
-            correlationId,
-            temperature: 0,
-            maxTokens: 1024,
-            responseFormat: 'json',
-            thinkingLevel: 'MINIMAL',
-            telemetryLabel: 'PATIENT_RESPONSE_RETRY',
-          });
+          const retryResponse =
+            traceContext && this.tracer
+              ? await this.tracer.traceStep(
+                  traceContext,
+                  {
+                    name: 'patient_response_retry',
+                    runType: 'llm',
+                    provider: 'gemini',
+                    model: 'gemini-3.5-flash',
+                    isRetry: true,
+                    necessity: 'PREVENTABLE_RETRY',
+                    necessityReason:
+                      'Initial LLM response breached JSON contract schema; retry was preventable by strict schema enforcement.',
+                  },
+                  () =>
+                    this.aiProvider.generate(userPrompt, {
+                      systemPrompt: `${systemPrompt}\nYour previous output was invalid. Return only valid concise JSON matching the contract.`,
+                      correlationId,
+                      temperature: 0,
+                      maxTokens: 1024,
+                      responseFormat: 'json',
+                      thinkingLevel: 'MINIMAL',
+                      telemetryLabel: 'PATIENT_RESPONSE_RETRY',
+                    }),
+                )
+              : await this.aiProvider.generate(userPrompt, {
+                  systemPrompt: `${systemPrompt}\nYour previous output was invalid. Return only valid concise JSON matching the contract.`,
+                  correlationId,
+                  temperature: 0,
+                  maxTokens: 1024,
+                  responseFormat: 'json',
+                  thinkingLevel: 'MINIMAL',
+                  telemetryLabel: 'PATIENT_RESPONSE_RETRY',
+                });
           generated = this.responseFormatter?.normalizeGeneratedContent(
             retryResponse.json,
           );
@@ -1564,15 +1882,47 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
     let finalOutputText = aiResultText;
     if (intentMeta.language.startsWith('hi')) {
       finalOutputText =
-        await this.languageProvider.normalizeIndianText(aiResultText);
+        traceContext && this.tracer
+          ? await this.tracer.traceStep(
+              traceContext,
+              {
+                name: 'language_normalization',
+                runType: 'tool',
+                provider: 'sarvam',
+                necessity: 'NECESSARY',
+                necessityReason:
+                  'Normalizes Devanagari script formatting and numerals.',
+              },
+              () => this.languageProvider.normalizeIndianText(aiResultText),
+            )
+          : await this.languageProvider.normalizeIndianText(aiResultText);
     }
 
     // ─── Step 7: Dedicated Post-Generation Safety Validation ─────────────────
-    const postSafetyResult = await this.safetyGate.evaluateSafety(
-      finalOutputText,
-      correlationId,
-      intentMeta.language,
-    );
+    const postSafetyResult =
+      traceContext && this.tracer
+        ? await this.tracer.traceStep(
+            traceContext,
+            {
+              name: 'safety_gate_post_evaluation',
+              runType: 'tool',
+              provider: 'safety-gate',
+              necessity: 'NECESSARY',
+              necessityReason:
+                'Validates synthesized output against clinical safety guidelines.',
+            },
+            () =>
+              this.safetyGate.evaluateSafety(
+                finalOutputText,
+                correlationId,
+                intentMeta.language,
+              ),
+          )
+        : await this.safetyGate.evaluateSafety(
+            finalOutputText,
+            correlationId,
+            intentMeta.language,
+          );
 
     let safetyStatus = 'SAFE';
     if (postSafetyResult.status === 'ESCALATION_REQUIRED') {
@@ -1696,6 +2046,16 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
           `RAG evaluation trace failed: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
+    }
+
+    if (traceContext && this.tracer) {
+      await this.tracer.endTurn(traceContext, {
+        responseType: finalResponseType,
+        content: contentObj,
+        intent: intentMeta.intent,
+        selectedAgent: selectedAgent.agentId,
+        safetyStatus,
+      });
     }
 
     const latencyMs = Date.now() - startTime;
