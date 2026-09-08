@@ -1,3 +1,5 @@
+export type VoiceTtsProviderName = 'dhvaani' | 'sarvam';
+
 export interface TTSRequest {
   text: string;
   voiceId?: string;
@@ -7,8 +9,11 @@ export interface TTSRequest {
 export interface TTSResponse {
   audioBuffer: Buffer;
   mimeType: string;
-  provider: 'sarvam';
+  provider: VoiceTtsProviderName;
   model: string;
+  primaryProvider: VoiceTtsProviderName;
+  fallbackUsed: boolean;
+  fallbackReason?: string;
 }
 
 export interface TTSProvider {

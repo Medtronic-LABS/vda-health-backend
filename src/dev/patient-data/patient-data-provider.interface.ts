@@ -18,7 +18,21 @@ export interface PatientDataSummary {
   language?: string;
   state?: string;
   district?: string;
+  timezone?: string;
   source: PatientDataSource;
+}
+
+export type ScheduledClinicalEventType = 'CLINICAL_REVIEW' | 'MEDICATION_REVIEW' | 'LAB_REVIEW' | 'CHECKUP';
+
+/** Provider-neutral, source-backed scheduled clinical event. It is not an appointment booking record. */
+export interface ScheduledClinicalEvent extends Record<string, unknown> {
+  id?: string;
+  type: ScheduledClinicalEventType;
+  title: string;
+  dueDate: string;
+  condition?: string;
+  source?: string;
+  guidance?: string;
 }
 
 export interface PatientClinicalProfile {
@@ -29,6 +43,7 @@ export interface PatientClinicalProfile {
   prescriptions: Array<Record<string, unknown>>;
   carePlans: Array<Record<string, unknown>>;
   encounters: Array<Record<string, unknown>>;
+  scheduledEvents: ScheduledClinicalEvent[];
 }
 
 export interface PatientDataRecord extends PatientDataSummary {

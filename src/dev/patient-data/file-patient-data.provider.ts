@@ -111,7 +111,7 @@ export class FilePatientDataProvider implements PatientDataProvider {
   private profileFromBundle(bundle: JsonObject): PatientClinicalProfile {
     const entries = this.asArray(bundle.entry).map((entry) => this.object(entry.resource));
     const profile: PatientClinicalProfile = {
-      diagnoses: [], medications: [], labResults: [], allergies: [], prescriptions: [], carePlans: [], encounters: [],
+      diagnoses: [], medications: [], labResults: [], allergies: [], prescriptions: [], carePlans: [], encounters: [], scheduledEvents: [],
     };
     for (const resource of entries) {
       switch (this.text(resource.resourceType)) {
@@ -142,11 +142,34 @@ export class FilePatientDataProvider implements PatientDataProvider {
             .map((activity) => this.text(this.object(activity.detail).description))
             .filter((value): value is string => Boolean(value));
           profile.carePlans.push({ category: this.codeDisplay(this.asArray(resource.category)[0]), status: this.text(resource.status), activities });
+          for (const activity of this.asArray(resource.activity)) {
+            const detail = this.object(activity.detail);
+            const dueDate = this.date(this.object(detail.scheduledPeriod).start) || this.date(this.asArray(this.object(detail.scheduledTiming).event)[0]);
+            if (dueDate) profile.scheduledEvents.push({ id: this.text(detail.id) || undefined, type: 'CLINICAL_REVIEW', title: this.text(detail.description, 'Clinical follow-up'), dueDate, condition: this.codeDisplay(this.asArray(resource.category)[0]) || undefined, source: 'FHIR_CARE_PLAN' });
+          }
           break;
         }
-        case 'Encounter':
-          profile.encounters.push({ type: this.codeDisplay(this.asArray(resource.type)[0]) || this.text(this.object(resource.class).display), status: this.text(resource.status), start: this.date(this.object(resource.period).start), end: this.date(this.object(resource.period).end) });
+        case 'Appointment': {
+          const dueDate = this.date(resource.start);
+          if (dueDate) profile.scheduledEvents.push({ id: this.text(resource.id) || undefined, type: 'CHECKUP', title: this.codeDisplay(this.asArray(resource.serviceType)[0]) || 'Clinical follow-up', dueDate, source: 'FHIR_APPOINTMENT' });
           break;
+        }
+        case 'ServiceRequest': {
+          const dueDate = this.date(resource.occurrenceDateTime) || this.date(this.object(resource.occurrencePeriod).start);
+          if (dueDate) profile.scheduledEvents.push({ id: this.text(resource.id) || undefined, type: 'LAB_REVIEW', title: this.codeDisplay(resource.code) || 'Clinical investigation review', dueDate, source: 'FHIR_SERVICE_REQUEST' });
+          break;
+        }
+        case 'Encounter': {
+          const type = this.codeDisplay(this.asArray(resource.type)[0]) || this.text(this.object(resource.class).display);
+          const status = this.text(resource.status);
+          const start = this.date(this.object(resource.period).start);
+          const end = this.date(this.object(resource.period).end);
+          profile.encounters.push({ type, status, start, end });
+          if (start && ['planned', 'booked', 'arrived'].includes(status.toLowerCase())) {
+            profile.scheduledEvents.push({ id: this.text(resource.id) || undefined, type: 'CHECKUP', title: type || 'Clinical follow-up', dueDate: start, source: 'FHIR_ENCOUNTER' });
+          }
+          break;
+        }
       }
     }
     return profile;

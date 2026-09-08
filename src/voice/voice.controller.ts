@@ -85,6 +85,7 @@ export class VoiceController {
     const identity = req.user as HostIdentity;
     const correlationId = (req.correlationId as string) || 'voice-tts';
     const trace = await this.startVoiceTrace(identity, correlationId, body.language_code, 'text_to_speech');
+    const primaryProvider = this.voice.ttsPrimaryProvider();
     let result: TTSResponse | undefined;
     try {
       await this.tracer.traceStep(
@@ -92,10 +93,10 @@ export class VoiceController {
         {
           name: 'text_to_speech',
           runType: 'tool',
-          provider: 'sarvam',
-          model: 'bulbul:v3',
+          provider: primaryProvider,
+          model: this.voice.ttsPrimaryModel(),
           inputs: { text: '[redacted]' },
-          metadata: { language: body.language_code },
+          metadata: { language: body.language_code, primaryProvider },
           necessity: 'NECESSARY',
           necessityReason: 'Creates accessibility playback from the final patient-facing response.',
         },
@@ -104,6 +105,11 @@ export class VoiceController {
           return {
             provider: result.provider,
             model: result.model,
+            primaryProvider: result.primaryProvider,
+            fallbackUsed: result.fallbackUsed,
+            fallbackReason: result.fallbackReason,
+            language: body.language_code,
+            costStatus: 'NOT_APPLICABLE',
             audio: '[redacted]',
             successCategory: 'SUCCESS',
           };
@@ -116,7 +122,7 @@ export class VoiceController {
       res.setHeader('Cache-Control', 'no-store');
       return res.send(result.audioBuffer);
     } catch (error) {
-      await this.auditVoice(identity, correlationId, 'voice_tts', body.language_code, false, 'sarvam');
+      await this.auditVoice(identity, correlationId, 'voice_tts', body.language_code, false, primaryProvider);
       await this.endVoiceTrace(trace, 'text_to_speech', 'ERROR');
       throw error;
     }

@@ -13,6 +13,7 @@ export interface PatientResponseContent {
   summary: string;
   sections?: Array<{ title?: string; body?: string; bullets?: string[] }>;
   cards?: Array<Record<string, unknown>>;
+  medications?: Array<{ name?: unknown; medicationName?: unknown }>;
   actions?: Array<{ label: string; action: string }>;
 }
 
@@ -26,7 +27,16 @@ export class ConversationResponseFormatter {
         .filter((value): value is string => Boolean(value?.trim()));
       if (sectionParts.length) parts.push(sectionParts.join('\n'));
     }
+    const responseTextBeforeCards = this.normalizedText(parts.join('\n\n'));
+    const medicationNames = this.medicationNames(content.medications);
     for (const card of content.cards || []) {
+      // ClinicalContext medication cards are retained as structured response
+      // data. Do not flatten them into patient_text when the same medicine is
+      // already explained in the summary or sections, otherwise patients hear
+      // and see the medication details twice.
+      if (this.isMedicationCardAlreadyExplained(card, medicationNames, responseTextBeforeCards)) {
+        continue;
+      }
       const cardParts = [card.title, card.value, card.subtitle]
         .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()));
       if (cardParts.length) parts.push(cardParts.join(': '));
@@ -89,6 +99,28 @@ export class ConversationResponseFormatter {
 
   private wordCount(text: string): number {
     return text.trim().split(/\s+/).filter(Boolean).length;
+  }
+
+  private medicationNames(medications: PatientResponseContent['medications']): string[] {
+    if (!Array.isArray(medications)) return [];
+    return medications
+      .flatMap((medication) => [medication.name, medication.medicationName])
+      .filter((name): name is string => typeof name === 'string' && Boolean(name.trim()))
+      .map((name) => this.normalizedText(name));
+  }
+
+  private isMedicationCardAlreadyExplained(
+    card: Record<string, unknown>,
+    medicationNames: string[],
+    responseTextBeforeCards: string,
+  ): boolean {
+    const title = typeof card.title === 'string' ? this.normalizedText(card.title) : '';
+    if (!title || !medicationNames.includes(title)) return false;
+    return responseTextBeforeCards.includes(title);
+  }
+
+  private normalizedText(value: string): string {
+    return value.trim().toLocaleLowerCase();
   }
 
   private containsInternalRetrievalMaterial(text: string): boolean {

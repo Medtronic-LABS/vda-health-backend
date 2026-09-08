@@ -135,7 +135,8 @@ export class EnvironmentVariables {
   SARVAM_MAX_RETRIES = 2;
 
   // Voice provider routing. SraVaani is an isolated local STT service; Sarvam
-  // remains the controlled STT fallback and the sole TTS provider.
+  // remains its controlled fallback. DhVaani is an isolated local TTS service
+  // and Sarvam remains the controlled TTS fallback.
   @IsIn(['sravaani', 'sarvam'])
   @IsOptional()
   VOICE_STT_PROVIDER: 'sravaani' | 'sarvam' = 'sravaani';
@@ -156,9 +157,25 @@ export class EnvironmentVariables {
   @IsOptional()
   VOICE_STT_TIMEOUT_MS = 20000;
 
-  @IsIn(['sarvam'])
+  @IsIn(['dhvaani', 'sarvam'])
   @IsOptional()
-  VOICE_TTS_PROVIDER: 'sarvam' = 'sarvam';
+  VOICE_TTS_PROVIDER: 'dhvaani' | 'sarvam' = 'dhvaani';
+
+  @IsIn(['dhvaani', 'sarvam'])
+  @IsOptional()
+  VOICE_TTS_FALLBACK_PROVIDER: 'dhvaani' | 'sarvam' = 'sarvam';
+
+  @IsOptional()
+  VOICE_TTS_FALLBACK_ENABLED = true;
+
+  @IsString()
+  @IsOptional()
+  DHVAANI_BASE_URL = 'http://127.0.0.1:8002';
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  VOICE_TTS_TIMEOUT_MS = 120000;
 
   @IsString()
   @IsOptional()
