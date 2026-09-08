@@ -5,6 +5,6 @@ export class VoiceTtsDto {
   @MaxLength(2500)
   text!: string;
 
-  @IsIn(['hi-IN', 'en-IN'])
-  language_code!: 'hi-IN' | 'en-IN';
+  @IsIn(['hi-IN', 'en-IN', 'ta-IN', 'kn-IN'])
+  language_code!: 'hi-IN' | 'en-IN' | 'ta-IN' | 'kn-IN';
 }

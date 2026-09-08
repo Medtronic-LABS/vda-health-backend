@@ -54,10 +54,7 @@ import {
   PATIENT_DATA_PROVIDER,
   PatientDataProvider,
 } from '../../dev/patient-data/patient-data-provider.interface';
-import {
-  LangSmithTracerService,
-  TurnTraceContext,
-} from '../../observability/langsmith-tracer.service';
+import { LangSmithTracerService } from '../../observability/langsmith-tracer.service';
 
 type VerifiedIphsLevel = Exclude<IphsLevel, 'UNKNOWN'>;
 
@@ -858,11 +855,12 @@ export class AiOrchestratorService implements IAiOrchestrator {
         {
           name: 'language_detection',
           runType: 'tool',
-          provider: 'sarvam',
+          provider: 'rule-engine',
+          model: 'client-language',
           necessity: 'BYPASSED_SAFE',
           necessityReason: `Client explicitly specified language "${language}"; avoided redundant Sarvam language detection.`,
         },
-        { latencyMs: 0 },
+        { latencyMs: 0, executed: false },
       );
     }
 
@@ -1888,10 +1886,11 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
               {
                 name: 'language_normalization',
                 runType: 'tool',
-                provider: 'sarvam',
+                provider: 'rule-engine',
+                model: 'in-process-whitespace-normalizer',
                 necessity: 'NECESSARY',
                 necessityReason:
-                  'Normalizes Devanagari script formatting and numerals.',
+                  'In-process whitespace normalization; no Sarvam API request is made.',
               },
               () => this.languageProvider.normalizeIndianText(aiResultText),
             )

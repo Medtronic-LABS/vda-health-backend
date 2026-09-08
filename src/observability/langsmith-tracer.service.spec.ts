@@ -63,6 +63,18 @@ describe('LangSmithTracerService', () => {
       expect(cost).toBeCloseTo(0.00135, 5);
     });
 
+    it('accounts for Gemini thinking tokens separately from visible completion', () => {
+      const cost = service.calculateCost('gemini', 'gemini-3.5-flash', {
+        promptTokens: 664,
+        completionTokens: 187,
+        totalTokens: 1601,
+        providerReportedTotalTokens: 1601,
+        thoughtsTokens: 750,
+      });
+
+      expect(cost).toBeCloseTo(0.0003309, 7);
+    });
+
     it('should calculate accurate costs for Gemini Pro tokens ($1.25/1M input, $5.00/1M output)', () => {
       // 10,000 prompt tokens = 10,000 * 0.00000125 = $0.0125
       // 2,000 completion tokens = 2,000 * 0.000005 = $0.01
@@ -76,7 +88,7 @@ describe('LangSmithTracerService', () => {
       expect(cost).toBeCloseTo(0.0225, 4);
     });
 
-    it('should charge flat $0.001 for Sarvam API invocations', () => {
+    it('should calculate the configured Sarvam estimate for an API invocation', () => {
       const cost = service.calculateCost('sarvam', 'sarvam-translate-v1');
       expect(cost).toBe(0.001);
     });
@@ -150,12 +162,38 @@ describe('LangSmithTracerService', () => {
           necessity: 'REDUNDANT',
           necessityReason: 'Client header already provided language "en"',
         },
-        { latencyMs: 0 },
+        { latencyMs: 0, executed: false },
       );
 
       expect(context.steps.length).toBe(1);
       expect(context.steps[0].necessity).toBe('REDUNDANT');
       expect(context.steps[0].latencyMs).toBe(0);
+      expect(context.steps[0].executed).toBe(false);
+      expect(context.steps[0].costUsd).toBe(0);
+    });
+
+    it('marks a Gemini step without provider usage as unavailable rather than free', async () => {
+      const context = await service.startTurn({
+        sessionId: 'session-usage-unavailable',
+        correlationId: 'corr-usage-unavailable',
+        inputText: 'Classify this message',
+      });
+
+      await service.traceStep(
+        context,
+        {
+          name: 'intent_classification',
+          runType: 'llm',
+          provider: 'gemini',
+          model: 'gemini-3.5-flash',
+          necessity: 'NECESSARY',
+        },
+        async () => ({ category: 'UNKNOWN' }),
+      );
+
+      expect(context.steps[0].usageStatus).toBe('UNAVAILABLE');
+      expect(context.steps[0].costStatus).toBe('UNAVAILABLE');
+      expect(context.steps[0].costUsd).toBe(0);
     });
 
     it('should track preventable retries with appropriate necessity tag', async () => {
@@ -189,6 +227,45 @@ describe('LangSmithTracerService', () => {
   });
 
   describe('Turn Summary & Optimization Recommendations', () => {
+    it('preserves provider totals separately from visible input and output', async () => {
+      const context = await service.startTurn({
+        sessionId: 'session-provider-total',
+        correlationId: 'corr-provider-total',
+        inputText: 'Classify my request',
+      });
+
+      await service.traceStep(
+        context,
+        {
+          name: 'intent_classification',
+          runType: 'llm',
+          provider: 'gemini',
+          model: 'gemini-3.5-flash',
+        },
+        async () => ({
+          usage: {
+            promptTokens: 664,
+            completionTokens: 187,
+            totalTokens: 1601,
+            providerReportedTotalTokens: 1601,
+            thoughtsTokens: 750,
+          },
+        }),
+      );
+
+      const summary = await service.endTurn(context, {
+        responseType: 'text',
+        intent: 'UNKNOWN',
+        selectedAgent: 'test-agent',
+        safetyStatus: 'SAFE',
+      });
+
+      expect(summary.totalPromptTokens).toBe(664);
+      expect(summary.totalCompletionTokens).toBe(187);
+      expect(summary.totalProviderReportedTokens).toBe(1601);
+      expect(summary.totalThinkingTokens).toBe(750);
+    });
+
     it('should compute turn efficiency and generate optimization tips', async () => {
       const context = await service.startTurn({
         sessionId: 'session-opt-01',
@@ -205,7 +282,7 @@ describe('LangSmithTracerService', () => {
           provider: 'sarvam',
           necessity: 'REDUNDANT',
         },
-        { latencyMs: 120 },
+        { latencyMs: 120, executed: false },
       );
 
       // 2. Necessary safety gate
@@ -260,11 +337,11 @@ describe('LangSmithTracerService', () => {
         safetyStatus: 'SAFE',
       });
 
-      expect(summary.totalCalls).toBe(4);
+      expect(summary.totalCalls).toBe(3);
       expect(summary.necessaryCalls).toBe(2);
-      expect(summary.unnecessaryCalls).toBe(1);
+      expect(summary.unnecessaryCalls).toBe(0);
       expect(summary.preventableRetries).toBe(1);
-      expect(summary.efficiencyScorePercent).toBe(50);
+      expect(summary.efficiencyScorePercent).toBe(67);
       expect(summary.totalCostUsd).toBeGreaterThan(0);
 
       // Check optimization advice

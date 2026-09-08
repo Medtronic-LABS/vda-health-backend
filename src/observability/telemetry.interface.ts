@@ -8,13 +8,25 @@ export type CallNecessity =
 export interface StepUsage {
   promptTokens?: number;
   completionTokens?: number;
+  /**
+   * Legacy alias of Gemini usageMetadata.totalTokenCount. This can include
+   * internal thinking tokens and must not be read as prompt + completion.
+   */
   totalTokens?: number;
+  /** Canonical provider total, preserved exactly from usageMetadata. */
+  providerReportedTotalTokens?: number;
+  thoughtsTokens?: number;
+  cachedContentTokens?: number;
+  toolUsePromptTokens?: number;
 }
+
+export type UsageStatus = 'REPORTED' | 'UNAVAILABLE' | 'NOT_APPLICABLE';
+export type CostStatus = 'ACTUAL' | 'ESTIMATED' | 'UNAVAILABLE' | 'NOT_APPLICABLE';
 
 export interface StepTraceOptions {
   name: string;
   runType: 'llm' | 'tool' | 'retriever' | 'chain' | 'prompt';
-  provider?: 'gemini' | 'sarvam' | 'xenova' | 'abdm' | 'safety-gate' | 'rule-engine';
+  provider?: 'gemini' | 'sarvam' | 'sravaani' | 'xenova' | 'abdm' | 'safety-gate' | 'rule-engine';
   model?: string;
   inputs?: Record<string, any>;
   necessity?: CallNecessity;
@@ -32,6 +44,10 @@ export interface StepTraceResult {
   latencyMs: number;
   costUsd: number;
   usage?: StepUsage;
+  usageStatus: UsageStatus;
+  costStatus: CostStatus;
+  /** False for a deliberately skipped stage; skipped stages are not calls. */
+  executed: boolean;
   necessity: CallNecessity;
   necessityReason: string;
   isRetry: boolean;
@@ -51,6 +67,11 @@ export interface TurnTraceSummary {
   totalCostUsd: number;
   totalPromptTokens: number;
   totalCompletionTokens: number;
+  /** Sum of Gemini/API totalTokenCount values, not prompt + visible completion. */
+  totalProviderReportedTokens: number;
+  totalThinkingTokens: number;
+  totalCachedContentTokens: number;
+  totalToolUsePromptTokens: number;
   totalCalls: number;
   necessaryCalls: number;
   unnecessaryCalls: number;

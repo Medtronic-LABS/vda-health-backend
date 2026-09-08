@@ -23,7 +23,12 @@ export interface AiGenerateResult {
   usage?: {
     promptTokens: number;
     completionTokens: number;
+    /** Gemini usageMetadata.totalTokenCount; not necessarily input + visible output. */
     totalTokens: number;
+    providerReportedTotalTokens?: number;
+    thoughtsTokens?: number;
+    cachedContentTokens?: number;
+    toolUsePromptTokens?: number;
   };
   provider: string;
   model: string;
@@ -61,6 +66,17 @@ export interface AiClassifyResult {
   };
   /** The language inferred from the current turn and its retained conversation. */
   language?: 'hi' | 'en';
+  /** Provider-reported usage, when the classify request returns it. */
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    /** Gemini usageMetadata.totalTokenCount; not necessarily input + visible output. */
+    totalTokens: number;
+    providerReportedTotalTokens?: number;
+    thoughtsTokens?: number;
+    cachedContentTokens?: number;
+    toolUsePromptTokens?: number;
+  };
   provider: string;
 }
 

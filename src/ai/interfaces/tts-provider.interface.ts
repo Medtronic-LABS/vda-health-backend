@@ -7,6 +7,8 @@ export interface TTSRequest {
 export interface TTSResponse {
   audioBuffer: Buffer;
   mimeType: string;
+  provider: 'sarvam';
+  model: string;
 }
 
 export interface TTSProvider {

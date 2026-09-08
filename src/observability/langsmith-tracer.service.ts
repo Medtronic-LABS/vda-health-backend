@@ -179,11 +179,14 @@ export class LangSmithTracerService implements OnModuleInit {
       throw error;
     } finally {
       const stepDuration = Date.now() - stepStart;
+      const resolvedProvider = this.resultString(result, 'provider') || options.provider || 'rule-engine';
+      const resolvedModel = this.resultString(result, 'model') || options.model || 'default';
       const usage = this.extractUsageFromResult(result);
-      const costUsd = this.calculateCost(
-        options.provider || 'rule-engine',
-        options.model || 'default',
+      const accounting = this.calculateAccounting(
+        resolvedProvider,
+        resolvedModel,
         usage,
+        true,
       );
 
       const necessity = options.necessity || 'NECESSARY';
@@ -196,11 +199,14 @@ export class LangSmithTracerService implements OnModuleInit {
       const stepRecord: StepTraceResult = {
         stepName: options.name,
         runType: options.runType,
-        provider: options.provider || 'rule-engine',
-        model: options.model || 'default',
+        provider: resolvedProvider,
+        model: resolvedModel,
         latencyMs: stepDuration,
-        costUsd,
+        costUsd: accounting.costUsd,
         usage,
+        usageStatus: accounting.usageStatus,
+        costStatus: accounting.costStatus,
+        executed: true,
         necessity,
         necessityReason,
         isRetry: options.isRetry || false,
@@ -220,9 +226,15 @@ export class LangSmithTracerService implements OnModuleInit {
           if (childRun.extra) {
             childRun.extra.metadata = {
               ...(childRun.extra.metadata || {}),
-              cost_usd: costUsd,
+              provider: resolvedProvider,
+              model: resolvedModel,
+              ...this.safeResultMetadata(result),
+              cost_usd: accounting.costUsd,
               latency_ms: stepDuration,
               usage: usage || {},
+              usage_status: accounting.usageStatus,
+              cost_status: accounting.costStatus,
+              executed: true,
             };
           }
 
@@ -246,12 +258,15 @@ export class LangSmithTracerService implements OnModuleInit {
       usage?: StepUsage;
       output?: any;
       error?: string;
+      executed?: boolean;
     },
   ): void {
-    const costUsd = this.calculateCost(
+    const executed = result.executed ?? true;
+    const accounting = this.calculateAccounting(
       options.provider || 'rule-engine',
       options.model || 'default',
       result.usage,
+      executed,
     );
 
     const stepRecord: StepTraceResult = {
@@ -260,8 +275,11 @@ export class LangSmithTracerService implements OnModuleInit {
       provider: options.provider || 'rule-engine',
       model: options.model || 'default',
       latencyMs: result.latencyMs,
-      costUsd,
+      costUsd: accounting.costUsd,
       usage: result.usage,
+      usageStatus: accounting.usageStatus,
+      costStatus: accounting.costStatus,
+      executed,
       necessity: options.necessity || 'NECESSARY',
       necessityReason: options.necessityReason || 'Directly recorded execution',
       isRetry: options.isRetry || false,
@@ -290,6 +308,10 @@ export class LangSmithTracerService implements OnModuleInit {
     let totalCostUsd = 0;
     let totalPromptTokens = 0;
     let totalCompletionTokens = 0;
+    let totalProviderReportedTokens = 0;
+    let totalThinkingTokens = 0;
+    let totalCachedContentTokens = 0;
+    let totalToolUsePromptTokens = 0;
     let necessaryCalls = 0;
     let unnecessaryCalls = 0;
     let preventableRetries = 0;
@@ -299,18 +321,31 @@ export class LangSmithTracerService implements OnModuleInit {
       if (step.usage) {
         totalPromptTokens += step.usage.promptTokens || 0;
         totalCompletionTokens += step.usage.completionTokens || 0;
+        totalProviderReportedTokens +=
+          step.usage.providerReportedTotalTokens ||
+          step.usage.totalTokens ||
+          0;
+        totalThinkingTokens += step.usage.thoughtsTokens || 0;
+        totalCachedContentTokens += step.usage.cachedContentTokens || 0;
+        totalToolUsePromptTokens += step.usage.toolUsePromptTokens || 0;
       }
-      if (step.necessity === 'NECESSARY') {
+      if (step.executed && step.necessity === 'NECESSARY') {
         necessaryCalls++;
-      } else if (step.necessity === 'UNNECESSARY' || step.necessity === 'REDUNDANT') {
+      } else if (
+        step.executed &&
+        (step.necessity === 'UNNECESSARY' || step.necessity === 'REDUNDANT')
+      ) {
         unnecessaryCalls++;
       }
-      if (step.isRetry || step.necessity === 'PREVENTABLE_RETRY') {
+      if (
+        step.executed &&
+        (step.isRetry || step.necessity === 'PREVENTABLE_RETRY')
+      ) {
         preventableRetries++;
       }
     }
 
-    const totalCalls = context.steps.length;
+    const totalCalls = context.steps.filter((step) => step.executed).length;
     const efficiencyScorePercent =
       totalCalls > 0
         ? Math.round(((necessaryCalls) / totalCalls) * 100)
@@ -334,6 +369,10 @@ export class LangSmithTracerService implements OnModuleInit {
       totalCostUsd: Number(totalCostUsd.toFixed(6)),
       totalPromptTokens,
       totalCompletionTokens,
+      totalProviderReportedTokens,
+      totalThinkingTokens,
+      totalCachedContentTokens,
+      totalToolUsePromptTokens,
       totalCalls,
       necessaryCalls,
       unnecessaryCalls,
@@ -371,6 +410,10 @@ export class LangSmithTracerService implements OnModuleInit {
             total_cost_usd: summary.totalCostUsd,
             total_prompt_tokens: totalPromptTokens,
             total_completion_tokens: totalCompletionTokens,
+            total_provider_reported_tokens: totalProviderReportedTokens,
+            total_thinking_tokens: totalThinkingTokens,
+            total_cached_content_tokens: totalCachedContentTokens,
+            total_tool_use_prompt_tokens: totalToolUsePromptTokens,
             efficiency_score_pct: efficiencyScorePercent,
             total_api_calls: totalCalls,
             unnecessary_calls: unnecessaryCalls,
@@ -387,7 +430,7 @@ export class LangSmithTracerService implements OnModuleInit {
     }
 
     this.logger.log(
-      `[LangSmithTelemetry] turn=${context.id} session=${context.sessionId} intent=${turnResult.intent} latency=${totalLatencyMs}ms cost=$${summary.totalCostUsd.toFixed(6)} tokens=${totalPromptTokens + totalCompletionTokens} calls=${totalCalls} (necessary=${necessaryCalls}, unnecessary=${unnecessaryCalls}, retries=${preventableRetries}) efficiency=${efficiencyScorePercent}%`,
+      `[LangSmithTelemetry] turn=${context.id} session=${context.sessionId} intent=${turnResult.intent} latency=${totalLatencyMs}ms cost=$${summary.totalCostUsd.toFixed(6)} visible_tokens=${totalPromptTokens + totalCompletionTokens} provider_total_tokens=${totalProviderReportedTokens} thinking_tokens=${totalThinkingTokens} calls=${totalCalls} (necessary=${necessaryCalls}, unnecessary=${unnecessaryCalls}, retries=${preventableRetries}) efficiency=${efficiencyScorePercent}%`,
     );
 
     return summary;
@@ -461,19 +504,23 @@ export class LangSmithTracerService implements OnModuleInit {
 
     // Gemini 1.5 / 2.5 / 3.5 Flash pricing
     // Input: $0.075 / 1M tokens ($0.000000075 / token)
-    // Output: $0.30 / 1M tokens ($0.0000003 / token)
+    // Output/thinking: $0.30 / 1M tokens ($0.0000003 / token)
     if (provider === 'gemini' && /flash/i.test(model)) {
       const promptCost = (usage?.promptTokens || 0) * 0.000000075;
-      const completionCost = (usage?.completionTokens || 0) * 0.0000003;
+      const completionCost =
+        ((usage?.completionTokens || 0) + (usage?.thoughtsTokens || 0)) *
+        0.0000003;
       return promptCost + completionCost;
     }
 
     // Gemini Pro pricing
     // Input: $1.25 / 1M tokens ($0.00000125 / token)
-    // Output: $5.00 / 1M tokens ($0.000005 / token)
+    // Output/thinking: $5.00 / 1M tokens ($0.000005 / token)
     if (provider === 'gemini' && /pro/i.test(model)) {
       const promptCost = (usage?.promptTokens || 0) * 0.00000125;
-      const completionCost = (usage?.completionTokens || 0) * 0.000005;
+      const completionCost =
+        ((usage?.completionTokens || 0) + (usage?.thoughtsTokens || 0)) *
+        0.000005;
       return promptCost + completionCost;
     }
 
@@ -495,6 +542,54 @@ export class LangSmithTracerService implements OnModuleInit {
     return 0;
   }
 
+  private calculateAccounting(
+    provider: string,
+    model: string,
+    usage: StepUsage | undefined,
+    executed: boolean,
+  ): {
+    costUsd: number;
+    usageStatus: StepTraceResult['usageStatus'];
+    costStatus: StepTraceResult['costStatus'];
+  } {
+    if (!executed) {
+      return {
+        costUsd: 0,
+        usageStatus: 'NOT_APPLICABLE',
+        costStatus: 'NOT_APPLICABLE',
+      };
+    }
+
+    if (provider === 'gemini') {
+      if (!usage) {
+        return {
+          costUsd: 0,
+          usageStatus: 'UNAVAILABLE',
+          costStatus: 'UNAVAILABLE',
+        };
+      }
+      return {
+        costUsd: this.calculateCost(provider, model, usage),
+        usageStatus: 'REPORTED',
+        costStatus: 'ACTUAL',
+      };
+    }
+
+    if (provider === 'sarvam') {
+      return {
+        costUsd: this.calculateCost(provider, model, usage),
+        usageStatus: 'NOT_APPLICABLE',
+        costStatus: 'ESTIMATED',
+      };
+    }
+
+    return {
+      costUsd: this.calculateCost(provider, model, usage),
+      usageStatus: usage ? 'REPORTED' : 'NOT_APPLICABLE',
+      costStatus: 'NOT_APPLICABLE',
+    };
+  }
+
   private extractUsageFromResult(result: any): StepUsage | undefined {
     if (!result || typeof result !== 'object') return undefined;
     if (result.usage && typeof result.usage === 'object') {
@@ -504,6 +599,42 @@ export class LangSmithTracerService implements OnModuleInit {
           result.usage.completionTokens || result.usage.candidatesTokenCount || 0,
         ),
         totalTokens: Number(result.usage.totalTokens || result.usage.totalTokenCount || 0),
+        providerReportedTotalTokens: Number(
+          result.usage.providerReportedTotalTokens ||
+            result.usage.totalTokenCount ||
+            result.usage.totalTokens ||
+            0,
+        ),
+        ...(Number.isFinite(result.usage.thoughtsTokens) ||
+        Number.isFinite(result.usage.thoughtsTokenCount)
+          ? {
+              thoughtsTokens: Number(
+                result.usage.thoughtsTokens ||
+                  result.usage.thoughtsTokenCount ||
+                  0,
+              ),
+            }
+          : {}),
+        ...(Number.isFinite(result.usage.cachedContentTokens) ||
+        Number.isFinite(result.usage.cachedContentTokenCount)
+          ? {
+              cachedContentTokens: Number(
+                result.usage.cachedContentTokens ||
+                  result.usage.cachedContentTokenCount ||
+                  0,
+              ),
+            }
+          : {}),
+        ...(Number.isFinite(result.usage.toolUsePromptTokens) ||
+        Number.isFinite(result.usage.toolUsePromptTokenCount)
+          ? {
+              toolUsePromptTokens: Number(
+                result.usage.toolUsePromptTokens ||
+                  result.usage.toolUsePromptTokenCount ||
+                  0,
+              ),
+            }
+          : {}),
       };
     }
     return undefined;
@@ -518,9 +649,37 @@ export class LangSmithTracerService implements OnModuleInit {
       delete copy.password;
       delete copy.token;
       delete copy.apiKey;
+      delete copy.audioBuffer;
+      delete copy.audio;
+      delete copy.transcript;
       return copy;
     }
     return { value: String(result) };
+  }
+
+  /** Only provider-operation metadata that is safe to send to telemetry. */
+  private safeResultMetadata(result: unknown): Record<string, unknown> {
+    if (!result || typeof result !== 'object') return {};
+    const value = result as Record<string, unknown>;
+    const allowed = [
+      'primaryProvider',
+      'fallbackUsed',
+      'fallbackReason',
+      'detectedLanguage',
+      'audioDurationMs',
+      'successCategory',
+    ];
+    return Object.fromEntries(
+      allowed
+        .filter((key) => value[key] !== undefined)
+        .map((key) => [key, value[key]]),
+    );
+  }
+
+  private resultString(result: unknown, key: string): string | undefined {
+    if (!result || typeof result !== 'object') return undefined;
+    const value = (result as Record<string, unknown>)[key];
+    return typeof value === 'string' && value.length > 0 ? value : undefined;
   }
 
   private generateOptimizationAdvice(

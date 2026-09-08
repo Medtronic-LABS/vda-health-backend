@@ -1,5 +1,6 @@
 import { plainToInstance, Type } from 'class-transformer';
 import {
+  IsIn,
   IsEnum,
   IsNumber,
   IsString,
@@ -132,6 +133,32 @@ export class EnvironmentVariables {
   @IsNumber()
   @IsOptional()
   SARVAM_MAX_RETRIES = 2;
+
+  // Voice provider routing. SraVaani is an isolated local STT service; Sarvam
+  // remains the controlled STT fallback and the sole TTS provider.
+  @IsIn(['sravaani', 'sarvam'])
+  @IsOptional()
+  VOICE_STT_PROVIDER: 'sravaani' | 'sarvam' = 'sravaani';
+
+  @IsIn(['sravaani', 'sarvam'])
+  @IsOptional()
+  VOICE_STT_FALLBACK_PROVIDER: 'sravaani' | 'sarvam' = 'sarvam';
+
+  @IsOptional()
+  VOICE_STT_FALLBACK_ENABLED = true;
+
+  @IsString()
+  @IsOptional()
+  SRAVAANI_BASE_URL = 'http://127.0.0.1:8001';
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  VOICE_STT_TIMEOUT_MS = 20000;
+
+  @IsIn(['sarvam'])
+  @IsOptional()
+  VOICE_TTS_PROVIDER: 'sarvam' = 'sarvam';
 
   @IsString()
   @IsOptional()

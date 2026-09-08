@@ -143,6 +143,30 @@ export class ConfigurationService {
     return this.configService.get<number>('SARVAM_MAX_RETRIES') || 2;
   }
 
+  get voiceSttProvider(): 'sravaani' | 'sarvam' {
+    return this.configService.get<'sravaani' | 'sarvam'>('VOICE_STT_PROVIDER') || 'sravaani';
+  }
+
+  get voiceSttFallbackProvider(): 'sravaani' | 'sarvam' {
+    return this.configService.get<'sravaani' | 'sarvam'>('VOICE_STT_FALLBACK_PROVIDER') || 'sarvam';
+  }
+
+  get voiceSttFallbackEnabled(): boolean {
+    return this.getBoolean('VOICE_STT_FALLBACK_ENABLED');
+  }
+
+  get sravaaniBaseUrl(): string {
+    return (this.configService.get<string>('SRAVAANI_BASE_URL') || 'http://127.0.0.1:8001').replace(/\/+$/, '');
+  }
+
+  get voiceSttTimeoutMs(): number {
+    return this.configService.get<number>('VOICE_STT_TIMEOUT_MS') || 20000;
+  }
+
+  get voiceTtsProvider(): 'sarvam' {
+    return 'sarvam';
+  }
+
   get geminiApiKey(): string | undefined {
     return this.geminiApiKeys[0]?.key;
   }

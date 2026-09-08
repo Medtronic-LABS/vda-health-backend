@@ -207,6 +207,11 @@ export class GeminiProvider implements IAiProvider {
 
         const usageMeta =
           (data['usageMetadata'] as Record<string, number>) || {};
+        const usageReported = [
+          'promptTokenCount',
+          'candidatesTokenCount',
+          'totalTokenCount',
+        ].some((key) => Number.isFinite(usageMeta[key]));
 
         const durationMs = Date.now() - requestStartedAt;
         if (emitDiagnostics) {
@@ -220,11 +225,30 @@ export class GeminiProvider implements IAiProvider {
         return {
           text: textContent,
           json: jsonObj,
-          usage: {
-            promptTokens: usageMeta['promptTokenCount'] || 0,
-            completionTokens: usageMeta['candidatesTokenCount'] || 0,
-            totalTokens: usageMeta['totalTokenCount'] || 0,
-          },
+          usage: usageReported
+            ? {
+                promptTokens: usageMeta['promptTokenCount'] || 0,
+                completionTokens: usageMeta['candidatesTokenCount'] || 0,
+                totalTokens: usageMeta['totalTokenCount'] || 0,
+                providerReportedTotalTokens:
+                  usageMeta['totalTokenCount'] || 0,
+                ...(Number.isFinite(usageMeta['thoughtsTokenCount'])
+                  ? { thoughtsTokens: usageMeta['thoughtsTokenCount'] }
+                  : {}),
+                ...(Number.isFinite(usageMeta['cachedContentTokenCount'])
+                  ? {
+                      cachedContentTokens:
+                        usageMeta['cachedContentTokenCount'],
+                    }
+                  : {}),
+                ...(Number.isFinite(usageMeta['toolUsePromptTokenCount'])
+                  ? {
+                      toolUsePromptTokens:
+                        usageMeta['toolUsePromptTokenCount'],
+                    }
+                  : {}),
+              }
+            : undefined,
           provider: 'gemini',
           model,
         };
@@ -332,6 +356,7 @@ Current query: "${text}"`;
         parsed['language'] === 'hi' || parsed['language'] === 'en'
           ? parsed['language']
           : undefined,
+      usage: result.usage,
       provider: 'gemini',
     };
   }

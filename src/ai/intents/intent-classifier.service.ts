@@ -1,7 +1,10 @@
 import { Injectable, Logger, Inject } from '@nestjs/common';
 import { IIntentClassifier } from './intent-classifier.interface';
 import { IntentType, IntentMetadata, SchemeInformationType } from './intent.types';
-import { IAiProvider } from '../interfaces/ai-provider.interface';
+import {
+  IAiProvider,
+  AiClassifyResult,
+} from '../interfaces/ai-provider.interface';
 import { ILanguageProvider } from '../interfaces/language-provider.interface';
 import { IntentToRecordCategoryMapper } from '../../abdm/mappers/intent-to-record-category.mapper';
 import { HealthRecordCategory } from '../../abdm/interfaces/health-record-service.interface';
@@ -45,6 +48,7 @@ export class IntentClassifierService implements IIntentClassifier {
     let knowledgeRequired: boolean | undefined;
     let responseRequirements: string[] | undefined;
     let schemeInformationType: SchemeInformationType | undefined;
+    let providerUsage: AiClassifyResult['usage'];
 
     try {
       const candidates = Object.values(IntentType);
@@ -53,6 +57,7 @@ export class IntentClassifierService implements IIntentClassifier {
         correlationId: corrId,
         conversationContext,
       });
+      providerUsage = aiResult.usage;
 
       if (Object.values(IntentType).includes(aiResult.category as IntentType)) {
         aiCategory = aiResult.category as IntentType;
@@ -110,6 +115,14 @@ export class IntentClassifierService implements IIntentClassifier {
     metadata.knowledgeRequired = plan.knowledgeRequired;
     metadata.responseRequirements = plan.responseRequirements;
     metadata.schemeInformationType = plan.schemeInformationType;
+    if (providerUsage) {
+      // Telemetry only: preserve Gemini's reported usage for the tracing
+      // wrapper without changing the serialized intent or routing contract.
+      Object.defineProperty(metadata, 'usage', {
+        value: providerUsage,
+        enumerable: false,
+      });
+    }
 
     // Audit Stage 2 classification
     await this.auditService.logEvent({
