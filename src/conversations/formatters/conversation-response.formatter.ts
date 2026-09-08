@@ -27,8 +27,20 @@ export class ConversationResponseFormatter {
       if (sectionParts.length) parts.push(sectionParts.join('\n'));
     }
     for (const card of content.cards || []) {
-      const cardParts = [card.title, card.value, card.subtitle]
-        .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+      const title = typeof card.title === 'string' ? card.title.trim() : '';
+      const value = typeof card.value === 'string' ? card.value.trim() : '';
+      const subtitle = typeof card.subtitle === 'string' ? card.subtitle.trim() : '';
+
+      const cardParts: string[] = [];
+      if (title) cardParts.push(title);
+      if (value) cardParts.push(value);
+      if (
+        subtitle &&
+        (!value || !subtitle.toLowerCase().includes(value.toLowerCase())) &&
+        (!value || !value.toLowerCase().includes(subtitle.toLowerCase()))
+      ) {
+        cardParts.push(subtitle);
+      }
       if (cardParts.length) parts.push(cardParts.join(': '));
     }
     return parts.join('\n\n');

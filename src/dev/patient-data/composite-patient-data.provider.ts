@@ -34,6 +34,6 @@ export class CompositePatientDataProvider implements PatientDataProvider {
   async getPatientByReference(tenantId: string, subjectReference: string): Promise<PatientDataRecord | null> {
     if (subjectReference.startsWith('local-file:')) return this.files.getPatientByReference(tenantId, subjectReference);
     if (subjectReference.startsWith('synthetic:')) return this.synthetic.getPatientByReference(tenantId, subjectReference);
-    return null;
+    return (await this.files.getPatient(tenantId, subjectReference)) || (await this.synthetic.getPatient(tenantId, subjectReference));
   }
 }
