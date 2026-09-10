@@ -34,17 +34,17 @@ export class SyntheticPatientDataProvider implements PatientDataProvider {
     return patient ? this.record(patient) : null;
   }
 
-  private summary(patient: { id: string; name: string; age: number; gender: string; language: string; state: string; district: string }): PatientDataSummary {
-    return { id: patient.id, name: patient.name, age: patient.age, gender: patient.gender, language: patient.language, state: patient.state, district: patient.district, source: 'synthetic' };
+  private summary(patient: { id: string; name: string; age: number; gender: string; language: string; state: string; district: string; timezone?: string }): PatientDataSummary {
+    return { id: patient.id, name: patient.name, age: patient.age, gender: patient.gender, language: patient.language, state: patient.state, district: patient.district, timezone: patient.timezone, source: 'synthetic' };
   }
 
-  private record(patient: { id: string; name: string; age: number; gender: string; language: string; state: string; district: string; clinicalProfile: Record<string, unknown> }): PatientDataRecord {
+  private record(patient: { id: string; name: string; age: number; gender: string; language: string; state: string; district: string; timezone?: string; clinicalProfile: Record<string, unknown> }): PatientDataRecord {
     const profile = patient.clinicalProfile;
     const records = (name: string): Array<Record<string, unknown>> => Array.isArray(profile[name]) ? profile[name] as Array<Record<string, unknown>> : [];
     return {
       ...this.summary(patient),
       clinicalProfile: {
-        diagnoses: records('diagnoses'), medications: records('medications'), labResults: records('labResults'), allergies: records('allergies'), prescriptions: records('prescriptions'), carePlans: records('carePlans'), encounters: records('encounters'),
+        diagnoses: records('diagnoses'), medications: records('medications'), labResults: records('labResults'), allergies: records('allergies'), prescriptions: records('prescriptions'), carePlans: records('carePlans'), encounters: records('encounters'), scheduledEvents: records('scheduledEvents') as PatientClinicalProfile['scheduledEvents'],
       },
     };
   }

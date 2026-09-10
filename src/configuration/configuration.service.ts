@@ -163,8 +163,24 @@ export class ConfigurationService {
     return this.configService.get<number>('VOICE_STT_TIMEOUT_MS') || 20000;
   }
 
-  get voiceTtsProvider(): 'sarvam' {
-    return 'sarvam';
+  get voiceTtsProvider(): 'dhvaani' | 'sarvam' {
+    return this.configService.get<'dhvaani' | 'sarvam'>('VOICE_TTS_PROVIDER') || 'dhvaani';
+  }
+
+  get voiceTtsFallbackProvider(): 'dhvaani' | 'sarvam' {
+    return this.configService.get<'dhvaani' | 'sarvam'>('VOICE_TTS_FALLBACK_PROVIDER') || 'sarvam';
+  }
+
+  get voiceTtsFallbackEnabled(): boolean {
+    return this.getBoolean('VOICE_TTS_FALLBACK_ENABLED');
+  }
+
+  get dhvaaniBaseUrl(): string {
+    return (this.configService.get<string>('DHVAANI_BASE_URL') || 'http://127.0.0.1:8002').replace(/\/+$/, '');
+  }
+
+  get voiceTtsTimeoutMs(): number {
+    return this.configService.get<number>('VOICE_TTS_TIMEOUT_MS') || 120000;
   }
 
   get geminiApiKey(): string | undefined {

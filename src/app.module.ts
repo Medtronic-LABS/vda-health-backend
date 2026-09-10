@@ -33,6 +33,7 @@ import { VoiceModule } from './voice/voice.module';
 import { FacilityModule } from './facilities/facility.module';
 import { SchemeModule } from './schemes/scheme.module';
 import { PrescriptionModule } from './prescriptions/prescription.module';
+import { FollowUpModule } from './follow-ups/follow-up.module';
 import { GlobalExceptionFilter } from './common/global-exception.filter';
 import { CorrelationIdMiddleware } from './observability/correlation-id.middleware';
 
@@ -68,6 +69,7 @@ import { CorrelationIdMiddleware } from './observability/correlation-id.middlewa
     FacilityModule,
     SchemeModule,
     PrescriptionModule,
+    FollowUpModule,
     CommonModule,
   ],
   controllers: [AppController],
