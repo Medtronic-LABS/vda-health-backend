@@ -2,4 +2,7 @@ node_modules
 .env
 dist
 build
-*.venv
+.venv
+*.sql
+*.zip
+/vda_ec2_deployment

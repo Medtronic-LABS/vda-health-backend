@@ -6,7 +6,12 @@ import {
   STTResponse,
   VoiceSttProviderName,
 } from '../ai/interfaces/stt-provider.interface';
-import { TTSProvider, TTSRequest, TTSResponse } from '../ai/interfaces/tts-provider.interface';
+import {
+  TTSProvider,
+  TTSRequest,
+  TTSResponse,
+  VoiceTtsProviderName,
+} from '../ai/interfaces/tts-provider.interface';
 import { SarvamSttProvider } from './stt/sarvam-stt.provider';
 import { SravaaniSttProvider } from './stt/sravaani-stt.provider';
 import {
@@ -14,6 +19,13 @@ import {
   SpeechToTextProvider,
   SpeechToTextProviderError,
 } from './stt/speech-to-text-provider.interface';
+import { DhvaaniTtsProvider } from './tts/dhvaani-tts.provider';
+import {
+  ProviderSynthesis,
+  TextToSpeechProvider,
+  TextToSpeechProviderError,
+} from './tts/text-to-speech-provider.interface';
+import { SarvamTtsProvider } from './tts/sarvam-tts.provider';
 
 @Injectable()
 export class VoiceService implements STTProvider, TTSProvider {
@@ -21,6 +33,8 @@ export class VoiceService implements STTProvider, TTSProvider {
     private readonly config: ConfigurationService,
     private readonly sravaani: SravaaniSttProvider,
     private readonly sarvamStt: SarvamSttProvider,
+    private readonly dhvaaniTts: DhvaaniTtsProvider,
+    private readonly sarvamTts: SarvamTtsProvider,
   ) {}
 
   /** One configured primary attempt followed by, at most, one configured fallback. */
@@ -53,45 +67,53 @@ export class VoiceService implements STTProvider, TTSProvider {
   }
 
   async synthesize(request: TTSRequest): Promise<TTSResponse> {
-    if (!this.isAvailable()) {
-      throw new ServiceUnavailableException('Voice service is currently unavailable.');
-    }
     const text = request.text?.trim();
     if (!text || text.length > 2500) {
       throw new ServiceUnavailableException('Voice service is currently unavailable.');
     }
-    const response = await this.request('/text-to-speech', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text,
-        language_code: request.languageCode || 'hi-IN',
-        model: this.config.sarvamBulbulTtsModel || 'bulbul:v3',
-        speaker: request.voiceId || 'shubh',
-        output_audio_codec: 'mp3',
-      }),
-    });
-    const data = (await response.json()) as { audios?: string[] };
-    const encoded = data.audios?.[0];
-    if (!encoded) throw new ServiceUnavailableException('Voice service is currently unavailable.');
-    return {
-      audioBuffer: Buffer.from(encoded, 'base64'),
-      mimeType: 'audio/mpeg',
-      provider: 'sarvam',
-      model: this.config.sarvamBulbulTtsModel || 'bulbul:v3',
-    };
-  }
-
-  isAvailable(): boolean {
-    return this.config.sarvamEnabled && Boolean(this.config.sarvamApiKey);
+    const primaryProvider = this.ttsPrimaryProvider();
+    try {
+      const result = await this.ttsProviderFor(primaryProvider).synthesize({ ...request, text });
+      return this.toTtsResponse(result, primaryProvider, primaryProvider, false);
+    } catch (primaryError) {
+      const fallbackProvider = this.config.voiceTtsFallbackProvider;
+      const canFallback = this.config.voiceTtsFallbackEnabled && fallbackProvider !== primaryProvider;
+      if (!canFallback) throw this.toTtsPublicError(primaryError);
+      try {
+        const result = await this.ttsProviderFor(fallbackProvider).synthesize({ ...request, text });
+        return this.toTtsResponse(
+          result,
+          fallbackProvider,
+          primaryProvider,
+          true,
+          this.ttsFailureCategory(primaryError),
+        );
+      } catch {
+        throw this.toTtsPublicError(primaryError);
+      }
+    }
   }
 
   sttPrimaryProvider(requestedProvider?: VoiceSttProviderName): VoiceSttProviderName {
     return requestedProvider || this.config.voiceSttProvider;
   }
 
+  ttsPrimaryProvider(): VoiceTtsProviderName {
+    return this.config.voiceTtsProvider;
+  }
+
+  ttsPrimaryModel(): string {
+    return this.ttsPrimaryProvider() === 'dhvaani'
+      ? 'ARTPARK-IISc/DhVaani-0.5'
+      : this.config.sarvamBulbulTtsModel || 'bulbul:v3';
+  }
+
   private providerFor(name: VoiceSttProviderName): SpeechToTextProvider {
     return name === 'sravaani' ? this.sravaani : this.sarvamStt;
+  }
+
+  private ttsProviderFor(name: VoiceTtsProviderName): TextToSpeechProvider {
+    return name === 'dhvaani' ? this.dhvaaniTts : this.sarvamTts;
   }
 
   private toSttResponse(
@@ -117,6 +139,26 @@ export class VoiceService implements STTProvider, TTSProvider {
     return error instanceof SpeechToTextProviderError ? error.category : 'INFERENCE_FAILED';
   }
 
+  private toTtsResponse(
+    result: ProviderSynthesis,
+    provider: VoiceTtsProviderName,
+    primaryProvider: VoiceTtsProviderName,
+    fallbackUsed: boolean,
+    fallbackReason?: string,
+  ): TTSResponse {
+    return {
+      ...result,
+      provider,
+      primaryProvider,
+      fallbackUsed,
+      ...(fallbackReason ? { fallbackReason } : {}),
+    };
+  }
+
+  private ttsFailureCategory(error: unknown): string {
+    return error instanceof TextToSpeechProviderError ? error.category : 'SERVICE_UNAVAILABLE';
+  }
+
   private toPublicError(error: unknown): ServiceUnavailableException {
     return new ServiceUnavailableException({
       message: 'Voice service is currently unavailable.',
@@ -124,22 +166,10 @@ export class VoiceService implements STTProvider, TTSProvider {
     });
   }
 
-  private async request(path: string, init: RequestInit): Promise<Response> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.config.sarvamTimeoutMs);
-    try {
-      const response = await fetch(`${this.config.sarvamBaseUrl}${path}`, {
-        ...init,
-        headers: { 'api-subscription-key': this.config.sarvamApiKey!, ...(init.headers || {}) },
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new ServiceUnavailableException('Voice service is currently unavailable.');
-      return response;
-    } catch (error) {
-      if (error instanceof ServiceUnavailableException) throw error;
-      throw new ServiceUnavailableException('Voice service is currently unavailable.');
-    } finally {
-      clearTimeout(timer);
-    }
+  private toTtsPublicError(error: unknown): ServiceUnavailableException {
+    return new ServiceUnavailableException({
+      message: 'Voice service is currently unavailable.',
+      category: this.ttsFailureCategory(error),
+    });
   }
 }

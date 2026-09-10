@@ -26,7 +26,7 @@ export type CostStatus = 'ACTUAL' | 'ESTIMATED' | 'UNAVAILABLE' | 'NOT_APPLICABL
 export interface StepTraceOptions {
   name: string;
   runType: 'llm' | 'tool' | 'retriever' | 'chain' | 'prompt';
-  provider?: 'gemini' | 'sarvam' | 'sravaani' | 'xenova' | 'abdm' | 'safety-gate' | 'rule-engine';
+  provider?: 'gemini' | 'sarvam' | 'sravaani' | 'dhvaani' | 'xenova' | 'abdm' | 'safety-gate' | 'rule-engine';
   model?: string;
   inputs?: Record<string, any>;
   necessity?: CallNecessity;

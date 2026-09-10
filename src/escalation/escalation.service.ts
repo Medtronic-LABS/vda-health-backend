@@ -93,9 +93,68 @@ export class EscalationService {
       state: patient.state,
       district: patient.district,
       emergency: true,
-      limit: 5,
+      // This is an escalation-only candidate pool. Its ranking below is not
+      // used by regular facility search.
+      limit: 50,
     });
-    return results.map((result) => ({
+    const normalizedFacilityText = (result: (typeof results)[number]) =>
+      [
+        result.facility.name,
+        result.facility.hospitalType,
+        ...(result.facility.specialityCodes || []),
+        ...(result.facility.supportedServices || []),
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+    // These source labels identify specialty-only facilities that are not a
+    // safe first recommendation for a general serious symptom such as chest
+    // pain. This does not infer emergency capability.
+    const isClearlyUnsuitedSpecialty = (result: (typeof results)[number]) =>
+      /\b(eye|ophthalm|optom|orthop|dental|dentist|dermat|skin|physio|physiotherap|fertility|ivf)\b/.test(
+        normalizedFacilityText(result),
+      );
+    const hasSourceReportedEmergencyCapability = (
+      result: (typeof results)[number],
+    ) =>
+      result.facility.emergencyAvailable === true ||
+      result.iphsOverlay?.emergencyCapability === 'SOURCE_REPORTED_CAPABLE';
+    const emergencyLevelRank = (result: (typeof results)[number]) => {
+      switch (result.iphsOverlay?.iphsLevel) {
+        case 'DH': return 0;
+        case 'SDH': return 1;
+        case 'CHC': return 2;
+        case 'HWC_PHC':
+        case 'HWC_SHC': return 4;
+        default: return 3;
+      }
+    };
+    const governmentRank = (result: (typeof results)[number]) => {
+      const type = (result.facility.hospitalType || '').toLowerCase();
+      if (/\b(government|govt|public|goi)\b/.test(type)) return 0;
+      // A source-classified DH/SDH/CHC is higher-level public infrastructure
+      // for this emergency-only ordering; no ownership label is exposed.
+      return emergencyLevelRank(result) <= 2 ? 1 : 2;
+    };
+    const emergencyCandidates = results
+      .filter((result) => !isClearlyUnsuitedSpecialty(result))
+      .sort((left, right) => {
+        const capabilityDifference =
+          Number(hasSourceReportedEmergencyCapability(right)) -
+          Number(hasSourceReportedEmergencyCapability(left));
+        if (capabilityDifference) return capabilityDifference;
+        const governmentDifference = governmentRank(left) - governmentRank(right);
+        if (governmentDifference) return governmentDifference;
+        const levelDifference = emergencyLevelRank(left) - emergencyLevelRank(right);
+        if (levelDifference) return levelDifference;
+        const distanceDifference =
+          (left.distanceKm ?? Number.POSITIVE_INFINITY) -
+          (right.distanceKm ?? Number.POSITIVE_INFINITY);
+        if (distanceDifference) return distanceDifference;
+        return left.facility.name.localeCompare(right.facility.name);
+      })
+      .slice(0, 12);
+    return emergencyCandidates.map((result) => ({
       name: result.facility.name,
       state: result.facility.state || null,
       district: result.facility.district || null,
