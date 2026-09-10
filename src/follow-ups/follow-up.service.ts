@@ -22,6 +22,7 @@ interface ResolvedFollowUps {
   session: Session;
   patientRef: string;
   followUps: ClinicalFollowUp[];
+  attendanceRecords: ClinicalFollowUpAttendance[];
 }
 
 interface NormalizedEvent {
@@ -50,6 +51,9 @@ export class FollowUpService {
       asOfDate: this.localDate(this.now(), timezone),
       timezone,
       followUps: resolved.followUps,
+      progress: {
+        completedFollowUpCount: resolved.attendanceRecords.filter((record) => record.attendanceStatus === 'COMPLETED').length,
+      },
     };
   }
 
@@ -113,7 +117,7 @@ export class FollowUpService {
       .filter((item): item is ClinicalFollowUp => item !== null)
       .sort((left, right) => left.dueDate.localeCompare(right.dueDate) || left.title.localeCompare(right.title));
 
-    return { session, patientRef: session.subjectAbhaRef, followUps };
+    return { session, patientRef: session.subjectAbhaRef, followUps, attendanceRecords: records };
   }
 
   private normalizeEvents(profile: PatientClinicalProfile, today: string): NormalizedEvent[] {

@@ -21,6 +21,12 @@ export interface FollowUpListResponse {
   asOfDate: string;
   timezone: string;
   followUps: ClinicalFollowUp[];
+  progress: FollowUpProgress;
+}
+
+/** Patient-scoped, attendance-backed progress. This never includes medication adherence. */
+export interface FollowUpProgress {
+  completedFollowUpCount: number;
 }
 
 export interface FollowUpAttendanceResponse {
