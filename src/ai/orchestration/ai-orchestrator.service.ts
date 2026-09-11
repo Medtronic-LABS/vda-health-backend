@@ -38,6 +38,7 @@ import { Scheme } from '../../database/entities/scheme.entity';
 import { SchemeService } from '../../schemes/scheme.service';
 import { Session } from '../../database/entities/session.entity';
 import { Prescription } from '../../database/entities/prescription.entity';
+import { RagasVerificationGateService } from '../verification/ragas-verification-gate.service';
 import { ConversationTurn } from '../../database/entities/conversation-turn.entity';
 import { FacilitySearchResult } from '../../facilities/facility-search.service';
 import {
@@ -112,6 +113,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
     private readonly conversationTurns?: Repository<ConversationTurn>,
     @Optional() private readonly ragEvaluation?: RagEvaluationService,
     @Optional() private readonly tracer?: LangSmithTracerService,
+    @Optional() private readonly ragasGate?: RagasVerificationGateService,
   ) {}
 
   private triageContent(language: string): Record<string, string> {
@@ -2217,6 +2219,68 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
       }
     }
 
+    // ─── Step 7.5: Layer 2 Inline RAGAS Evaluation Circuit Breaker ──────────
+    let ragasScores: {
+      faithfulness?: number;
+      answerRelevancy?: number;
+      contextPrecision?: number;
+    } = {};
+
+    if (
+      safetyStatus === 'SAFE' &&
+      retrievalTrace &&
+      retrievalTrace.matchedChunks &&
+      retrievalTrace.matchedChunks.length > 0 &&
+      this.ragasGate
+    ) {
+      const chunkTexts = retrievalTrace.matchedChunks
+        .map((c) => c.content || c.title)
+        .filter(Boolean);
+
+      const ragasResult = await this.ragasGate.evaluateTurn(
+        inputText,
+        finalOutputText,
+        chunkTexts,
+        correlationId,
+      );
+
+      ragasScores = {
+        faithfulness: ragasResult.faithfulnessScore,
+        answerRelevancy: ragasResult.answerRelevancyScore,
+        contextPrecision: ragasResult.contextPrecisionScore,
+      };
+
+      if (!ragasResult.passed) {
+        this.logger.warn(
+          `[RAGAS_CIRCUIT_BREAKER] Threshold breach correlationId=${correlationId} faithfulness=${ragasResult.faithfulnessScore} relevancy=${ragasResult.answerRelevancyScore} precision=${ragasResult.contextPrecisionScore} violation=${ragasResult.clinicalViolationDetected} reason=${ragasResult.reason}`,
+        );
+
+        safetyStatus = 'WITHHELD_BY_RAGAS';
+        finalResponseType = 'escalation';
+        const holdingMsg = intentMeta.language.startsWith('hi')
+          ? 'आपके स्वास्थ्य प्रश्न की सटीकता सुनिश्चित करने के लिए, इसे क्लिनिकल समीक्षा हेतु भेज दिया गया है। हमारे स्वास्थ्य विशेषज्ञ जल्द ही इसका सत्यापन करेंगे।'
+          : 'To ensure clinical accuracy and patient safety, your medical query has been forwarded to our healthcare team for validation.';
+
+        contentObj = {
+          escalation_id: 'RAGAS_THRESHOLD_BREACH',
+          reason:
+            ragasResult.reason ||
+            'Faithfulness or relevancy threshold breach against clinical guidelines.',
+          summary: holdingMsg,
+          assigned_role: 'CLINICIAN',
+          unsupported_claims: ragasResult.unsupportedClaims,
+          ragas_scores: {
+            faithfulness: ragasResult.faithfulnessScore,
+            answerRelevancy: ragasResult.answerRelevancyScore,
+            contextPrecision: ragasResult.contextPrecisionScore,
+          },
+          [intentMeta.language]: holdingMsg,
+          en: 'To ensure clinical accuracy and patient safety, your medical query has been forwarded to our healthcare team for validation.',
+        };
+        finalOutputText = holdingMsg;
+      }
+    }
+
     // ─── Step 8: Apply Response Formatter for Structured Cards ─────────────
     if (this.responseFormatter) {
       const formatted = this.responseFormatter.formatResponse({
@@ -2265,6 +2329,9 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
           state: normalizedQuery?.state,
           response: finalOutputText,
           result: retrievalTrace,
+          faithfulness: ragasScores.faithfulness,
+          answerRelevancy: ragasScores.answerRelevancy,
+          contextPrecision: ragasScores.contextPrecision,
         });
       } catch (error: unknown) {
         this.logger.warn(

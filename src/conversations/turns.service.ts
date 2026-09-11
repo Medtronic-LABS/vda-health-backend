@@ -451,6 +451,29 @@ export class TurnsService {
           content = result.content;
           intent = result.intent;
           selectedAgent = result.selectedAgent;
+
+          if (result.responseType === 'escalation' && this.escalationService) {
+            try {
+              await this.escalationService.createFromSafety({
+                identity,
+                turn,
+                safety: {
+                  ruleId: content.escalation_id || 'RAGAS_THRESHOLD_BREACH',
+                  ruleVersion: '1.0',
+                  severity: 'HIGH',
+                  status: 'ESCALATION_REQUIRED',
+                  action: 'ESCALATE',
+                  correlationId,
+                  language: dto.language || 'en',
+                  patientSafeMessage: content.summary || 'Clinical review required',
+                },
+                sanitizedInputText: piiResult.sanitizedText,
+                structuredResponse: content,
+              });
+            } catch (escErr) {
+              this.logger.error(`Failed to record post-processing escalation: ${escErr}`);
+            }
+          }
         } catch (err: any) {
           await this.failTurn(turn.id, err as Error, correlationId, identity);
           throw err;
