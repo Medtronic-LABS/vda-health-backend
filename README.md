@@ -71,7 +71,54 @@ The backend runs on an AWS EC2 instance (`13.232.251.63`) backed by PostgreSQL 1
 
 ---
 
-## 4. Directory Layout
+## 4. Guardrails & Evaluation: Three-Layer Defence-in-Depth
+
+The backend implements a clinical three-layer defence-in-depth safety architecture ensuring zero ungrounded medical advice and hard-SLA emergency handling:
+
+```
+[Layer 1: Deterministic Gate (Pre-LLM)]
+  ├── ABHA ID & PII stripped before prompt construction
+  ├── Red-flag keyword matching (chest pain, dyspnea, suicide, stroke)
+  └── Zero tolerance: LLM never decides whether an emergency escalates
+
+[Layer 2: RAGAS Evaluation Gate (Inline Circuit Breaker)]
+  ├── Fires on EVERY LLM output with knowledge retrieval (<700ms)
+  ├── Evaluates Faithfulness, Answer Relevancy, Context Precision
+  └── Threshold breach ──► SUPPRESS RESPONSE & WITHHOLD FROM PATIENT
+                                │
+                                ▼
+[Layer 3: Human Clinical Review Queue (`clinical_escalations`)]
+  ├── Flagged turns logged with full context, claims, and RAGAS scores
+  ├── Clinician validates in Admin Portal within 24h SLA
+  └── Feedback loop updates Knowledge Base and intent classifier
+```
+
+### RAGAS Target Thresholds & SLAs
+
+| Metric | Target | Description & Enforcement |
+| :--- | :---: | :--- |
+| **Faithfulness** | **$\ge 0.90$** | Grounded strictly in retrieved context, not LLM parametric memory. Breaches are withheld from user. |
+| **Answer Relevancy** | **$\ge 0.85$** | Directly addresses patient query without drift or ungrounded extrapolation. |
+| **Context Recall** | **$\ge 0.85$** | All necessary clinical/scheme knowledge chunks surfaced in top results. |
+| **Context Precision** | **$\ge 0.80$** | Retrieved context is on-topic with minimal extraneous noise. |
+| **Escalation Recall** | **$\ge 0.98$** | **Hard SLA — zero miss tolerance** on clinical emergencies before LLM execution. |
+
+### Clinical Scope Rules: What VDA Will Not Do
+- ❌ **No Diagnosis:** Will not diagnose conditions or interpret raw diagnostic lab panels.
+- ❌ **No Prescription:** Will not prescribe drugs or adjust medication dosages.
+- ❌ **No Free-Form Clinical Advice:** Ungrounded clinical statements are strictly prohibited.
+- ❌ **No LLM Override of Escalations:** Deterministic emergency gates always take precedence.
+- ❌ **Zero PII Retention:** Patient PII is stripped and scrubbed after session termination.
+
+### Standalone Python RAGAS Benchmark Evaluator
+For offline CI/CD benchmarking against the Golden Clinical Dataset:
+```bash
+python services/ragas-evaluator/evaluator.py
+```
+
+---
+
+## 5. Directory Layout
 
 ```
 src/
@@ -107,7 +154,7 @@ src/
 
 ---
 
-## 5. Technology Stack
+## 6. Technology Stack
 
 - **Framework:** [NestJS](https://nestjs.com/) 10.x (TypeScript)
 - **Database:** PostgreSQL 16 with `pgvector`
@@ -121,7 +168,7 @@ src/
 
 ---
 
-## 6. Getting Started
+## 7. Getting Started
 
 ### Prerequisites
 - Node.js (v20+)
@@ -162,13 +209,19 @@ cp .env.example .env
 
 ---
 
-## 7. Testing & Quality Assurance
+## 8. Testing & Quality Assurance
 
-The test suite covers unit testing, end-to-end scenarios, deterministic RBAC validation, and OWASP Top 10 security vectors:
+The test suite covers unit testing, end-to-end scenarios, deterministic RBAC validation, RAGAS circuit breaker enforcement, and OWASP Top 10 security vectors:
 
 ```bash
 # Run Unit Tests
 npm test
+
+# Run RAGAS Inline Output Verification Gate Tests (100% Pass)
+npx jest src/ai/verification/ragas-verification-gate.spec.ts
+
+# Run Python RAGAS Golden Benchmark Evaluator (5/5 Thresholds Passed)
+python services/ragas-evaluator/evaluator.py
 
 # Run RBAC Patient Identity Guard Unit Tests (100% Pass)
 npx jest src/ai/orchestration/rbac-identity.spec.ts
@@ -179,7 +232,8 @@ npm run test:e2e -- test/security-attack-vectors.e2e-spec.ts
 
 ---
 
-## 8. Repository Links
+## 9. Repository Links
 
 - **Medtronic LABS Organization:** [https://github.com/Medtronic-LABS/vda-health-backend](https://github.com/Medtronic-LABS/vda-health-backend)
 - **Personal Repository:** [https://github.com/paras0602/vda-health-backend](https://github.com/paras0602/vda-health-backend)
+
