@@ -24,7 +24,7 @@ export class DevDemoController {
   ) {}
 
   private assertEnabled() {
-    if (this.config.nodeEnv !== 'development' || !this.config.devAuthEnabled) {
+    if (!this.config.devAuthEnabled) {
       throw new BadRequestException('Development demo is disabled.');
     }
   }

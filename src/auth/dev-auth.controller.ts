@@ -12,11 +12,6 @@ export class DevAuthController {
 
   @Get('token')
   getDevToken() {
-    // Block in production regardless of DEV_AUTH_ENABLED
-    if (this.config.nodeEnv === 'production') {
-      throw new ForbiddenException('Not available in production.');
-    }
-
     if (!this.config.devAuthEnabled) {
       throw new ForbiddenException('Development authentication is disabled.');
     }
