@@ -19,6 +19,7 @@ import { SemanticContextPlannerService } from './context/semantic-context-planne
 
 import { ConversationResponseFormatter } from '../conversations/formatters/conversation-response.formatter';
 import { ConversationHistoryService } from '../conversations/services/conversation-history.service';
+import { RagasVerificationGateService } from './verification/ragas-verification-gate.service';
 
 import { PiiModule } from '../pii/pii.module';
 import { FacilityModule } from '../facilities/facility.module';
@@ -101,6 +102,7 @@ import { PrescriptionSessionContextModule } from '../prescription-context/prescr
     },
     AiOrchestratorService,
     IntentClassifierService,
+    RagasVerificationGateService,
   ],
   exports: [
     'IAiProvider',
@@ -111,6 +113,7 @@ import { PrescriptionSessionContextModule } from '../prescription-context/prescr
     IntentClassifierService,
     ConversationResponseFormatter,
     ConversationHistoryService,
+    RagasVerificationGateService,
   ],
 })
 export class AiModule {}
