@@ -18,7 +18,7 @@ export class Prescription {
   @Column({ type: 'text' }) extractedText!: string;
   @Column({ type: 'jsonb', default: [] }) medications!: Array<Record<string, string | null>>;
   @Column({ type: 'jsonb', default: [] }) investigations!: Array<Record<string, string | null>>;
-  @Column({ default: 'REVIEW_REQUIRED' }) extractionStatus!: 'REVIEW_REQUIRED' | 'APPROVED' | 'REJECTED' | 'FAILED';
+  @Column({ default: 'REVIEW_REQUIRED' }) extractionStatus!: 'REVIEW_REQUIRED' | 'EXTRACTED' | 'APPROVED' | 'REJECTED' | 'FAILED';
   @CreateDateColumn({ type: 'timestamptz' }) createdAt!: Date;
   @UpdateDateColumn({ type: 'timestamptz' }) updatedAt!: Date;
 }

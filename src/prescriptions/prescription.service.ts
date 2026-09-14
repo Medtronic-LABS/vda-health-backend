@@ -20,7 +20,11 @@ export class PrescriptionService {
     const documentId = randomUUID();
     const medications = extracted?.medicines || this.extractMedications(parsed.content);
     const investigations = extracted?.investigations || this.extractInvestigations(parsed.content);
-    const prescription = await this.prescriptions.save(this.prescriptions.create({ tenantId, patientRef, sessionId, prescriptionId: randomUUID(), sourceDocumentId: documentId, filename: file.filename, checksum: parsed.checksum, extractedText: parsed.content, medications, investigations, extractionStatus: 'REVIEW_REQUIRED' }));
+    const extractionStatus = medications.length > 0 && medications.every((medicine: Record<string, string | null>) => {
+      const name = medicine.medicationName || medicine.normalizedName;
+      return Boolean(name?.trim()) && (medicine.confidence || 'HIGH').toUpperCase() !== 'LOW';
+    }) ? 'EXTRACTED' : 'REVIEW_REQUIRED';
+    const prescription = await this.prescriptions.save(this.prescriptions.create({ tenantId, patientRef, sessionId, prescriptionId: randomUUID(), sourceDocumentId: documentId, filename: file.filename, checksum: parsed.checksum, extractedText: parsed.content, medications, investigations, extractionStatus }));
     return prescription;
   }
   async list(tenantId: string, patientRef?: string) { return this.prescriptions.find({ where: patientRef ? { tenantId, patientRef } : { tenantId }, order: { createdAt: 'DESC' } }); }

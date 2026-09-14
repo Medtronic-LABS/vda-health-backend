@@ -10,6 +10,8 @@ export class DevelopmentConversationProcessor implements IConversationProcessor 
     correlationId: string,
     _identity: HostIdentity,
     _consentArtifactId: string,
+    _prescriptionId?: string,
+    _prescriptionContextRequired?: boolean,
   ): Promise<{
     responseType: string;
     content: Record<string, any>;

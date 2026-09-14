@@ -233,9 +233,13 @@ export class EscalationService {
     const fallbackShownAt = eligible && !clinicianResponded
       ? escalation.teleconsultationOfferedAt || null
       : null;
-    const nearbyFacilities = fallbackShownAt
-      ? await this.nearbyEmergencyFacilities(tenantId, sessionId)
-      : [];
+    // The emergency patient card is rendered as soon as SafetyGate escalates.
+    // Use the existing structured emergency search for that card immediately;
+    // teleconsultation eligibility remains independently time-gated above.
+    const nearbyFacilities = await this.nearbyEmergencyFacilities(
+      tenantId,
+      sessionId,
+    );
     return {
       reviewRequested: true,
       teleconsultationOffered: eligible && !clinicianResponded,

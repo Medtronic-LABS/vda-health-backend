@@ -31,6 +31,7 @@ import { ConversationTurn } from '../database/entities/conversation-turn.entity'
 import { Prescription } from '../database/entities/prescription.entity';
 import { DevDemoModule } from '../dev/dev-demo.module';
 import { ObservabilityModule } from '../observability/observability.module';
+import { PrescriptionSessionContextModule } from '../prescription-context/prescription-session-context.module';
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { ObservabilityModule } from '../observability/observability.module';
     MedicationModule,
     EvaluationModule,
     DevDemoModule,
+    PrescriptionSessionContextModule,
     TypeOrmModule.forFeature([Session, SyntheticPatient, ConversationTurn, Prescription]),
   ],
   providers: [

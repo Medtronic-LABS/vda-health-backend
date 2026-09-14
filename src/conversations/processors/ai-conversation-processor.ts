@@ -18,12 +18,15 @@ export class AiConversationProcessor implements IConversationProcessor {
     correlationId: string,
     identity: HostIdentity,
     consentArtifactId: string,
+    prescriptionId?: string,
+    prescriptionContextRequired?: boolean,
   ): Promise<{
     responseType: string;
     content: Record<string, any>;
     intent: string | null;
     selectedAgent: string | null;
     safetyStatus: string;
+    safetyEscalation?: import('../../safety/interfaces/safety-gate.interface').SafetyResult;
   }> {
     this.logger.log(`[AiProcessor] Processing turn for sessionId=${sessionId}`);
 
@@ -33,6 +36,8 @@ export class AiConversationProcessor implements IConversationProcessor {
       correlationId,
       identity,
       vdaConsentArtifactId: consentArtifactId,
+      prescriptionId,
+      prescriptionContextRequired,
     });
 
     return {
@@ -41,6 +46,7 @@ export class AiConversationProcessor implements IConversationProcessor {
       intent: result.intent,
       selectedAgent: result.selectedAgent,
       safetyStatus: result.safetyStatus,
+      safetyEscalation: result.safetyEscalation,
     };
   }
 }

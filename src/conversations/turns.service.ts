@@ -446,11 +446,35 @@ export class TurnsService {
             correlationId,
             identity,
             session.consentArtifactId,
+            dto.prescription_id,
+            dto.prescription_context_required,
           );
           responseType = result.responseType;
           content = result.content;
           intent = result.intent;
           selectedAgent = result.selectedAgent;
+          safetyStatus = result.safetyStatus;
+
+          // A post-generation SafetyGate escalation is already an approved
+          // safety decision. Persist it through the same clinical-review path
+          // as an input-time escalation so the patient card reads the matching
+          // structured facility state instead of an empty fallback snapshot.
+          if (result.safetyEscalation && this.escalationService) {
+            try {
+              await this.escalationService.createFromSafety({
+                identity,
+                turn,
+                safety: result.safetyEscalation,
+                sanitizedInputText: piiResult.sanitizedText,
+                structuredResponse: content,
+              });
+            } catch (error) {
+              const reason = error instanceof Error ? error.message : 'unknown error';
+              this.logger.error(
+                `Clinical escalation persistence failed rule=${result.safetyEscalation.ruleId} correlationId=${correlationId} reason=${reason}`,
+              );
+            }
+          }
         } catch (err: any) {
           await this.failTurn(turn.id, err as Error, correlationId, identity);
           throw err;

@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsOptional, IsString, IsUUID } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateTurnDto {
@@ -46,4 +46,18 @@ export class CreateTurnDto {
   @IsString()
   @IsOptional()
   language?: string;
+
+  @ApiProperty({
+    description: 'The exact uploaded prescription record to use for a prescription-scoped explanation turn',
+    required: false,
+  })
+  @IsUUID()
+  @IsOptional()
+  prescription_id?: string;
+
+  /** Prevents any medication-data fallback outside active prescription context. */
+  @IsBoolean()
+  @IsOptional()
+  prescription_context_required?: boolean;
+
 }
