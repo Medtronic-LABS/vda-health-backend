@@ -11,7 +11,9 @@ export class PrescriptionService {
   private readonly logger = new Logger(PrescriptionService.name);
   constructor(@InjectRepository(Prescription) private readonly prescriptions: Repository<Prescription>, private readonly parser: MultiFormatParserService, @Inject('IAiProvider') private readonly aiProvider: IAiProvider) {}
   async upload(tenantId: string, patientRef: string, sessionId: string | null, file: { buffer: Buffer; filename: string; mimeType?: string }) {
-    if (!patientRef.startsWith('synthetic:') && !patientRef.startsWith('local-file:')) throw new BadRequestException('PRESCRIPTION_UPLOAD_REQUIRES_DEVELOPMENT_PATIENT');
+    if (!patientRef.startsWith('synthetic:') && !patientRef.startsWith('local-file:') && !patientRef.startsWith('dev-')) {
+      throw new BadRequestException('PRESCRIPTION_UPLOAD_REQUIRES_DEVELOPMENT_PATIENT');
+    }
     if (!file.buffer?.length) throw new BadRequestException('INVALID_FILE');
     if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'text/plain', 'text/markdown'].includes(file.mimeType || '')) throw new BadRequestException('UNSUPPORTED_FILE');
     const isMultimodal = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(file.mimeType || '');

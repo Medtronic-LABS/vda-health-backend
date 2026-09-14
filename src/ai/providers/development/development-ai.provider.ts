@@ -116,7 +116,55 @@ export class DevelopmentAiProvider implements IAiProvider {
     }
 
     if (options?.responseFormat === 'json') {
-      jsonObj = { response: responseText };
+      if (options?.telemetryLabel === 'MULTIMODAL_PRESCRIPTION' || textLower.includes('prescription')) {
+        jsonObj = {
+          prescriptionDate: '2026-09-14',
+          doctorName: 'Dr. R. K. Sharma',
+          facilityName: 'Civil Hospital Solan',
+          diagnosis: 'Type 2 Diabetes Mellitus & Hypertension',
+          medicines: [
+            {
+              rawName: 'Tab Metformin 500mg',
+              normalizedName: 'Metformin',
+              strength: '500mg',
+              dosage: '1 tablet',
+              dosageForm: 'tablet',
+              route: 'oral',
+              frequency: 'twice daily',
+              timing: 'after meals',
+              duration: '30 days',
+              instructions: 'Take one tablet twice daily after meals',
+              confidence: 'HIGH',
+            },
+            {
+              rawName: 'Tab Telmisartan 40mg',
+              normalizedName: 'Telmisartan',
+              strength: '40mg',
+              dosage: '1 tablet',
+              dosageForm: 'tablet',
+              route: 'oral',
+              frequency: 'once daily',
+              timing: 'morning',
+              duration: '30 days',
+              instructions: 'Take one tablet in the morning after breakfast',
+              confidence: 'HIGH',
+            },
+          ],
+          investigations: [
+            {
+              rawName: 'HbA1c',
+              normalizedName: 'HbA1c',
+              reason: 'Diabetes monitoring',
+              instructions: 'Fasting not required',
+              confidence: 'HIGH',
+            },
+          ],
+          instructions: ['Low salt and low sugar diet', 'Regular physical exercise'],
+          followUp: 'After 1 month',
+        };
+      } else {
+        jsonObj = { response: responseText };
+      }
     }
 
     return {
