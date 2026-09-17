@@ -3,6 +3,8 @@ import { IntentType } from '../../ai/intents/intent.types';
 
 export interface NormalizedKnowledgeQuery {
   query: string;
+  category?: string;
+  maxResults?: number;
   district?: string;
   state?: string;
   normalized: boolean;
@@ -44,8 +46,14 @@ export class KnowledgeQueryNormalizerService {
       [IntentType.REFERRAL_QUERY]: 'clinical referral pathway hospital referral',
     };
 
+    const pmjayApplication = intent === IntentType.GOVERNMENT_SCHEME_QUERY
+      && /(?:ayushman|pm-jay|pmjay|आयुष्मान)/.test(lower)
+      && /(?:apply|application|enrol+l?|registration|register|card\s*(?:creation|ban)|कैसे\s*(?:अप्लाई|आवेदन)|आवेदन|पंजीकरण|कार्ड\s*(?:बन|बनवा))/i.test(lower);
+
     return {
       query: byIntent[intent] || patientQuery,
+      ...(pmjayApplication ? { category: 'pmjay_operations' } : {}),
+      ...(pmjayApplication ? { maxResults: 4 } : {}),
       state: effectiveState,
       district: location.district,
       normalized: byIntent[intent] !== undefined,
@@ -128,6 +136,9 @@ export class KnowledgeQueryNormalizerService {
     }
 
     if (/ayushman|pm-jay|pmjay|आयुष्मान/.test(lower)) {
+      if (/(?:apply|application|enrol+l?|registration|register|card\s*(?:creation|ban)|कैसे\s*(?:अप्लाई|आवेदन)|आवेदन|पंजीकरण|कार्ड\s*(?:बन|बनवा))/i.test(lower)) {
+        return 'AB PM-JAY Beneficiary Identification System BIS eligibility database Ayushman card Common Service Centre CSC PMAM';
+      }
       if (/document|दस्तावेज/.test(lower)) {
         return 'Ayushman Bharat PM-JAY eligibility required documents beneficiary identification';
       }
@@ -135,6 +146,13 @@ export class KnowledgeQueryNormalizerService {
         return 'Ayushman Bharat PM-JAY eligibility criteria required documents official verification';
       }
       return 'Ayushman Bharat PM-JAY benefits coverage cashless hospitalization';
+    }
+
+    // A surgery/hospitalisation question needs coverage evidence rather than a
+    // broad scheme inventory. This remains retrieval-only: the generated answer
+    // must still be supported by the returned governed sources.
+    if (/(?:operation|surgery|hospitali[sz](?:ation|ed)|admit|admission|ऑपरेशन|सर्जरी|अस्पताल\s*में\s*भर्ती)/i.test(lower)) {
+      return 'Ayushman Bharat PM-JAY government health scheme surgery hospitalization coverage eligibility';
     }
 
     // Generic state scheme query (e.g. "mere state me konsi yojnay hai", "मेरे राज्य में कौन सी योजनाएं हैं")

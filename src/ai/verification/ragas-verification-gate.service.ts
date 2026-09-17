@@ -97,7 +97,32 @@ ${responseText}`;
         correlationId,
         temperature: 0.0,
         maxTokens: 512,
+        // Keep the constrained verification response within its output budget;
+        // the judge needs a short JSON verdict, not extended hidden reasoning.
+        thinkingLevel: 'MINIMAL',
         responseFormat: 'json',
+        jsonSchema: {
+          type: 'OBJECT',
+          properties: {
+            faithfulnessScore: { type: 'NUMBER' },
+            answerRelevancyScore: { type: 'NUMBER' },
+            contextPrecisionScore: { type: 'NUMBER' },
+            clinicalViolationDetected: { type: 'BOOLEAN' },
+            unsupportedClaims: {
+              type: 'ARRAY',
+              items: { type: 'STRING' },
+            },
+            reason: { type: 'STRING' },
+          },
+          required: [
+            'faithfulnessScore',
+            'answerRelevancyScore',
+            'contextPrecisionScore',
+            'clinicalViolationDetected',
+            'unsupportedClaims',
+            'reason',
+          ],
+        },
         telemetryLabel: 'RAGAS_EVALUATION_JUDGE',
       });
 

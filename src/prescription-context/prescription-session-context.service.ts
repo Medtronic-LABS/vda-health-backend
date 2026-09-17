@@ -24,6 +24,8 @@ export type SanitizedPrescriptionSessionContext = {
   investigations: SanitizedPrescriptionInvestigation[];
   lastReferencedMedicine?: string;
   lastReferencedInvestigation?: string;
+  pendingMedicationSafety?: 'MISSED_DOSE';
+  pendingMedicationSafetyLanguage?: string;
 };
 
 @Injectable()
@@ -68,6 +70,14 @@ export class PrescriptionSessionContextService {
       ...(previousInvestigation && investigations.some((item) => this.normalize(item.name) === this.normalize(previousInvestigation))
         ? { lastReferencedInvestigation: previousInvestigation }
         : {}),
+      ...(previous?.pendingMedicationSafety === 'MISSED_DOSE'
+        ? {
+            pendingMedicationSafety: 'MISSED_DOSE' as const,
+            ...(previous.pendingMedicationSafetyLanguage
+              ? { pendingMedicationSafetyLanguage: previous.pendingMedicationSafetyLanguage }
+              : {}),
+          }
+        : {}),
     };
     await this.redis.set(this.key(sessionId), JSON.stringify(context), PrescriptionSessionContextService.TTL_SECONDS);
     return { medicineCount: medicines.length, reminderCount: context.reminders.length, investigationCount: investigations.length };
@@ -97,6 +107,22 @@ export class PrescriptionSessionContextService {
     const investigation = context?.investigations.find((item) => this.normalize(item.name) === this.normalize(investigationName));
     if (!context || !investigation) return;
     context.lastReferencedInvestigation = investigation.name;
+    await this.redis.set(this.key(sessionId), JSON.stringify(context), PrescriptionSessionContextService.TTL_SECONDS);
+  }
+
+  async setPendingMissedDose(sessionId: string, language: string): Promise<void> {
+    const context = await this.get(sessionId);
+    if (!context?.medicines.length) return;
+    context.pendingMedicationSafety = 'MISSED_DOSE';
+    context.pendingMedicationSafetyLanguage = language;
+    await this.redis.set(this.key(sessionId), JSON.stringify(context), PrescriptionSessionContextService.TTL_SECONDS);
+  }
+
+  async clearPendingMedicationSafety(sessionId: string): Promise<void> {
+    const context = await this.get(sessionId);
+    if (!context?.pendingMedicationSafety) return;
+    delete context.pendingMedicationSafety;
+    delete context.pendingMedicationSafetyLanguage;
     await this.redis.set(this.key(sessionId), JSON.stringify(context), PrescriptionSessionContextService.TTL_SECONDS);
   }
 

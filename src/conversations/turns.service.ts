@@ -424,61 +424,48 @@ export class TurnsService {
     let finalStatus = 'COMPLETED';
 
     if (safetyResult.status === 'SAFE') {
-      const routedToClinicalReview = this.escalationService
-        ? await this.escalationService.recordPatientMessage(identity.tenantId, sessionId, turn, identity.externalId)
-        : false;
-      if (routedToClinicalReview) {
-        const hi = dto.language === 'hi' || /[ह-्]/.test(dto.input_text);
-        responseType = 'clinical-review';
-        content = {
-          summary: hi
-            ? 'आपका संदेश क्लिनिकल टीम को भेज दिया गया है।'
-            : 'Your message has been sent to the clinical team.',
-        };
-        intent = 'clinical-review-message';
-        selectedAgent = 'clinical-team';
-      } else {
-        let result;
-        try {
-          result = await this.processor.processTurn(
-            sessionId,
-            piiResult.sanitizedText,
-            correlationId,
-            identity,
-            session.consentArtifactId,
-            dto.prescription_id,
-            dto.prescription_context_required,
-          );
-          responseType = result.responseType;
-          content = result.content;
-          intent = result.intent;
-          selectedAgent = result.selectedAgent;
-          safetyStatus = result.safetyStatus;
+      // A previous open escalation must never capture a later SAFE turn.
+      // Emergency routing is decided only by this turn's fresh SafetyResult.
+      let result;
+      try {
+        result = await this.processor.processTurn(
+          sessionId,
+          piiResult.sanitizedText,
+          correlationId,
+          identity,
+          session.consentArtifactId,
+          dto.prescription_id,
+          dto.prescription_context_required,
+        );
+        responseType = result.responseType;
+        content = result.content;
+        intent = result.intent;
+        selectedAgent = result.selectedAgent;
+        safetyStatus = result.safetyStatus;
 
-          // A post-generation SafetyGate escalation is already an approved
-          // safety decision. Persist it through the same clinical-review path
-          // as an input-time escalation so the patient card reads the matching
-          // structured facility state instead of an empty fallback snapshot.
-          if (result.safetyEscalation && this.escalationService) {
-            try {
-              await this.escalationService.createFromSafety({
-                identity,
-                turn,
-                safety: result.safetyEscalation,
-                sanitizedInputText: piiResult.sanitizedText,
-                structuredResponse: content,
-              });
-            } catch (error) {
-              const reason = error instanceof Error ? error.message : 'unknown error';
-              this.logger.error(
-                `Clinical escalation persistence failed rule=${result.safetyEscalation.ruleId} correlationId=${correlationId} reason=${reason}`,
-              );
-            }
+        // A post-generation SafetyGate escalation is already an approved
+        // safety decision. Persist it through the same clinical-review path
+        // as an input-time escalation so the patient card reads the matching
+        // structured facility state instead of an empty fallback snapshot.
+        if (result.safetyEscalation && this.escalationService) {
+          try {
+            await this.escalationService.createFromSafety({
+              identity,
+              turn,
+              safety: result.safetyEscalation,
+              sanitizedInputText: piiResult.sanitizedText,
+              structuredResponse: content,
+            });
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : 'unknown error';
+            this.logger.error(
+              `Clinical escalation persistence failed rule=${result.safetyEscalation.ruleId} correlationId=${correlationId} reason=${reason}`,
+            );
           }
-        } catch (err: any) {
-          await this.failTurn(turn.id, err as Error, correlationId, identity);
-          throw err;
         }
+      } catch (err: any) {
+        await this.failTurn(turn.id, err as Error, correlationId, identity);
+        throw err;
       }
     } else if (safetyResult.status === 'ESCALATION_REQUIRED') {
       // This contract is deterministic and ready before any best-effort HITL work.
