@@ -232,8 +232,42 @@ npm run test:e2e -- test/security-attack-vectors.e2e-spec.ts
 
 ---
 
-## 9. Repository Links
+## 9. Prescription Session Context & Clinical Flow Architecture
+
+### Prescription Session Context (`/api/v1/prescriptions/session-context/refresh`)
+- **Strict Boundary**: Medication guidance strictly analyzes uploaded doctor prescriptions. The VDA never falls back to preexisting EHR medications for advice.
+- **Server-Side Sanitization**: Prescriptions are sanitized against PII leakage before contextual synthesis.
+- **Redis Session Caching**: Medicines, reminders, and investigation schedules are cached in Redis (`vda:prescription-session-context:{sessionId}`) with a 4-hour sliding TTL.
+- **Direct Emergency Assistance**: In an emergency or SOS trigger, the response delivers immediate access to 108 Emergency Ambulance, 102 Maternal/Child Ambulance, eSanjeevani Teleconsultation (`1075`), and nearby verified emergency facilities without blocking on a clinician queue.
+
+---
+
+## 10. EC2 Production Deployment
+
+The production backend runs as Docker containers on AWS EC2 (`13.232.251.63`).
+
+To deploy updates on EC2:
+```bash
+# 1. SSH into the instance
+ssh ubuntu@13.232.251.63
+
+# 2. Navigate to backend directory and pull latest dev
+cd ~/vda/backend
+git pull origin dev
+
+# 3. Rebuild and restart the container
+docker compose up -d --build app
+
+# 4. Verify service health
+curl -s http://localhost:3000/api/v1/health
+docker ps
+```
+
+---
+
+## 11. Repository Links
 
 - **Medtronic LABS Organization:** [https://github.com/Medtronic-LABS/vda-health-backend](https://github.com/Medtronic-LABS/vda-health-backend)
 - **Personal Repository:** [https://github.com/paras0602/vda-health-backend](https://github.com/paras0602/vda-health-backend)
+
 

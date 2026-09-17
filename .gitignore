@@ -6,3 +6,5 @@ build
 *.sql
 *.zip
 /vda_ec2_deployment
+*.log
+backend-live.*
