@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
 import { Repository } from 'typeorm';
@@ -44,8 +44,8 @@ export class FollowUpService {
     private readonly attendance: Repository<ClinicalFollowUpAttendance>,
   ) {}
 
-  async listForSession(tenantId: string, sessionId: string): Promise<FollowUpListResponse> {
-    const resolved = await this.resolveForSession(tenantId, sessionId);
+  async listForSession(tenantId: string, sessionId: string, externalId?: string): Promise<FollowUpListResponse> {
+    const resolved = await this.resolveForSession(tenantId, sessionId, externalId);
     const timezone = (await this.patientData.getPatientByReference(tenantId, resolved.patientRef))?.timezone || 'Asia/Kolkata';
     return {
       asOfDate: this.localDate(this.now(), timezone),
@@ -62,8 +62,9 @@ export class FollowUpService {
     sessionId: string,
     followUpId: string,
     attended: boolean,
+    externalId?: string,
   ): Promise<FollowUpAttendanceResponse> {
-    const resolved = await this.resolveForSession(tenantId, sessionId);
+    const resolved = await this.resolveForSession(tenantId, sessionId, externalId);
     const requestedStatus = attended ? 'COMPLETED' : 'MISSED';
     const priorResponse = await this.attendance.findOne({
       where: { tenantId, patientRef: resolved.patientRef, eventId: followUpId },
@@ -98,9 +99,10 @@ export class FollowUpService {
     return new Date();
   }
 
-  private async resolveForSession(tenantId: string, sessionId: string): Promise<ResolvedFollowUps> {
+  private async resolveForSession(tenantId: string, sessionId: string, externalId?: string): Promise<ResolvedFollowUps> {
     const session = await this.sessions.findOne({ where: { id: sessionId, tenantId } });
     if (!session) throw new NotFoundException('SESSION_NOT_FOUND');
+    if (externalId && session.externalId !== externalId) throw new ForbiddenException('TENANT_ACCESS_DENIED');
 
     const patient = await this.patientData.getPatientByReference(tenantId, session.subjectAbhaRef);
     if (!patient) throw new NotFoundException('PATIENT_CONTEXT_NOT_FOUND');

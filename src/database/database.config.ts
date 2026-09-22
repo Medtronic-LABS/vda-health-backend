@@ -24,6 +24,7 @@ import { MedicationAdherenceEvent } from './entities/medication-adherence-event.
 import { RagEvaluationTrace } from './entities/rag-evaluation-trace.entity';
 import { ClinicalEscalation } from './entities/clinical-escalation.entity';
 import { ClinicalFollowUpAttendance } from './entities/clinical-follow-up-attendance.entity';
+import { MobileUser } from './entities/mobile-user.entity';
 
 @Injectable()
 export class DatabaseConfigService implements TypeOrmOptionsFactory {
@@ -62,6 +63,7 @@ export class DatabaseConfigService implements TypeOrmOptionsFactory {
         RagEvaluationTrace,
         ClinicalEscalation,
         ClinicalFollowUpAttendance,
+        MobileUser,
       ],
       synchronize: false,
       migrationsRun: false,

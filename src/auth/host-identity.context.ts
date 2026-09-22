@@ -6,6 +6,9 @@ export interface HostIdentity {
   externalId: string;
   subjectAbhaRef?: string;
   scopes: string[];
+  authType?: 'DEV' | 'MOBILE';
+  mobileUserId?: string;
+  preferredLanguage?: string;
 }
 
 @Injectable()

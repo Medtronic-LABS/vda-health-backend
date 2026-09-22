@@ -2,12 +2,12 @@ import { IsNotEmpty, IsOptional, IsString, IsUUID } from 'class-validator';
 
 export class CreateSessionDto {
   @IsString()
-  @IsNotEmpty()
-  external_id!: string;
+  @IsOptional()
+  external_id?: string;
 
   @IsString()
-  @IsNotEmpty()
-  subject_abha_ref!: string;
+  @IsOptional()
+  subject_abha_ref?: string;
 
   @IsString()
   @IsNotEmpty()
@@ -26,6 +26,6 @@ export class CreateSessionDto {
   assist_context_id?: string;
 
   @IsUUID()
-  @IsNotEmpty()
-  consent_artefact_id!: string;
+  @IsOptional()
+  consent_artefact_id?: string;
 }

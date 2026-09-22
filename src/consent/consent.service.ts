@@ -10,6 +10,34 @@ export class ConsentService {
     private readonly consentRepo: Repository<ConsentArtifact>,
   ) {}
 
+  async ensureMobilePilotConsent(tenantId: string, subjectId: string, language: string): Promise<ConsentArtifact> {
+    const existing = await this.consentRepo.findOne({
+      where: { tenantId, subjectId, status: 'ACTIVE', consentVersion: 'mobile-pilot-v1' },
+    });
+    if (existing) return existing;
+    try {
+      return await this.consentRepo.save(this.consentRepo.create({
+        tenantId,
+        subjectId,
+        consentVersion: 'mobile-pilot-v1',
+        scopes: ['record_read', 'conversation_retention'],
+        language,
+        deliveryMode: 'text',
+        retentionInfo: { mode: 'mobile-pilot-profile' },
+        status: 'ACTIVE',
+      }));
+    } catch (error: unknown) {
+      // A unique partial index makes simultaneous first-session requests
+      // converge on the same active mobile-pilot consent artifact.
+      if ((error as { code?: string }).code !== '23505') throw error;
+      const concurrent = await this.consentRepo.findOne({
+        where: { tenantId, subjectId, status: 'ACTIVE', consentVersion: 'mobile-pilot-v1' },
+      });
+      if (concurrent) return concurrent;
+      throw error;
+    }
+  }
+
   async validateConsent(
     consentArtifactId: string,
     tenantId: string,

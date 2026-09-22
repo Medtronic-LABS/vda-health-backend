@@ -12,15 +12,18 @@ import { PATIENT_DATA_PROVIDER } from './patient-data/patient-data-provider.inte
 import { FilePatientDataProvider } from './patient-data/file-patient-data.provider';
 import { SyntheticPatientDataProvider } from './patient-data/synthetic-patient-data.provider';
 import { CompositePatientDataProvider } from './patient-data/composite-patient-data.provider';
+import { MobileUser } from '../database/entities/mobile-user.entity';
+import { MobileUserDataProvider } from './patient-data/mobile-user-data.provider';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Tenant, ConsentArtifact, SyntheticPatient, SyntheticPatientFeedback]), SessionsModule, AuthModule],
+  imports: [TypeOrmModule.forFeature([Tenant, ConsentArtifact, SyntheticPatient, SyntheticPatientFeedback, MobileUser]), SessionsModule, AuthModule],
   controllers: [DevDemoController],
   providers: [
     SyntheticPatientService,
     FilePatientDataProvider,
     SyntheticPatientDataProvider,
     CompositePatientDataProvider,
+    MobileUserDataProvider,
     { provide: PATIENT_DATA_PROVIDER, useExisting: CompositePatientDataProvider },
   ],
   exports: [SyntheticPatientService, PATIENT_DATA_PROVIDER],

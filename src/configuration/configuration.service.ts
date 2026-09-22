@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHmac } from 'crypto';
 
 @Injectable()
 export class ConfigurationService {
@@ -302,6 +303,28 @@ export class ConfigurationService {
 
   get devAuthToken(): string | undefined {
     return this.configService.get<string>('DEV_AUTH_TOKEN');
+  }
+
+  get mobileAuthJwtSecret(): string {
+    const configured = this.configService.get<string>('MOBILE_AUTH_JWT_SECRET')?.trim();
+    if (configured) return configured;
+    const auditSecret = this.auditHmacSecret?.trim();
+    if (!auditSecret) throw new Error('MOBILE_AUTH_JWT_SECRET is required.');
+    return createHmac('sha256', auditSecret).update('vda-mobile-auth-jwt-v1').digest('hex');
+  }
+
+  get mobileAuthTokenTtlSeconds(): number {
+    return Number(this.configService.get<number>('MOBILE_AUTH_TOKEN_TTL_SECONDS')) || 43200;
+  }
+
+  get mobileAuthTenantId(): string {
+    return this.configService.get<string>('MOBILE_AUTH_TENANT_ID')?.trim()
+      || this.devAuthTenantId
+      || '00000000-0000-0000-0000-000000000000';
+  }
+
+  get mobileAuthMaxRequests(): number {
+    return Number(this.configService.get<number>('MOBILE_AUTH_MAX_REQUESTS')) || 10;
   }
 
   get devAuthContextCompleteness(): string | undefined {

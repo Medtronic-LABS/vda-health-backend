@@ -47,11 +47,11 @@ export class PatientClinicalReviewController {
 
   @Get()
   state(@Req() req: { user: HostIdentity }, @Param('sessionId') sessionId: string) {
-    return this.escalationService.patientFallbackState(req.user.tenantId, sessionId);
+    return this.escalationService.patientFallbackState(req.user.tenantId, sessionId, req.user.externalId);
   }
 
   @Post('teleconsultation')
   requestTeleconsultation(@Req() req: { user: HostIdentity }, @Param('sessionId') sessionId: string) {
-    return this.escalationService.requestTeleconsultation(req.user.tenantId, sessionId);
+    return this.escalationService.requestTeleconsultation(req.user.tenantId, sessionId, req.user.externalId);
   }
 }

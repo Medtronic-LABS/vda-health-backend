@@ -296,6 +296,24 @@ export class EnvironmentVariables {
 
   @IsString()
   @IsOptional()
+  MOBILE_AUTH_JWT_SECRET?: string;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  MOBILE_AUTH_TOKEN_TTL_SECONDS = 43200;
+
+  @IsString()
+  @IsOptional()
+  MOBILE_AUTH_TENANT_ID?: string;
+
+  @Type(() => Number)
+  @IsNumber()
+  @IsOptional()
+  MOBILE_AUTH_MAX_REQUESTS = 10;
+
+  @IsString()
+  @IsOptional()
   LOCAL_PATIENT_SUMMARY_PATH?: string;
 
   @IsString()

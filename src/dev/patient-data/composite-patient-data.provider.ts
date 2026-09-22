@@ -7,6 +7,7 @@ import {
 } from './patient-data-provider.interface';
 import { FilePatientDataProvider } from './file-patient-data.provider';
 import { SyntheticPatientDataProvider } from './synthetic-patient-data.provider';
+import { MobileUserDataProvider } from './mobile-user-data.provider';
 
 /**
  * Resolves a server-created subject reference to exactly one provider record.
@@ -17,6 +18,7 @@ export class CompositePatientDataProvider implements PatientDataProvider {
   constructor(
     private readonly files: FilePatientDataProvider,
     private readonly synthetic: SyntheticPatientDataProvider,
+    private readonly mobileUsers: MobileUserDataProvider,
   ) {}
 
   getPatients(tenantId: string): Promise<PatientDataSummary[]> {
@@ -32,6 +34,7 @@ export class CompositePatientDataProvider implements PatientDataProvider {
   }
 
   async getPatientByReference(tenantId: string, subjectReference: string): Promise<PatientDataRecord | null> {
+    if (subjectReference.startsWith('mobile-user:')) return this.mobileUsers.getPatientByReference(tenantId, subjectReference);
     if (subjectReference.startsWith('local-file:')) return this.files.getPatientByReference(tenantId, subjectReference);
     if (subjectReference.startsWith('synthetic:')) return this.synthetic.getPatientByReference(tenantId, subjectReference);
     return (await this.files.getPatient(tenantId, subjectReference)) || (await this.synthetic.getPatient(tenantId, subjectReference));

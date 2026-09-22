@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, IsNull, Repository } from 'typeorm';
 import { AuditService } from '../audit/audit.service';
@@ -176,7 +176,7 @@ export class EscalationService {
    * from the persisted escalation timestamp. There is deliberately no provider
    * call here: the current project has no real teleconsultation integration.
    */
-  async patientFallbackState(tenantId: string, sessionId: string): Promise<{
+  async patientFallbackState(tenantId: string, sessionId: string, externalId?: string): Promise<{
     reviewRequested: boolean;
     teleconsultationOffered: boolean;
     teleconsultationConfigured: boolean;
@@ -187,6 +187,11 @@ export class EscalationService {
     nearbyFacilities: EmergencyFacilityOption[];
     messages: Array<{ speaker: 'PATIENT' | 'CLINICIAN'; text: string; createdAt: Date }>;
   }> {
+    if (externalId && this.sessions) {
+      const session = await this.sessions.findOne({ where: { id: sessionId, tenantId } });
+      if (!session) throw new NotFoundException('SESSION_NOT_FOUND');
+      if (session.externalId !== externalId) throw new ForbiddenException('TENANT_ACCESS_DENIED');
+    }
     const escalation = await this.escalations.findOne({
       where: { tenantId, sessionId },
       order: { createdAt: 'DESC' },
@@ -253,10 +258,10 @@ export class EscalationService {
     };
   }
 
-  async requestTeleconsultation(tenantId: string, sessionId: string): Promise<{
+  async requestTeleconsultation(tenantId: string, sessionId: string, externalId?: string): Promise<{
     teleconsultationConfigured: boolean;
   }> {
-    const state = await this.patientFallbackState(tenantId, sessionId);
+    const state = await this.patientFallbackState(tenantId, sessionId, externalId);
     if (!state.reviewRequested || !state.teleconsultationOffered) {
       throw new BadRequestException('TELECONSULTATION_FALLBACK_NOT_AVAILABLE');
     }

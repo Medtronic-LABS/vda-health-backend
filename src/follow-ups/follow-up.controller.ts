@@ -12,7 +12,7 @@ export class FollowUpController {
   @Get(':sessionId/follow-ups')
   list(@Param('sessionId') sessionId: string, @Req() request: Record<string, unknown>) {
     const identity = request.user as HostIdentity;
-    return this.followUps.listForSession(identity.tenantId, sessionId);
+    return this.followUps.listForSession(identity.tenantId, sessionId, identity.externalId);
   }
 
   @Post(':sessionId/follow-ups/:followUpId/attendance')
@@ -23,6 +23,6 @@ export class FollowUpController {
     @Req() request: Record<string, unknown>,
   ) {
     const identity = request.user as HostIdentity;
-    return this.followUps.recordAttendance(identity.tenantId, sessionId, followUpId, dto.attended);
+    return this.followUps.recordAttendance(identity.tenantId, sessionId, followUpId, dto.attended, identity.externalId);
   }
 }

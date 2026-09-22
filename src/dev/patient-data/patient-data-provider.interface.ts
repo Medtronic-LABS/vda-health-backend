@@ -8,7 +8,7 @@
  */
 export const PATIENT_DATA_PROVIDER = 'PatientDataProvider';
 
-export type PatientDataSource = 'local-file' | 'synthetic';
+export type PatientDataSource = 'local-file' | 'synthetic' | 'mobile-profile';
 
 export interface PatientDataSummary {
   id: string;

@@ -28,16 +28,21 @@ export class SessionsService {
     identity: HostIdentity,
     correlationId: string,
   ): Promise<Session> {
+    const isMobileUser = identity.authType === 'MOBILE';
+    const externalId = isMobileUser ? identity.externalId : dto.external_id;
+    const subjectAbhaRef = isMobileUser ? identity.subjectAbhaRef : dto.subject_abha_ref;
+    if (!externalId || !subjectAbhaRef) throw new BadRequestException('INVALID_SESSION_SUBJECT');
+
     // 1. Verify subject authorization
     const isSyntheticDevelopmentSubject =
       this.config.nodeEnv === 'development' &&
       this.config.devAuthEnabled &&
-      (dto.subject_abha_ref.startsWith('synthetic:') || dto.subject_abha_ref.startsWith('local-file:'));
-    if (dto.subject_abha_ref !== identity.subjectAbhaRef && !isSyntheticDevelopmentSubject) {
+      (subjectAbhaRef.startsWith('synthetic:') || subjectAbhaRef.startsWith('local-file:'));
+    if (subjectAbhaRef !== identity.subjectAbhaRef && !isSyntheticDevelopmentSubject) {
       // Log consent failure
       await this.auditService.logEvent({
         tenantId: identity.tenantId,
-        subjectAbhaRef: dto.subject_abha_ref,
+        subjectAbhaRef,
         speaker: dto.speaker,
         actingPrincipal: identity.externalId,
         correlationId,
@@ -59,36 +64,36 @@ export class SessionsService {
     }
 
     // 4. Verify consent artifact is active and has correct scopes
+    const mobileConsent = isMobileUser
+      ? await this.consentService.ensureMobilePilotConsent(identity.tenantId, identity.externalId, identity.preferredLanguage || dto.locale_hint || 'hi')
+      : null;
+    const consentArtifactId = mobileConsent?.id || dto.consent_artefact_id;
+    if (!consentArtifactId) throw new BadRequestException('CONSENT_MISSING');
     try {
-      await this.consentService.validateConsent(
-        dto.consent_artefact_id,
-        identity.tenantId,
-        identity.externalId,
-        ['record_read'],
-      );
+      await this.consentService.validateConsent(consentArtifactId, identity.tenantId, identity.externalId, ['record_read']);
       // Log successful consent check
       await this.auditService.logEvent({
         tenantId: identity.tenantId,
-        subjectAbhaRef: dto.subject_abha_ref,
+        subjectAbhaRef,
         speaker: dto.speaker,
         actingPrincipal: identity.externalId,
         correlationId,
         action: 'consent_validated',
         entityName: 'consent_artifact',
-        entityId: dto.consent_artefact_id,
+        entityId: consentArtifactId,
       });
     } catch (err: any) {
       const msg =
         err instanceof Error ? err.message : 'Consent validation failed';
       await this.auditService.logEvent({
         tenantId: identity.tenantId,
-        subjectAbhaRef: dto.subject_abha_ref,
+        subjectAbhaRef,
         speaker: dto.speaker,
         actingPrincipal: identity.externalId,
         correlationId,
         action: 'consent_failure',
         entityName: 'consent_artifact',
-        entityId: dto.consent_artefact_id,
+        entityId: consentArtifactId,
         details: { error: msg },
       });
       throw err;
@@ -102,12 +107,12 @@ export class SessionsService {
     // 6. Create session
     const session = new Session();
     session.tenantId = identity.tenantId;
-    session.externalId = dto.external_id;
-    session.subjectAbhaRef = dto.subject_abha_ref;
+    session.externalId = externalId;
+    session.subjectAbhaRef = subjectAbhaRef;
     session.speaker = dto.speaker;
     session.assistContextId = dto.assist_context_id || undefined;
-    session.consentArtifactId = dto.consent_artefact_id;
-    session.localeHint = dto.locale_hint || undefined;
+    session.consentArtifactId = consentArtifactId;
+    session.localeHint = dto.locale_hint || identity.preferredLanguage || undefined;
     session.deviceClass = dto.device_class || undefined;
     session.status = 'ACTIVE';
     session.idleExpiresAt = idleExpiresAt;
@@ -118,7 +123,7 @@ export class SessionsService {
     // 7. Audit log session creation
     await this.auditService.logEvent({
       tenantId: identity.tenantId,
-      subjectAbhaRef: dto.subject_abha_ref,
+      subjectAbhaRef,
       speaker: dto.speaker,
       actingPrincipal: identity.externalId,
       correlationId,

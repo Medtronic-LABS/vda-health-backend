@@ -33,12 +33,15 @@ export class TenantRateLimiterGuard implements CanActivate {
     const isSessionCreate =
       url.endsWith('/sessions') ||
       (url.includes('/sessions') && !url.includes('/turns'));
+    const isMobileAuth = url.includes('/auth/signup') || url.includes('/auth/login');
 
-    const limit = isSessionCreate
+    const limit = isMobileAuth
+      ? this.configService.mobileAuthMaxRequests
+      : isSessionCreate
       ? this.configService.rateLimitSessionMaxRequests
       : this.configService.rateLimitTenantMaxRequests;
     const windowSec = this.configService.rateLimitWindowSeconds;
-    const rateType = isSessionCreate ? 'session' : 'turn';
+    const rateType = isMobileAuth ? 'mobile-auth' : isSessionCreate ? 'session' : 'turn';
 
     // Derive a privacy-safe hash key from available context (tenant/session/auth/ip)
     // Never store raw ABHA, phone, email, or raw patient identifiers in Redis keys
@@ -57,13 +60,14 @@ export class TenantRateLimiterGuard implements CanActivate {
         : undefined;
     const ipStr = typeof req.ip === 'string' ? req.ip : undefined;
 
-    const rawId: string =
-      tenantIdStr ||
-      sessionIdStr ||
-      headerTenantStr ||
-      headerAuthStr ||
-      ipStr ||
-      'anonymous';
+    const rawId: string = isMobileAuth
+      ? ipStr || 'anonymous'
+      : tenantIdStr ||
+        sessionIdStr ||
+        headerTenantStr ||
+        headerAuthStr ||
+        ipStr ||
+        'anonymous';
 
     const hashedKey = createHash('sha256')
       .update(`${rateType}:${rawId}`)
@@ -113,7 +117,7 @@ export class TenantRateLimiterGuard implements CanActivate {
       const errMsg = err instanceof Error ? err.message : String(err);
       this.logger.warn(`[RateLimit] Redis execution error: ${errMsg}`);
 
-      if (this.configService.rateLimitFailOpen) {
+      if (!isMobileAuth && this.configService.rateLimitFailOpen) {
         this.logger.warn(`[RateLimit] Failing open as configured.`);
         return true;
       }

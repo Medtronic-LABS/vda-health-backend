@@ -21,6 +21,18 @@ export class PatientPrescriptionController {
   private async ref(req: any, sessionId: string) {
     const session = await this.sessions.findOne({ where: { id: sessionId, tenantId: req.user.tenantId } });
     if (!session) throw new NotFoundException('SESSION_NOT_FOUND');
+    if (session.externalId !== req.user.externalId) throw new ForbiddenException('TENANT_ACCESS_DENIED');
+    if (req.user.authType === 'MOBILE') {
+      const authenticatedSubject = `mobile-user:${req.user.mobileUserId}`;
+      if (
+        !req.user.mobileUserId ||
+        req.user.subjectAbhaRef !== authenticatedSubject ||
+        session.subjectAbhaRef !== authenticatedSubject
+      ) {
+        throw new ForbiddenException('TENANT_ACCESS_DENIED');
+      }
+      return authenticatedSubject;
+    }
     if (
       !session.subjectAbhaRef.startsWith('synthetic:') &&
       !session.subjectAbhaRef.startsWith('local-file:') &&

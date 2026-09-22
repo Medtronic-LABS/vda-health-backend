@@ -1,15 +1,18 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { HostIdentity, HostIdentityContext } from './host-identity.context';
 import { ConfigurationService } from '../configuration/configuration.service';
+import { MobileAuthTokenService } from './mobile-auth-token.service';
 
 @Injectable()
 export class MockHostIdentityService extends HostIdentityContext {
-  constructor(private readonly configService: ConfigurationService) {
+  constructor(private readonly configService: ConfigurationService, private readonly mobileTokens: MobileAuthTokenService) {
     super();
   }
 
   async validateToken(token: string): Promise<HostIdentity> {
     await Promise.resolve();
+
+    if (this.mobileTokens.isJwtShape(token)) return this.mobileTokens.validate(token);
 
     // Verify development mode is explicitly enabled
     if (!this.configService.devAuthEnabled) {
@@ -38,6 +41,7 @@ export class MockHostIdentityService extends HostIdentityContext {
       externalId,
       subjectAbhaRef,
       scopes: ['record_read', 'conversation_retention', 'reminder_delivery'],
+      authType: 'DEV',
     };
   }
 }
