@@ -42,6 +42,7 @@ export class MockHostIdentityService extends HostIdentityContext {
       subjectAbhaRef,
       scopes: ['record_read', 'conversation_retention', 'reminder_delivery'],
       authType: 'DEV',
+      workerRole: this.configService.devAuthWorkerRole,
     };
   }
 }

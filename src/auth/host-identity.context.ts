@@ -7,6 +7,7 @@ export interface HostIdentity {
   subjectAbhaRef?: string;
   scopes: string[];
   authType?: 'DEV' | 'MOBILE';
+  workerRole?: 'ASHA' | 'ANM' | 'CHO';
   mobileUserId?: string;
   preferredLanguage?: string;
 }

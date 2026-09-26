@@ -5,6 +5,7 @@ import { Facility } from '../database/entities/facility.entity';
 import { FacilityIphsOverlay } from '../database/entities/facility-iphs-overlay.entity';
 import { FacilityDemoCapability } from '../database/entities/facility-demo-capability.entity';
 import { FacilityScheme } from '../database/entities/facility-scheme.entity';
+import { MobileUser } from '../database/entities/mobile-user.entity';
 import { KnowledgeChunk } from '../database/entities/knowledge-chunk.entity';
 import { KnowledgeDocument } from '../database/entities/knowledge-document.entity';
 import { FacilityAdminController } from './facility-admin.controller';
@@ -13,6 +14,7 @@ import { FacilitySearchService } from './facility-search.service';
 import { FacilityDemoCapabilitiesLoader } from './facility-demo-capabilities.loader';
 import { FacilityDirectoryLoader } from './facility-directory.loader';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
+import { PatientFacilityController } from './patient-facility.controller';
 
 @Module({
   imports: [
@@ -23,11 +25,12 @@ import { KnowledgeModule } from '../knowledge/knowledge.module';
       FacilityScheme,
       KnowledgeDocument,
       KnowledgeChunk,
+      MobileUser,
     ]),
     AuthModule,
     KnowledgeModule,
   ],
-  controllers: [FacilityAdminController],
+  controllers: [FacilityAdminController, PatientFacilityController],
   providers: [
     FacilityImportService,
     FacilitySearchService,

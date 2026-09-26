@@ -16,6 +16,22 @@ export type SchemeInformationType =
   | 'SCHEME_COMPARISON'
   | 'SCHEME_UNKNOWN';
 
+/**
+ * Product-authority decision made before domain-agent routing.  This is
+ * deliberately separate from the existing, more detailed IntentType values:
+ * the authority category decides whether VDA may handle the request at all,
+ * while the intent selects an implementation only for an allowed service.
+ */
+export enum AuthorityCategory {
+  MEDICATION_ADHERENCE = 'MEDICATION_ADHERENCE',
+  FACILITY_NAVIGATION = 'FACILITY_NAVIGATION',
+  SCHEME_ENTITLEMENT = 'SCHEME_ENTITLEMENT',
+  CLINICAL_QUESTION = 'CLINICAL_QUESTION',
+  POSSIBLE_EMERGENCY = 'POSSIBLE_EMERGENCY',
+  OUT_OF_SCOPE = 'OUT_OF_SCOPE',
+  UNCERTAIN = 'UNCERTAIN',
+}
+
 export enum IntentType {
   ADHERENCE_QUERY = 'ADHERENCE_QUERY',
   MEDICATION_QUERY = 'MEDICATION_QUERY',
@@ -35,6 +51,7 @@ export enum IntentType {
 
 export interface IntentMetadata {
   intent: IntentType;
+  authorityCategory: AuthorityCategory;
   confidence: number;
   requiresClinicalContext: boolean;
   requiredRecordCategories: HealthRecordCategory[];

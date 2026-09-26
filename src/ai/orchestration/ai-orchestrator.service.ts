@@ -24,10 +24,17 @@ import { AuditService } from '../../audit/audit.service';
 import { ClinicalContext } from '../../abdm/models/clinical-context.models';
 import { ConversationHistoryService } from '../../conversations/services/conversation-history.service';
 import { ConversationResponseFormatter } from '../../conversations/formatters/conversation-response.formatter';
-import { KnowledgeRetrievalService } from '../../knowledge/services/knowledge-retrieval.service';
+import {
+  KnowledgeRetrievalService,
+  iphsServiceTermPattern,
+} from '../../knowledge/services/knowledge-retrieval.service';
 import { KnowledgeQueryNormalizerService } from '../../knowledge/services/knowledge-query-normalizer.service';
 import { AgentKnowledgeMapper } from '../agents/agent-knowledge-mapper';
-import { IntentType, SchemeInformationType } from '../intents/intent.types';
+import {
+  AuthorityCategory,
+  IntentType,
+  SchemeInformationType,
+} from '../intents/intent.types';
 import { Facility } from '../../database/entities/facility.entity';
 import { FacilitySearchService } from '../../facilities/facility-search.service';
 import {
@@ -43,8 +50,8 @@ import { ConversationTurn } from '../../database/entities/conversation-turn.enti
 import { FacilitySearchResult } from '../../facilities/facility-search.service';
 import {
   collectSourceBackedServiceValues,
-  filterBySourceBackedServiceValues,
   matchSourceBackedServiceValues,
+  prioritizeSourceBackedCandidates,
 } from '../../facilities/facility-service-matcher';
 import { IphsLevel } from '../../facilities/iphs-classification';
 import { RagEvaluationService } from '../../evaluation/rag-evaluation.service';
@@ -69,6 +76,35 @@ import {
 } from '../../prescription-context/prescription-session-context.service';
 
 type VerifiedIphsLevel = Exclude<IphsLevel, 'UNKNOWN'>;
+type IphsEvidenceStatus = 'VERIFIED' | 'NOT_VERIFIED' | 'UNAVAILABLE';
+
+/** Terminology found in the indexed IPHS 2022 documents; retrieval only. */
+const IPHS_SERVICE_SEARCH_TERMS: Array<{
+  service: RegExp;
+  query: string;
+  evidenceTerms: string[];
+}> = [
+  {
+    service: /^ecg$/i,
+    query: 'Electrocardiography ECG',
+    evidenceTerms: ['Electrocardiography', 'ECG'],
+  },
+  {
+    service: /^hba1c$/i,
+    query: 'HbA1c glycosylated haemoglobin',
+    evidenceTerms: ['HbA1c', 'glycosylated haemoglobin', 'glycosylated hemoglobin'],
+  },
+  {
+    service: /^blood glucose$/i,
+    query: 'blood glucose blood sugar',
+    evidenceTerms: ['blood glucose', 'blood sugar'],
+  },
+  {
+    service: /^cbc$/i,
+    query: 'CBC complete blood count Hematology',
+    evidenceTerms: ['CBC', 'complete blood count'],
+  },
+];
 
 interface FacilityServiceContext {
   requestedService: string;
@@ -76,16 +112,14 @@ interface FacilityServiceContext {
   lowCostPreference: boolean;
   matchedSourceValues: string[];
   iphsSources: KnowledgeSourceCitation[];
-  /** IPHS evidence and any resilience mapping are intentionally distinct. */
-  iphsEvidenceStatus: 'VERIFIED' | 'FALLBACK' | 'NOT_VERIFIED';
+  iphsEvidenceStatus: IphsEvidenceStatus;
 }
 
 type PrescriptionContextResolution =
   | { kind: 'MEDICINE_LIST' }
   | { kind: 'MEDICINE_FACT'; medicine: SanitizedPrescriptionMedicine }
   | { kind: 'REMINDER_FACT'; medicine?: SanitizedPrescriptionMedicine }
-  | { kind: 'GENERAL_MISSED_DOSE_GUIDANCE'; question: string }
-  | { kind: 'MISSED_DOSE_GUIDANCE'; medicine: SanitizedPrescriptionMedicine; question: string }
+  | { kind: 'CLINICAL_MEDICATION_DECISION' }
   | { kind: 'INVESTIGATION_LIST' }
   | { kind: 'MEDICINE_EDUCATION'; medicine: SanitizedPrescriptionMedicine; question: string }
   | { kind: 'INVESTIGATION_EDUCATION'; investigation: SanitizedPrescriptionInvestigation; question: string }
@@ -136,8 +170,43 @@ export class AiOrchestratorService implements IAiOrchestrator {
 
   private triageContent(language: string): Record<string, string> {
     const summary = language.startsWith('hi')
-      ? 'मैं आपकी बात ठीक से समझ नहीं पाया। क्या आप अपनी रिपोर्ट, दवाइयों, अपलोड की गई पर्ची, किसी सरकारी योजना, अस्पताल/सुविधा, या ऑनलाइन परामर्श के बारे में मदद चाहते हैं?'
-      : 'I could not determine what you need help with. Are you asking about your health record, medicines, an uploaded prescription, a government scheme, a hospital or facility, or online consultation?';
+      ? 'मैं आपकी बात ठीक से समझ नहीं पाया। क्या आप दवा के रिमाइंडर, अस्पताल/स्वास्थ्य सुविधा, या सरकारी स्वास्थ्य योजना के बारे में मदद चाहते हैं?'
+      : 'I could not determine what you need help with. Are you asking about a medicine reminder, a hospital or health facility, or a government health scheme?';
+    return { summary, [language]: summary };
+  }
+
+  private clinicalDeflectionContent(
+    language: string,
+    possibleEmergency = false,
+  ): Record<string, unknown> {
+    const hindi = language.startsWith('hi');
+    const summary = possibleEmergency
+      ? hindi
+        ? 'मैं लक्षणों की गंभीरता तय नहीं कर सकता। अगर तकलीफ़ गंभीर है, बढ़ रही है, या आपको तुरंत मदद चाहिए, तो 108/112 पर कॉल करें या नज़दीकी आपातकालीन सुविधा जाएँ।'
+        : 'I cannot determine how serious these symptoms are. If the problem is severe, worsening, or you need immediate help, call 108/112 or go to a nearby emergency facility.'
+      : hindi
+        ? 'इस सवाल में इलाज या दवा से जुड़ा फैसला चाहिए, इसलिए इसकी सलाह डॉक्टर, CHO या ANM से लें। मैं दवा की खुराक बदलने, रोकने, दोहरी खुराक लेने या छूटी हुई खुराक के बारे में फैसला नहीं दे सकता।'
+        : 'This question needs a treatment or medicine decision from a doctor, CHO, or ANM. I cannot decide whether to change, stop, double, or take a missed dose.';
+    return {
+      summary,
+      [language]: summary,
+      actions: [
+        {
+          label: hindi ? 'नज़दीकी स्वास्थ्य सुविधा ढूँढें' : 'Find a nearby health facility',
+          action: 'FIND_FACILITY',
+        },
+        {
+          label: 'eSanjeevani',
+          action: 'OPEN_ESANJEEVANI',
+        },
+      ],
+    };
+  }
+
+  private outOfScopeContent(language: string): Record<string, unknown> {
+    const summary = language.startsWith('hi')
+      ? 'मैं दवा के रिमाइंडर, अस्पताल/स्वास्थ्य सुविधा और सरकारी स्वास्थ्य योजनाओं में मदद कर सकता हूँ। दूसरे सवाल के लिए कृपया सही सेवा या व्यक्ति से संपर्क करें।'
+      : 'I can help with medicine reminders, hospitals or health facilities, and government health schemes. Please use the appropriate service or person for other requests.';
     return { summary, [language]: summary };
   }
 
@@ -150,8 +219,26 @@ export class AiOrchestratorService implements IAiOrchestrator {
     input: string,
     language: string,
   ): PrescriptionContextResolution | null {
-    if (!context || (!context.medicines.length && !context.investigations.length)) return null;
     const normalized = this.normalizePrescriptionReference(input);
+    const asksMissedDose = /(?:(?:दवा|दवाई|गोली|खुराक).{0,32}(?:भूल|छूट)|(?:भूल|छूट).{0,32}(?:दवा|दवाई|गोली|खुराक)|\b(?:dawai|dawa|medicine|medication|tablet|pill|dose)\b.{0,40}\b(?:bhool|forgot|miss(?:ed)?|skip(?:ped)?)\b|\b(?:bhool|forgot|miss(?:ed)?|skip(?:ped)?)\b.{0,40}\b(?:dawai|dawa|medicine|medication|tablet|pill|dose)\b)/i.test(input);
+    const asksDoseAction = /(?:\b(?:abhi|now)\b.{0,20}\b(?:le|lu|loon|lena|take)\b|\b(?:do|two|2|double|agli|next)\b.{0,20}\b(?:tablet|pill|dose|khurak|goli|skip|le|lu|take)\b|(?:अभी|अब).{0,20}(?:ले|लूं|लूँ|लेना)|(?:दो|दोगुनी|अगली).{0,20}(?:गोली|खुराक|दवा|छोड़|स्किप|ले|लूं|लूँ))/i.test(input);
+    const asksTreatmentChange = /(?:\b(?:stop|start|increase|decrease|change|adjust|double|band|badhau|badha|ghatau|ghata)\b|बंद|शुरू|बढ़ा|घटा|बदल|दोगुनी)/i.test(input);
+    const asksWhatToDoAfterMiss = /(?:\b(?:ab|now|what)\b.{0,20}\b(?:kya|what|karu|karoon|do|take|skip)\b|(?:अब|तो|फिर).{0,20}(?:क्या\s*करूँ|क्या\s*करूं|ले\s*लूं|ले\s*लूँ|छोड़\s*दूं|स्किप))/i.test(input);
+    const hasGenericMedicineReference = /(?:\b(?:medicine|medication|dose|dosage|tablet|pill|dawai|dawa|khurak|goli)\b|दवा|दवाई|गोली|खुराक|टैबलेट)/i.test(input);
+    const asksNamedTreatmentChange = /(?:\b(?:band|start|change|badha|badhau|ghata|ghatau)\s*(?:kar)?\s*(?:du|dun|doon|lu|loon|sakta|sakti)\b|(?:बंद|शुरू|बदल|बढ़ा|घटा)\s*(?:कर)?\s*(?:दूं|दूँ|लूं|लूँ|सकता|सकती))/i.test(input);
+    const clinicalMedicationDecision = asksDoseAction
+      || (asksMissedDose && asksWhatToDoAfterMiss)
+      || (asksTreatmentChange && (hasGenericMedicineReference || asksNamedTreatmentChange));
+
+    // Treatment authority is decided before prescription availability. A
+    // missing or unverified plan can never turn a dose decision into an
+    // informational "upload a prescription" response. This local decision
+    // also keeps the raw patient question out of external classification.
+    if (clinicalMedicationDecision) {
+      return { kind: 'CLINICAL_MEDICATION_DECISION' };
+    }
+
+    if (!context || (!context.medicines.length && !context.investigations.length)) return null;
     const mentions = <T extends { name: string }>(items: T[]): T | undefined =>
       items.find((item) => normalized.includes(this.normalizePrescriptionReference(item.name)));
     const refers = /(?:\b(?:ye|yeh|this|it|iski|iska|iske)\b|इसे|इसकी|इसका|इसके|ये|यह)/i.test(input);
@@ -165,33 +252,17 @@ export class AiOrchestratorService implements IAiOrchestrator {
         : undefined);
     const isReminder = /(?:reminder|रिमाइंडर)/i.test(input);
     const asksTiming = /(?:\b(?:kab|when)\b|कब\s*(?:लेना|लूं|लूँ|लें|है|होगा)|कितने बजे|timing|time|समय)/i.test(input);
-    const hasMissedDoseTerm = /(?:भूल|छूट|\b(?:bhool|forgot|miss(?:ed)?|skip(?:ped)?)\b)/i.test(input);
-    const asksMissedDose = /(?:(?:दवा|दवाई|गोली|खुराक).{0,32}(?:भूल|छूट)|(?:भूल|छूट).{0,32}(?:दवा|दवाई|गोली|खुराक)|\b(?:dawai|dawa|medicine|medication|tablet|pill|dose)\b.{0,40}\b(?:bhool|forgot|miss(?:ed)?|skip(?:ped)?)\b|\b(?:bhool|forgot|miss(?:ed)?|skip(?:ped)?)\b.{0,40}\b(?:dawai|dawa|medicine|medication|tablet|pill|dose)\b)/i.test(input);
-    const asksDoseAction = /(?:\b(?:abhi|now)\b.{0,20}\b(?:le|lu|loon|lena|take)\b|\b(?:do|two|2|double|agli|next)\b.{0,20}\b(?:tablet|pill|dose|khurak|goli|skip|le|lu|take)\b|(?:अभी|अब).{0,20}(?:ले|लूं|लूँ|लेना)|(?:दो|दोगुनी|अगली).{0,20}(?:गोली|खुराक|दवा|छोड़|स्किप|ले|लूं|लूँ))/i.test(input);
-    const asksMedicineSpecificDoseSafety = Boolean(medicine && (hasMissedDoseTerm || asksDoseAction));
+    const asksMedicineSpecificDoseSafety = Boolean(medicine && (asksDoseAction || asksTreatmentChange));
     const asksList = /(?:कौन\s*सी\s*दवा|कौनसी\s*दवाई|meri\s*(?:kaunsi|konsi)\s*(?:dawai|medicine)|my\s*medicines|medicines?\s*(?:are|in))/i.test(input);
     const asksTestList = /(?:कौन\s*सा\s*(?:test|टेस्ट|जांच)|kaunsa\s*(?:test|investigation)|which\s*(?:test|investigation)|prescription.*(?:test|जांच)|(?:test|जांच).*(?:prescription|पर्ची))/i.test(input);
     const asksGeneralUse = /(?:किस\s*(?:लिए|काम)|kis\s*(?:liye|liye)|क्या\s*(?:करती|करता|है)|kya\s*(?:karti|karta)|what\s*(?:does|is)|why\s*(?:is|was)|use\s*(?:करते|करती|hoti|hota|hai)|काम\s*(?:की|का|है)|side\s*effects?|नुकसान)/i.test(input);
     const asksBpMedicine = /(?:\b(?:bp|blood\s*pressure)\b|बीपी|ब्लड प्रेशर).*(?:दवा|दवाई|medicine)|(?:दवा|दवाई|medicine).*(?:\b(?:bp|blood\s*pressure)\b|बीपी|ब्लड प्रेशर)/i.test(input);
 
-    if (asksMedicineSpecificDoseSafety && medicine) {
-      return {
-        kind: 'MISSED_DOSE_GUIDANCE',
-        medicine,
-        question: language.startsWith('hi')
-          ? 'इस दवा की खुराक छूटने पर केवल दिए गए अधिकृत दिशानिर्देशों के आधार पर सरल और सुरक्षित सामान्य सलाह दें। दवा-विशिष्ट निर्देश न बनाएं।'
-          : 'Using only the supplied approved guidelines, give simple, safe general guidance for a missed dose of this medicine. Do not invent medicine-specific instructions.',
-      };
-    }
-    if (asksMissedDose || asksDoseAction) {
-      return {
-        kind: 'GENERAL_MISSED_DOSE_GUIDANCE',
-        question: language.startsWith('hi')
-          ? 'दवा की खुराक छूटने पर केवल दिए गए अधिकृत दिशानिर्देशों के आधार पर सरल और सुरक्षित सामान्य सलाह दें। किसी दवा का नाम या दवा-विशिष्ट निर्देश न दें।'
-          : 'Using only the supplied approved guidelines, give simple, safe general guidance after a missed medicine dose. Do not name a medicine or give medicine-specific instructions.',
-      };
+    if ((asksMedicineSpecificDoseSafety || asksTreatmentChange) && medicine) {
+      return { kind: 'CLINICAL_MEDICATION_DECISION' };
     }
     if (isReminder) return { kind: 'REMINDER_FACT', medicine };
+    if (asksTiming && !medicine && context.medicines.length > 0) return { kind: 'REMINDER_FACT' };
     if (asksTestList) return { kind: 'INVESTIGATION_LIST' };
     if (investigation && asksGeneralUse) {
       return {
@@ -270,7 +341,9 @@ export class AiOrchestratorService implements IAiOrchestrator {
     const bullets = reminders.map((item) => `${item.medicineName}: ${item.reminderTimes.map((time) => this.patientReminderTime(time, hindi)).join(', ')}`);
     const summary = bullets.length
       ? (hindi ? 'आपके सेव किए हुए रिमाइंडर:' : 'Your saved reminders:')
-      : (hindi ? 'इस दवा के लिए अभी कोई सेव किया हुआ रिमाइंडर नहीं है।' : 'There is no saved reminder for this medicine yet.');
+      : resolution.medicine
+        ? (hindi ? 'इस दवा की जानकारी सत्यापित है, लेकिन इसके लिए अभी कोई रिमाइंडर समय नहीं चुना गया है।' : 'This medicine is verified, but no reminder time has been selected for it yet.')
+        : (hindi ? 'आपकी दवाइयों की जानकारी सत्यापित है, लेकिन आपने अभी रिमाइंडर का समय नहीं चुना है।' : 'Your medicines are verified, but you have not selected reminder times yet.');
     return { summary, [language]: summary, ...(bullets.length ? { sections: [{ title: hindi ? 'दवा रिमाइंडर' : 'Medicine reminders', bullets }] } : {}) };
   }
 
@@ -484,12 +557,53 @@ export class AiOrchestratorService implements IAiOrchestrator {
           ),
       ),
     );
-    const usesDemoCapability = matchedDemoCapabilities.length > 0;
-    // This is facility-specific evidence only. IPHS suitability is a standard
-    // for a facility level, never proof that this particular facility offers a
-    // requested diagnostic or treatment today.
+    const matchedDemoFacilityIds = new Set(
+      results
+        .filter(({ demoCapabilities }) =>
+          demoCapabilities.some(
+            (capability) =>
+              normalizedMatchedValues.has(
+                capability.serviceCode.trim().toLocaleLowerCase('en-IN'),
+              ) ||
+              normalizedMatchedValues.has(
+                capability.serviceName.trim().toLocaleLowerCase('en-IN'),
+              ),
+          ),
+        )
+        .map(({ facility }) => facility.id),
+    );
+    const matchedSourceFacilityIds = new Set(
+      results
+        .filter(({ facility }) =>
+          [
+            ...(facility.supportedServices || []),
+            ...(facility.specialityCodes || []),
+          ].some(
+            (value) =>
+              typeof value === 'string' &&
+              normalizedMatchedValues.has(
+                value.trim().toLocaleLowerCase('en-IN'),
+              ),
+          ),
+        )
+        .map(({ facility }) => facility.id),
+    );
+    const usesDemoCapability = matchedDemoFacilityIds.size > 0;
     const hasFacilitySpecificServiceEvidence =
-      normalizedMatchedValues.size > 0 && !usesDemoCapability;
+      matchedSourceFacilityIds.size > 0;
+    const hasMixedServiceEvidence =
+      (matchedSourceFacilityIds.size > 0 &&
+        matchedSourceFacilityIds.size < results.length) ||
+      (matchedDemoFacilityIds.size > 0 &&
+        matchedDemoFacilityIds.size < results.length);
+    const unmatchedFacilityCount = results.filter(
+      ({ facility }) =>
+        !matchedSourceFacilityIds.has(facility.id) &&
+        !matchedDemoFacilityIds.has(facility.id),
+    ).length;
+    // Facility-specific records and demo mappings are tracked per result.
+    // IPHS level alignment remains a valid recommendation when that facility
+    // has no separate service-specific record.
     const hasIphsSuitableCandidates =
       serviceContext?.iphsEvidenceStatus === 'VERIFIED' &&
       (serviceContext.appropriateIphsLevels.length || 0) > 0;
@@ -503,16 +617,21 @@ export class AiOrchestratorService implements IAiOrchestrator {
     const summary = serviceContext
       ? results.length
         ? usesDemoCapability
+          && matchedDemoFacilityIds.size === results.length
           ? language === 'hi'
             ? `${scope || 'इस क्षेत्र'} में ${serviceContext.requestedService} के ये परिणाम केवल VDA Pilot की synthetic, unverified facility mapping पर आधारित हैं। यह सरकारी या वास्तविक उपलब्धता की पुष्टि नहीं है; जाने से पहले सुविधा से जांच करें।`
             : `These ${serviceContext.requestedService} results in ${scope || 'this area'} use synthetic, unverified VDA Pilot facility mappings. They are not government or real-world availability verification; confirm with the facility before travelling.`
-          : hasFacilitySpecificServiceEvidence
+          : hasMixedServiceEvidence
+            ? language === 'hi'
+              ? `${matchedSourceFacilityIds.size ? `कुछ केंद्रों के source records में ${serviceContext.requestedService} दर्ज है।` : ''} ${matchedDemoFacilityIds.size ? 'कुछ केंद्र पायलट मैपिंग के आधार पर सुझाए गए हैं; इसकी पुष्टि नहीं है।' : ''} ${unmatchedFacilityCount ? `बाकी केंद्र ${hasIphsSuitableCandidates ? 'IPHS मानकों के अनुसार उपयुक्त स्तर' : 'चुने गए केंद्र स्तर'} के आधार पर सुझाए गए हैं।` : ''} किसी भी केंद्र पर अभी की उपलब्धता की पुष्टि नहीं है; जाने से पहले सुविधा की उपलब्धता की पुष्टि कर लें। ${lowCostNotice}`.trim()
+              : `${matchedSourceFacilityIds.size ? `Some facility records list ${serviceContext.requestedService}.` : ''} ${matchedDemoFacilityIds.size ? 'Some results rely on an unverified pilot mapping.' : ''} ${unmatchedFacilityCount ? `The remaining results are recommended because their ${hasIphsSuitableCandidates ? 'level is appropriate under IPHS standards' : 'selected facility level'} matches.` : ''} Current availability is not confirmed at any facility; call before travelling. ${lowCostNotice}`.trim()
+            : hasFacilitySpecificServiceEvidence
             ? language === 'hi'
               ? `${scope || 'इस क्षेत्र'} में नीचे दी गई सुविधाओं के source records में ${serviceContext.requestedService} से मेल खाने वाली सेवा दर्ज है। जाने से पहले सुविधा से उपलब्धता की पुष्टि करें।`
               : `The source records for the facilities below list a service matching ${serviceContext.requestedService} in ${scope || 'this area'}. Confirm availability with the facility before travelling.`
             : hasIphsSuitableCandidates
               ? language === 'hi'
-                ? `${serviceContext.requestedService} के लिए IPHS guidelines के अनुसार उपयुक्त facility level की ये सुविधाएँ ${scope || 'इस क्षेत्र'} में मिली हैं। इन नामित सुविधाओं पर ${serviceContext.requestedService} की वर्तमान उपलब्धता source data में verify नहीं है; जाने से पहले सुविधा से confirm कर लें। ${lowCostNotice}`.trim()
+                ? `IPHS मानकों के अनुसार ${serviceContext.requestedService} के लिए उपयुक्त केंद्र स्तर की ये सुविधाएँ ${scope || 'इस क्षेत्र'} में मिली हैं। यहाँ इस सेवा की अभी उपलब्धता की पुष्टि नहीं है; जाने से पहले सुविधा की उपलब्धता की पुष्टि कर लें। ${lowCostNotice}`.trim()
                 : `These facilities in ${scope || 'this area'} match the facility level appropriate for ${serviceContext.requestedService} under IPHS guidance. Current ${serviceContext.requestedService} availability at the named facilities is not verified in source data; confirm before travelling. ${lowCostNotice}`.trim()
               : hasResolvedFacilityLevel
                 ? language === 'hi'
@@ -522,12 +641,16 @@ export class AiOrchestratorService implements IAiOrchestrator {
                 ? `${scope || 'इस क्षेत्र'} में नीचे दी गई facilities आपकी location के आधार पर मिली हैं, लेकिन ${serviceContext.requestedService} के लिए उपयुक्त facility level या वर्तमान उपलब्धता source data में confirm नहीं हो सकी। जाने से पहले सुविधा से confirm कर लें।`
                 : `The facilities below match your location in ${scope || 'this area'}, but source data could not confirm an appropriate facility level or current ${serviceContext.requestedService} availability. Confirm with the facility before travelling.`
         : language === 'hi'
-          ? hasIphsSuitableCandidates
+          ? serviceContext.iphsEvidenceStatus === 'UNAVAILABLE'
+            ? 'इस समय IPHS स्रोत की जाँच पूरी नहीं हो सकी। इसलिए अभी उपयुक्त सुविधा की सिफारिश नहीं दे सकता। कृपया थोड़ी देर बाद दोबारा कोशिश करें।'
+            : hasIphsSuitableCandidates
             ? `${serviceContext.requestedService} के लिए IPHS guidelines के अनुसार उपयुक्त facility level की कोई सुविधा ${scope || 'इस क्षेत्र'} में नहीं मिली।`
             : hasResolvedFacilityLevel
               ? `${serviceContext.requestedService} के लिए selected facility level की कोई सुविधा ${scope || 'इस क्षेत्र'} में नहीं मिली।`
             : `${serviceContext.requestedService} के लिए उपयुक्त facility level source information से establish नहीं हो सका, इसलिए कोई facility recommendation नहीं दी जा सकती।`
-          : hasIphsSuitableCandidates
+          : serviceContext.iphsEvidenceStatus === 'UNAVAILABLE'
+            ? 'The IPHS source could not be checked right now, so I cannot recommend a suitable facility. Please try again shortly.'
+            : hasIphsSuitableCandidates
             ? `No facility at an IPHS-suitable level for ${serviceContext.requestedService} was found in ${scope || 'this area'}.`
             : hasResolvedFacilityLevel
               ? `No facility at the selected level for ${serviceContext.requestedService} was found in ${scope || 'this area'}.`
@@ -574,6 +697,23 @@ export class AiOrchestratorService implements IAiOrchestrator {
           const schemeLabels = schemes.map((item) =>
             /^pm-?jay$/i.test(item) ? 'PM-JAY listed' : `${item} listed`,
           );
+          const serviceEvidenceLabel = !serviceCard
+            ? null
+            : matchedDemoFacilityIds.has(facility.id)
+              ? language === 'hi'
+                ? 'पायलट मैपिंग (अपुष्ट)'
+                : 'Pilot mapping (unverified)'
+              : matchedSourceFacilityIds.has(facility.id)
+                ? language === 'hi'
+                  ? 'सेवा स्रोत रिकॉर्ड में दर्ज'
+                  : 'Service listed in source record'
+                : hasIphsSuitableCandidates
+                  ? language === 'hi'
+                    ? 'IPHS मानकों के आधार पर उपयुक्त केंद्र स्तर'
+                    : 'Suitable facility level under IPHS standards'
+                  : language === 'hi'
+                    ? 'उपयुक्त केंद्र स्तर के आधार पर सुझाव'
+                    : 'Suggested by facility level';
           return {
             title: facility.name,
             value: serviceCard
@@ -587,6 +727,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
               ? [
                   government ? 'Government health facility' : 'Private health facility',
                   ...schemeLabels,
+                  serviceEvidenceLabel,
                   facility.contactNumber ? `Phone: ${facility.contactNumber}` : null,
                 ]
                   .filter(Boolean)
@@ -702,9 +843,9 @@ export class AiOrchestratorService implements IAiOrchestrator {
       ),
       requestedService: serviceContext?.requestedService,
       serviceAvailability: serviceContext
-        ? usesDemoCapability
+        ? matchedDemoFacilityIds.size === results.length && results.length > 0
           ? 'DEMO_PILOT_NOT_VERIFIED'
-          : hasFacilitySpecificServiceEvidence
+          : matchedSourceFacilityIds.size === results.length && results.length > 0
             ? 'SOURCE_VERIFIED'
             : 'NOT_VERIFIED'
         : undefined,
@@ -738,19 +879,30 @@ export class AiOrchestratorService implements IAiOrchestrator {
   /** Keeps facility-level reasoning restricted to governed IPHS 2022 chunks. */
   private iphs2022Evidence(
     result: KnowledgeRetrievalResult,
+    evidenceTerms: string[] = [],
   ): KnowledgeRetrievalResult {
-    const matchedChunks = result.matchedChunks.filter((chunk) => {
-      const provenance = [
-        chunk.title,
-        chunk.source,
-        chunk.documentVersion,
-        JSON.stringify(chunk.metadata || {}),
-      ].join(' ');
-      return (
-        /IPHS|INDIAN PUBLIC HEALTH STANDARDS/i.test(provenance) &&
-        /2022/i.test(provenance)
-      );
-    });
+    const matchedChunks = result.matchedChunks
+      .filter((chunk) => {
+        const provenance = [
+          chunk.title,
+          chunk.source,
+          chunk.documentVersion,
+          JSON.stringify(chunk.metadata || {}),
+        ].join(' ');
+        return (
+          /IPHS|INDIAN PUBLIC HEALTH STANDARDS/i.test(provenance) &&
+          /2022/i.test(provenance)
+        );
+      })
+      .filter(
+        (chunk) =>
+          evidenceTerms.length === 0 ||
+          evidenceTerms.some((term) => {
+            const pattern = iphsServiceTermPattern(term);
+            return pattern ? new RegExp(pattern, 'i').test(chunk.content) : false;
+          }),
+      )
+      .slice(0, evidenceTerms.length ? 3 : result.matchedChunks.length);
     return {
       ...result,
       matchedChunks,
@@ -780,29 +932,71 @@ export class AiOrchestratorService implements IAiOrchestrator {
   ): Promise<{
     levels: VerifiedIphsLevel[];
     sources: KnowledgeSourceCitation[];
-    evidenceStatus: 'VERIFIED' | 'FALLBACK' | 'NOT_VERIFIED';
+    evidenceStatus: IphsEvidenceStatus;
   }> {
     if (!this.knowledgeRetrievalService) {
-      return this.fallbackIphsLevelsForService(service);
+      return { levels: [], sources: [], evidenceStatus: 'UNAVAILABLE' };
     }
     try {
-      const retrieved = this.iphs2022Evidence(
-        await this.knowledgeRetrievalService.retrieve(
-          `IPHS 2022 diagnostic service ${service} appropriate facility level essential desirable`,
+      const serviceSearch = IPHS_SERVICE_SEARCH_TERMS.find(({ service: key }) =>
+        key.test(service.trim()),
+      );
+      const evidenceTerms = (serviceSearch?.evidenceTerms || [service.trim()]).filter(
+        (term) => Boolean(iphsServiceTermPattern(term)),
+      );
+      if (!evidenceTerms.length) {
+        return { levels: [], sources: [], evidenceStatus: 'NOT_VERIFIED' };
+      }
+      const semantic = await this.knowledgeRetrievalService.retrieve(
+          serviceSearch?.query ||
+            `IPHS 2022 diagnostic service ${service} appropriate facility level essential desirable`,
           {
             tenantId,
             intent: 'FACILITY_SERVICE_LEVEL',
             language,
+            domain: 'healthcare_facilities',
+            category: 'iphs_2022_facility_standards',
             state,
             stateMatchMode: 'INCLUDING_GLOBAL',
             maxResults: 8,
             minRelevanceScore: 0.25,
             maxContextLength: 12000,
           },
-        ),
+      );
+      if (semantic.providerType !== 'postgres_pgvector') {
+        return { levels: [], sources: [], evidenceStatus: 'UNAVAILABLE' };
+      }
+      const semanticEvidence = this.iphs2022Evidence(semantic, evidenceTerms);
+      const lexical = semanticEvidence.matchedChunks.length < 3
+        ? await this.knowledgeRetrievalService.retrieveIphsServiceChunks?.(
+            evidenceTerms,
+            tenantId,
+            state,
+            3,
+          ) || []
+        : [];
+      const seen = new Set<string>();
+      const matchedChunks = [...semanticEvidence.matchedChunks, ...lexical].filter(
+        (chunk) => !seen.has(chunk.chunkId) && Boolean(seen.add(chunk.chunkId)),
+      );
+      const retrieved = this.iphs2022Evidence(
+        {
+          ...semantic,
+          matchedChunks,
+          sources: [
+            ...semantic.sources,
+            ...lexical.map((chunk) => ({
+              title: chunk.title,
+              source: chunk.source,
+              version: chunk.documentVersion,
+              domain: chunk.domain,
+            })),
+          ],
+        },
+        evidenceTerms,
       );
       if (!retrieved.matchedChunks.length) {
-        return this.fallbackIphsLevelsForService(service);
+        return { levels: [], sources: [], evidenceStatus: 'NOT_VERIFIED' };
       }
 
       const generated = await this.aiProvider.generate(
@@ -811,6 +1005,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
           responseFormat: 'json',
           temperature: 0,
           maxTokens: 300,
+          thinkingLevel: 'MINIMAL',
           correlationId,
           telemetryLabel: 'FACILITY_IPHS_SERVICE_LEVEL',
           jsonSchema: {
@@ -851,8 +1046,11 @@ export class AiOrchestratorService implements IAiOrchestrator {
             ),
           )
         : [];
+      if (json['evidenceStatus'] === 'NOT_VERIFIED') {
+        return { levels: [], sources: [], evidenceStatus: 'NOT_VERIFIED' };
+      }
       if (json['evidenceStatus'] !== 'VERIFIED' || !levels.length) {
-        return this.fallbackIphsLevelsForService(service);
+        return { levels: [], sources: [], evidenceStatus: 'UNAVAILABLE' };
       }
       return {
         levels,
@@ -863,40 +1061,8 @@ export class AiOrchestratorService implements IAiOrchestrator {
       this.logger.warn(
         `IPHS service-level resolution failed: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return this.fallbackIphsLevelsForService(service);
+      return { levels: [], sources: [], evidenceStatus: 'UNAVAILABLE' };
     }
-  }
-
-  /**
-   * Demo-resilience only: used solely after IPHS retrieval yields no usable
-   * evidence. It is not an IPHS source, carries no IPHS citation, and callers
-   * expose its status separately from a verified IPHS conclusion.
-   */
-  private fallbackIphsLevelsForService(service: string): {
-    levels: VerifiedIphsLevel[];
-    sources: KnowledgeSourceCitation[];
-    evidenceStatus: 'FALLBACK' | 'NOT_VERIFIED';
-  } {
-    const normService = service.toLowerCase().trim();
-    let levels: VerifiedIphsLevel[] = [];
-    if (/x-?ray|radiology/i.test(normService)) {
-      levels = ['CHC', 'SDH', 'DH'];
-    } else if (/ultrasound|usg|sonography/i.test(normService)) {
-      levels = ['CHC', 'SDH', 'DH'];
-    } else if (/hba1c|glycosylated/i.test(normService)) {
-      levels = ['HWC_PHC', 'CHC', 'SDH', 'DH'];
-    } else if (/cbc|complete blood count/i.test(normService)) {
-      levels = ['CHC', 'SDH', 'DH'];
-    } else if (/blood glucose|blood sugar|sugar test/i.test(normService)) {
-      levels = ['HWC_SHC', 'HWC_PHC', 'CHC', 'SDH', 'DH'];
-    } else if (/blood test|blood/i.test(normService)) {
-      levels = ['HWC_PHC', 'CHC', 'SDH', 'DH'];
-    }
-    return {
-      levels,
-      sources: [],
-      evidenceStatus: levels.length ? 'FALLBACK' : 'NOT_VERIFIED',
-    };
   }
 
   /**
@@ -1160,18 +1326,8 @@ export class AiOrchestratorService implements IAiOrchestrator {
     const isPrescriptionContextTurn = Boolean(prescriptionContextResolution);
     const isPrescriptionContextGenerationTurn = prescriptionContextResolution?.kind === 'MEDICINE_EDUCATION'
       || prescriptionContextResolution?.kind === 'INVESTIGATION_EDUCATION'
-      || prescriptionContextResolution?.kind === 'MEDICINE_FOR_BP'
-      || prescriptionContextResolution?.kind === 'GENERAL_MISSED_DOSE_GUIDANCE'
-      || prescriptionContextResolution?.kind === 'MISSED_DOSE_GUIDANCE';
-    const missedDoseResolution = prescriptionContextResolution?.kind === 'MISSED_DOSE_GUIDANCE'
-      || prescriptionContextResolution?.kind === 'GENERAL_MISSED_DOSE_GUIDANCE'
-      ? prescriptionContextResolution
-      : null;
-    const isMissedDoseGuidanceTurn = Boolean(missedDoseResolution);
-    // Only missed-dose safety requires governed clinical guidance here.
-    // General medicine education retains the separately approved minimal
-    // medicine-name + generic-question privacy boundary.
-    const isPrescriptionGuidelineTurn = isMissedDoseGuidanceTurn;
+      || prescriptionContextResolution?.kind === 'MEDICINE_FOR_BP';
+    const isPrescriptionGuidelineTurn = false;
     const outboundQuestion = isPrescriptionContextGenerationTurn
       ? prescriptionContextResolution.question
       : null;
@@ -1403,6 +1559,35 @@ export class AiOrchestratorService implements IAiOrchestrator {
       };
     }
 
+    // Prescription-scoped treatment decisions are resolved locally and
+    // deflected before intent classification, RAG, ClinicalContext, or answer
+    // generation. Raw prescription questions therefore retain the existing
+    // privacy boundary while no longer receiving missed-dose advice.
+    if (
+      prescriptionContextResolution?.kind ===
+      'CLINICAL_MEDICATION_DECISION'
+    ) {
+      const content = this.clinicalDeflectionContent(requestLanguage);
+      await this.auditService.logEvent({
+        tenantId: identity.tenantId,
+        subjectAbhaRef: identity.externalId,
+        actingPrincipal: identity.externalId,
+        correlationId,
+        action: 'clinical_question_deflected',
+        entityName: 'turn',
+        entityId: sessionId,
+        details: { authorityCategory: AuthorityCategory.CLINICAL_QUESTION },
+      });
+      return {
+        responseType: 'text',
+        content,
+        intent: IntentType.ADHERENCE_QUERY,
+        selectedAgent: 'authority-boundary',
+        safetyStatus: 'SAFE',
+        latencyMs: Date.now() - startTime,
+      };
+    }
+
     // Prescription facts and missed-dose clarification are deterministic facts
     // from the server-held sanitized session context.
     if (
@@ -1627,12 +1812,10 @@ export class AiOrchestratorService implements IAiOrchestrator {
     }
     const intentMeta = isPrescriptionContextTurn
       ? {
-          intent: prescriptionContextResolution?.kind === 'MISSED_DOSE_GUIDANCE'
-            || prescriptionContextResolution?.kind === 'GENERAL_MISSED_DOSE_GUIDANCE'
-            ? IntentType.ADHERENCE_QUERY
-            : prescriptionContextResolution?.kind === 'INVESTIGATION_EDUCATION'
+          intent: prescriptionContextResolution?.kind === 'INVESTIGATION_EDUCATION'
               ? IntentType.PRESCRIPTION_QUERY
               : IntentType.MEDICATION_QUERY,
+          authorityCategory: AuthorityCategory.MEDICATION_ADHERENCE,
           confidence: 1,
           requiresClinicalContext: false,
           requiredRecordCategories: [],
@@ -1640,9 +1823,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
           safetySensitivity: 'HIGH' as const,
           classifiedBy: 'RULE_ENGINE' as const,
           knowledgeRequired: isPrescriptionGuidelineTurn,
-          responseRequirements: isMissedDoseGuidanceTurn
-            ? ['GROUNDED_GUIDANCE']
-            : [],
+          responseRequirements: [],
         }
       :
       traceContext && this.tracer
@@ -1673,151 +1854,65 @@ export class AiOrchestratorService implements IAiOrchestrator {
           );
 
 
-    // Deterministic prescription confirmation/rejection interceptor
+    // Patient conversation never changes prescription extraction or worker
+    // verification state. A future authenticated worker API owns verification.
+
     if (
-      latestPrescription &&
-      latestPrescription.extractionStatus === 'REVIEW_REQUIRED'
+      intentMeta.authorityCategory === AuthorityCategory.CLINICAL_QUESTION ||
+      intentMeta.authorityCategory === AuthorityCategory.POSSIBLE_EMERGENCY
     ) {
-      const trimmedInput = inputText.trim();
-      const isConfirm =
-        /^(हाँ|हां|जी हाँ|सही है|हाँ, यह सही है|yes|y|correct|yes, this is correct)$/i.test(
-          trimmedInput,
-        );
-      const isReject =
-        /^(नहीं|ना|नही|कुछ गलत है|गलत है|no|n|incorrect|something is wrong)$/i.test(
-          trimmedInput,
-        );
-
-      if (isConfirm) {
-        // Mark prescription as APPROVED
-        latestPrescription.extractionStatus = 'APPROVED';
-        if (this.prescriptions) {
-          await this.prescriptions.save(latestPrescription);
-        }
-
-        // Audit confirmation
-        await this.auditService.logEvent({
-          tenantId: identity.tenantId,
-          subjectAbhaRef: identity.externalId,
-          actingPrincipal: identity.externalId,
-          correlationId,
-          action: 'prescription_confirmed',
-          entityName: 'prescription',
-          entityId: latestPrescription.id,
-          details: {
-            prescriptionId: latestPrescription.prescriptionId,
-            medicinesCount: latestPrescription.medications?.length || 0,
-            investigationsCount: latestPrescription.investigations?.length || 0,
-          },
-        });
-
-        const summaryText =
-          intentMeta.language === 'hi'
-            ? 'ठीक है। आपकी prescription की जानकारी की पुष्टि कर दी गई है।'
-            : 'Alright. Your prescription information has been confirmed.';
-
-        const confirmContent = {
-          summary: summaryText,
-          [intentMeta.language]: summaryText,
-        };
-
-        if (traceContext && this.tracer) {
-          this.tracer.recordStepDirectly(
-            traceContext,
-            {
-              name: 'prescription_confirmation_interceptor',
-              runType: 'tool',
-              necessity: 'NECESSARY',
-              necessityReason:
-                'Deterministic confirmation of prescription without LLM generation cost',
-            },
-            { latencyMs: 0 },
-          );
-          await this.tracer.endTurn(traceContext, {
-            responseType: 'text',
-            content: confirmContent,
-            intent: 'PRESCRIPTION_CONFIRM',
-            selectedAgent: 'medication-agent',
-            safetyStatus: 'SAFE',
-          });
-        }
-
-        return {
-          responseType: 'text',
-          content: confirmContent,
-          intent: 'PRESCRIPTION_CONFIRM',
-          selectedAgent: 'medication-agent',
-          safetyStatus: 'SAFE',
-          latencyMs: Date.now() - startTime,
-        };
-      }
-
-      if (isReject) {
-        // Mark prescription as REJECTED
-        latestPrescription.extractionStatus = 'REJECTED';
-        if (this.prescriptions) {
-          await this.prescriptions.save(latestPrescription);
-        }
-
-        // Audit rejection
-        await this.auditService.logEvent({
-          tenantId: identity.tenantId,
-          subjectAbhaRef: identity.externalId,
-          actingPrincipal: identity.externalId,
-          correlationId,
-          action: 'prescription_rejected',
-          entityName: 'prescription',
-          entityId: latestPrescription.id,
-          details: {
-            prescriptionId: latestPrescription.prescriptionId,
-          },
-        });
-
-        const summaryText =
-          intentMeta.language === 'hi'
-            ? 'ठीक है। कृपया बताएं कि prescription में कौन-सी जानकारी गलत है।'
-            : 'Alright. Please let me know which information in the prescription is incorrect.';
-
-        const rejectContent = {
-          summary: summaryText,
-          [intentMeta.language]: summaryText,
-        };
-
-        if (traceContext && this.tracer) {
-          this.tracer.recordStepDirectly(
-            traceContext,
-            {
-              name: 'prescription_rejection_interceptor',
-              runType: 'tool',
-              necessity: 'NECESSARY',
-              necessityReason:
-                'Deterministic rejection of prescription without LLM generation cost',
-            },
-            { latencyMs: 0 },
-          );
-          await this.tracer.endTurn(traceContext, {
-            responseType: 'text',
-            content: rejectContent,
-            intent: 'PRESCRIPTION_CORRECTION',
-            selectedAgent: 'medication-agent',
-            safetyStatus: 'SAFE',
-          });
-        }
-
-        return {
-          responseType: 'text',
-          content: rejectContent,
-          intent: 'PRESCRIPTION_CORRECTION',
-          selectedAgent: 'medication-agent',
-          safetyStatus: 'SAFE',
-          latencyMs: Date.now() - startTime,
-        };
-      }
+      const content = this.clinicalDeflectionContent(
+        intentMeta.language,
+        intentMeta.authorityCategory === AuthorityCategory.POSSIBLE_EMERGENCY,
+      );
+      await this.auditService.logEvent({
+        tenantId: identity.tenantId,
+        subjectAbhaRef: identity.externalId,
+        actingPrincipal: identity.externalId,
+        correlationId,
+        action: 'clinical_question_deflected',
+        entityName: 'turn',
+        entityId: sessionId,
+        details: { authorityCategory: intentMeta.authorityCategory },
+      });
+      return {
+        responseType: 'text',
+        content,
+        intent: intentMeta.intent,
+        selectedAgent: 'authority-boundary',
+        safetyStatus: 'SAFE',
+        latencyMs: Date.now() - startTime,
+      };
     }
+
+    if (
+      intentMeta.authorityCategory === AuthorityCategory.OUT_OF_SCOPE &&
+      intentMeta.intent !== IntentType.GREETING
+    ) {
+      const content = this.outOfScopeContent(intentMeta.language);
+      return {
+        responseType: 'text',
+        content,
+        intent: intentMeta.intent,
+        selectedAgent: 'authority-boundary',
+        safetyStatus: 'SAFE',
+        latencyMs: Date.now() - startTime,
+      };
+    }
+
+    const authorityIntentMismatch =
+      (intentMeta.authorityCategory === AuthorityCategory.MEDICATION_ADHERENCE &&
+        ![IntentType.ADHERENCE_QUERY, IntentType.MEDICATION_QUERY, IntentType.PRESCRIPTION_QUERY].includes(intentMeta.intent)) ||
+      (intentMeta.authorityCategory === AuthorityCategory.FACILITY_NAVIGATION &&
+        ![IntentType.FACILITY_QUERY, IntentType.REFERRAL_QUERY, IntentType.TELECONSULTATION_QUERY].includes(intentMeta.intent)) ||
+      (intentMeta.authorityCategory === AuthorityCategory.SCHEME_ENTITLEMENT &&
+        intentMeta.intent !== IntentType.GOVERNMENT_SCHEME_QUERY);
 
     // A low-confidence or unsupported provider result is a patient-facing
     // triage clarification, never an implicit route to a broad knowledge agent.
     if (
+      authorityIntentMismatch ||
+      intentMeta.authorityCategory === AuthorityCategory.UNCERTAIN ||
       intentMeta.intent === IntentType.UNKNOWN ||
       intentMeta.confidence < 0.65
     ) {
@@ -1911,7 +2006,6 @@ export class AiOrchestratorService implements IAiOrchestrator {
     let knowledgePrompt = '';
     let normalizedQuery:
       ReturnType<KnowledgeQueryNormalizerService['normalize']> | undefined;
-    let resolvedKnowledgeQuery = '';
     let retrievalTrace: KnowledgeRetrievalResult | undefined;
     let facilityResults: Facility[] = [];
     let deterministicFacilityContent: Record<string, any> | null = null;
@@ -1935,7 +2029,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
           intentMeta.intent,
         );
         let targetState: string | undefined;
-        if (!isMissedDoseGuidanceTurn && this.sessions && this.patientData) {
+        if (this.sessions && this.patientData) {
           const session = await this.sessions.findOne({
             where: { id: sessionId },
           });
@@ -1953,22 +2047,13 @@ export class AiOrchestratorService implements IAiOrchestrator {
           }
         }
 
-        if (!isMissedDoseGuidanceTurn) {
-          normalizedQuery = this.knowledgeQueryNormalizer?.normalize(
-            resolvedInputText,
-            intentMeta.language,
-            intentMeta.intent,
-            targetState,
-          );
-        }
-        const retrievalQuery = missedDoseResolution
-          ? this.knowledgeQueryNormalizer?.normalize(
-              missedDoseResolution.question,
-              requestLanguage,
-              IntentType.ADHERENCE_QUERY,
-            ).query || 'missed dose medication adherence safety guidance'
-          : normalizedQuery?.query || resolvedInputText;
-        resolvedKnowledgeQuery = retrievalQuery;
+        normalizedQuery = this.knowledgeQueryNormalizer?.normalize(
+          resolvedInputText,
+          intentMeta.language,
+          intentMeta.intent,
+          targetState,
+        );
+        const retrievalQuery = normalizedQuery?.query || resolvedInputText;
 
         const ragRes =
           traceContext && this.tracer
@@ -2039,20 +2124,6 @@ export class AiOrchestratorService implements IAiOrchestrator {
       }
     }
 
-    if (missedDoseResolution && !retrievalTrace?.matchedChunks.length) {
-      const message = requestLanguage.startsWith('hi')
-        ? 'छूटी हुई खुराक के लिए पर्याप्त अधिकृत जानकारी नहीं मिली। कृपया पर्ची में दिए निर्देश देखें या अपने डॉक्टर या फार्मासिस्ट से पुष्टि करें।'
-        : 'I could not find sufficient approved information for a missed dose. Please check the prescription instructions or confirm with your clinician or pharmacist.';
-      return {
-        responseType: 'text',
-        content: { summary: message, [requestLanguage]: message },
-        intent: IntentType.ADHERENCE_QUERY,
-        selectedAgent: 'adherence-agent',
-        safetyStatus: 'WITHHELD_QUALITY',
-        latencyMs: Date.now() - startTime,
-      };
-    }
-
     // Facility discovery is tenant-scoped. Gemini extracts the requested
     // service and interprets governed IPHS level evidence; matching against
     // individual facility source fields and candidate ranking remain local.
@@ -2103,7 +2174,9 @@ export class AiOrchestratorService implements IAiOrchestrator {
             correlationId,
           );
           const explicitlyRequestedLevel = intentMeta.requirements?.iphsLevel;
-          const appropriateLevels = explicitlyRequestedLevel
+          const appropriateLevels = iphsResolution.evidenceStatus !== 'VERIFIED'
+            ? []
+            : explicitlyRequestedLevel
             ? iphsResolution.levels.filter(
                 (level) => level === explicitlyRequestedLevel,
               )
@@ -2117,7 +2190,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
             iphsEvidenceStatus: iphsResolution.evidenceStatus,
           };
 
-          if (appropriateLevels.length) {
+          if (iphsResolution.evidenceStatus === 'VERIFIED' && appropriateLevels.length) {
             // Service-specific recommendations are intentionally resolved
             // against the read-only NHA directory, never DB facilities or
             // facility_iphs_overlays. The IPHS result selects the level; this
@@ -2142,11 +2215,10 @@ export class AiOrchestratorService implements IAiOrchestrator {
               sourceValues,
             );
             serviceContext.matchedSourceValues = matchedSourceValues;
-            const sourceFiltered = filterBySourceBackedServiceValues(
+            results = prioritizeSourceBackedCandidates(
               candidates,
               matchedSourceValues,
-            );
-            results = (sourceFiltered.length ? sourceFiltered : candidates).slice(0, 5);
+            ).slice(0, 5);
           }
         } else if (this.facilitySearch) {
           results = await this.facilitySearch.searchWithSchemes(
@@ -2325,7 +2397,7 @@ STRICT BOUNDARIES & GROUNDING POLICY:
 10. Scheme Information: Use only the authorized structured source or retrieved knowledge supplied in this request. Clearly distinguish scheme availability from personal eligibility. Do not assert eligibility or invent documents, benefits, or application procedures when the supplied evidence does not support them. For a GOVERNMENT_SCHEME_QUERY, the semantic subject is ${intentMeta.schemeInformationType || 'SCHEME_UNKNOWN'}. Answer only that subject completely and concisely. Sections, cards, and actions are optional: include only those directly relevant to this subject. Never automatically add other scheme subjects (overview, eligibility, documents, application, benefits, or facilities). If the subject is SCHEME_UNKNOWN or the requested scheme is not supported by the supplied authorised evidence, say that the available authorised information does not confirm it; never substitute another scheme.
 11. A source interpretation marked SOURCE_UNVERIFIED is not a clinical conclusion. Never call it normal, high, low, or abnormal solely from that label. Use only a governed interpretation or authorised knowledge; otherwise state the recorded value without diagnosing it.
 12. Semantic response requirements for this turn: ${intentMeta.responseRequirements?.join(', ') || 'STANDARD'}. If GROUNDED_GUIDANCE is required, provide at least two useful evidence-backed steps in sections/bullets. If ALL_RECORD_ITEMS is required, include every relevant authorised record item. If VALUE_AND_UNCERTAINTY is required, preserve the authorised value/unit and say when a governed interpretation is unavailable. If CARE_PLAN_ITEMS is required, include the actual care-plan activities or say no care plan is available.
-13. Return exactly one valid JSON object and nothing else. Use this contract: {"summary":"short patient-facing answer","sections":[{"title":"optional","body":"optional","bullets":["optional"]}],"cards":[{"title":"optional","value":"optional","subtitle":"optional"}],"actions":[{"label":"optional","action":"optional"}]}. "summary" is required. Default response must be under 120 words, with no more than 3 sections, 5 cards, or 2 actions. Do not use Markdown, code fences, headings, sources, domain labels, or internal implementation terms.${isPrescriptionExplanationTurn ? '\n14. Prescription-source isolation: You may explain ONLY the medicines present in [UPLOADED PRESCRIPTION CONTEXT]. Do not introduce or use medicine facts from patient history, ClinicalContext, FHIR records, conversation history, local/cached prescriptions, or general knowledge.\n15. Upload summary: list only the supplied medicine name, strength/dose, frequency, explicit timing or instructions, and supplied investigations. Do not add indications, disease education, long general advice, or an empty investigations section.' : ''}${isPrescriptionContextGenerationTurn ? '\n16. Privacy-minimized prescription education: The supplied context is limited to a validated prescription medicine or investigation and a server-generated generic question. Give only general education. Do not infer why this person received it, infer diagnoses, advise dose changes or stopping, mention any patient record, or introduce other medicines/tests.' : ''}${isMissedDoseGuidanceTurn ? '\n17. Missed-dose safety: Use ONLY [AUTHORIZED GENERAL MEDICAL KNOWLEDGE]. Do not use general model knowledge, invent medicine-specific instructions, recommend doubling a dose, or claim what the patient should do when the supplied evidence does not establish it.' : ''}`;
+13. Return exactly one valid JSON object and nothing else. Use this contract: {"summary":"short patient-facing answer","sections":[{"title":"optional","body":"optional","bullets":["optional"]}],"cards":[{"title":"optional","value":"optional","subtitle":"optional"}],"actions":[{"label":"optional","action":"optional"}]}. "summary" is required. Default response must be under 120 words, with no more than 3 sections, 5 cards, or 2 actions. Do not use Markdown, code fences, headings, sources, domain labels, or internal implementation terms.${isPrescriptionExplanationTurn ? '\n14. Prescription-source isolation: You may explain ONLY the medicines present in [UPLOADED PRESCRIPTION CONTEXT]. Do not introduce or use medicine facts from patient history, ClinicalContext, FHIR records, conversation history, local/cached prescriptions, or general knowledge.\n15. Upload summary: list only the supplied medicine name, strength/dose, frequency, explicit timing or instructions, and supplied investigations. Do not add indications, disease education, long general advice, or an empty investigations section.' : ''}${isPrescriptionContextGenerationTurn ? '\n16. Privacy-minimized prescription education: The supplied context is limited to a validated prescription medicine or investigation and a server-generated generic question. Give only general education. Do not infer why this person received it, infer diagnoses, advise dose changes or stopping, mention any patient record, or introduce other medicines/tests.' : ''}`;
 
     let userPrompt = '';
     if (isPrescriptionContextGenerationTurn) {
@@ -2377,10 +2449,6 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
         userPrompt += `[SANITIZED INVESTIGATION EDUCATION]\ninvestigationName: ${prescriptionContextResolution.investigation.name}\nquestion: ${prescriptionContextResolution.question}\n[/SANITIZED INVESTIGATION EDUCATION]`;
       } else if (prescriptionContextResolution.kind === 'MEDICINE_FOR_BP') {
         userPrompt += `[SANITIZED MEDICINE EDUCATION]\nmedicineNames: ${prescriptionContextResolution.medicines.map((medicine) => medicine.name).join(', ')}\nquestion: ${prescriptionContextResolution.question}\n[/SANITIZED MEDICINE EDUCATION]`;
-      } else if (prescriptionContextResolution.kind === 'MISSED_DOSE_GUIDANCE') {
-        userPrompt += `[SANITIZED MISSED-DOSE REQUEST]\nmedicineName: ${prescriptionContextResolution.medicine.name}\nquestion: ${prescriptionContextResolution.question}\n[/SANITIZED MISSED-DOSE REQUEST]\n\n[AUTHORIZED GENERAL MEDICAL KNOWLEDGE]\n${knowledgePrompt}\n[/AUTHORIZED GENERAL MEDICAL KNOWLEDGE]`;
-      } else if (prescriptionContextResolution.kind === 'GENERAL_MISSED_DOSE_GUIDANCE') {
-        userPrompt += `[SANITIZED GENERAL MISSED-DOSE REQUEST]\nquestion: ${prescriptionContextResolution.question}\n[/SANITIZED GENERAL MISSED-DOSE REQUEST]\n\n[AUTHORIZED GENERAL MEDICAL KNOWLEDGE]\n${knowledgePrompt}\n[/AUTHORIZED GENERAL MEDICAL KNOWLEDGE]`;
       }
     }
 
@@ -2700,23 +2768,13 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
       const chunkTexts = retrievalTrace.matchedChunks
         .map((c) => c.content || c.title)
         .filter(Boolean);
-      if (missedDoseResolution?.kind === 'MISSED_DOSE_GUIDANCE') {
-        // The verifier already receives the generated answer. This assertion
-        // proves that its selected medicine reference was validated locally,
-        // without duplicating prescription fields into verifier context.
-        chunkTexts.unshift(
-          'Prescription evidence: the selected medicine name appearing in the generated response was validated against the active prescription.',
-        );
-      }
       // Scheme generation also receives the existing structured Scheme facts.
       // Include that authorised evidence in verification so supported PM-JAY
       // claims are not incorrectly treated as ungrounded.
       if (schemeFactsForEvaluation) chunkTexts.push(schemeFactsForEvaluation);
 
       const ragasResult = await this.ragasGate.evaluateTurn(
-        missedDoseResolution
-          ? resolvedKnowledgeQuery || missedDoseResolution.question
-          : inputText,
+        inputText,
         finalOutputText,
         chunkTexts,
         correlationId,
@@ -2759,12 +2817,7 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
     }
 
     // ─── Step 8: Apply Response Formatter for Structured Cards ─────────────
-    if (
-      isPrescriptionContextGenerationTurn &&
-      prescriptionContextResolution?.kind === 'MISSED_DOSE_GUIDANCE'
-    ) {
-      contentObj['provenance'] = 'PRESCRIPTION_AND_KNOWLEDGE';
-    } else if (retrievalTrace?.matchedChunks.length || schemeResults.length) {
+    if (retrievalTrace?.matchedChunks.length || schemeResults.length) {
       contentObj['provenance'] = 'KNOWLEDGE';
     } else if (clinicalContext) {
       contentObj['provenance'] = 'FHIR_R4';
@@ -2789,8 +2842,7 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
 
     if (
       isPrescriptionContextGenerationTurn &&
-      prescriptionContextResolution &&
-      prescriptionContextResolution.kind !== 'GENERAL_MISSED_DOSE_GUIDANCE'
+      prescriptionContextResolution
     ) {
       if (prescriptionContextResolution.kind === 'MEDICINE_EDUCATION') {
         await this.prescriptionSessionContext.setLastReferencedMedicine(
@@ -2801,11 +2853,6 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
         await this.prescriptionSessionContext.setLastReferencedInvestigation(
           sessionId,
           prescriptionContextResolution.investigation.name,
-        );
-      } else if (prescriptionContextResolution.kind === 'MISSED_DOSE_GUIDANCE') {
-        await this.prescriptionSessionContext.setLastReferencedMedicine(
-          sessionId,
-          prescriptionContextResolution.medicine.name,
         );
       }
       await this.auditService.logEvent({
@@ -2820,8 +2867,6 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
           contextType: prescriptionContextResolution.kind,
           contextFieldCount: prescriptionContextResolution.kind === 'MEDICINE_FOR_BP'
             ? prescriptionContextResolution.medicines.length + 1
-            : prescriptionContextResolution.kind === 'MISSED_DOSE_GUIDANCE'
-              ? 1 + knowledgeSources.length
             : 2,
           piiRedacted: true,
           telemetry: 'disabled',
