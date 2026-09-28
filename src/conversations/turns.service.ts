@@ -443,26 +443,8 @@ export class TurnsService {
         selectedAgent = result.selectedAgent;
         safetyStatus = result.safetyStatus;
 
-        // A post-generation SafetyGate escalation is already an approved
-        // safety decision. Persist it through the same clinical-review path
-        // as an input-time escalation so the patient card reads the matching
-        // structured facility state instead of an empty fallback snapshot.
-        if (result.safetyEscalation && this.escalationService) {
-          try {
-            await this.escalationService.createFromSafety({
-              identity,
-              turn,
-              safety: result.safetyEscalation,
-              sanitizedInputText: piiResult.sanitizedText,
-              structuredResponse: content,
-            });
-          } catch (error) {
-            const reason = error instanceof Error ? error.message : 'unknown error';
-            this.logger.error(
-              `Clinical escalation persistence failed rule=${result.safetyEscalation.ruleId} correlationId=${correlationId} reason=${reason}`,
-            );
-          }
-        }
+        // SafetyGate emergencies are deterministic, per-turn responses. They
+        // do not create a clinician-review case or waiting/chat lifecycle.
       } catch (err: any) {
         await this.failTurn(turn.id, err as Error, correlationId, identity);
         throw err;
@@ -478,24 +460,21 @@ export class TurnsService {
           safetyResult.patientSafeMessage || 'Clinical escalation required.',
         assigned_role: 'CLINICIAN',
       };
-      // An approved red-flag escalation enters the clinical-review path directly.
-      // Facility lookup remains available for ordinary, explicit facility requests.
       intent = 'safety-escalation';
       selectedAgent = safetyResult.ruleId;
 
       if (this.escalationService) {
         try {
-          await this.escalationService.createFromSafety({
-            identity,
-            turn,
-            safety: safetyResult,
-            sanitizedInputText: piiResult.sanitizedText,
-            structuredResponse: content,
-          });
+          const facilities = await this.escalationService.emergencyFacilitiesForSession(
+            identity.tenantId,
+            sessionId,
+          );
+          if (facilities.length) content.facility_results = facilities;
         } catch (error) {
           const reason = error instanceof Error ? error.message : 'unknown error';
-          // Do not include raw input or PII in this operational log.
-          this.logger.error(`Clinical escalation persistence failed rule=${safetyResult.ruleId} correlationId=${correlationId} reason=${reason}`);
+          // Facility lookup is best-effort and must never delay the immediate
+          // deterministic emergency response. Do not log raw input or PII.
+          this.logger.error(`Emergency facility lookup failed rule=${safetyResult.ruleId} correlationId=${correlationId} reason=${reason}`);
         }
       }
 

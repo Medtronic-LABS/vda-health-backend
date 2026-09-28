@@ -1,6 +1,11 @@
 import { Injectable, Logger, Inject } from '@nestjs/common';
 import { IIntentClassifier } from './intent-classifier.interface';
-import { IntentType, IntentMetadata, SchemeInformationType } from './intent.types';
+import {
+  AuthorityCategory,
+  IntentType,
+  IntentMetadata,
+  SchemeInformationType,
+} from './intent.types';
 import {
   IAiProvider,
   AiClassifyResult,
@@ -49,6 +54,7 @@ export class IntentClassifierService implements IIntentClassifier {
     let responseRequirements: string[] | undefined;
     let schemeInformationType: SchemeInformationType | undefined;
     let providerUsage: AiClassifyResult['usage'];
+    let authorityCategory = AuthorityCategory.UNCERTAIN;
 
     try {
       const candidates = Object.values(IntentType);
@@ -67,6 +73,7 @@ export class IntentClassifierService implements IIntentClassifier {
         knowledgeRequired = aiResult.requirements?.knowledgeRequired;
         responseRequirements = aiResult.requirements?.responseRequirements;
         schemeInformationType = aiResult.requirements?.schemeInformationType as SchemeInformationType | undefined;
+        authorityCategory = aiResult.authorityCategory || this.fallbackAuthority(aiCategory);
       }
 
       if (aiCategory === IntentType.FACILITY_QUERY || aiCategory === IntentType.REFERRAL_QUERY) {
@@ -75,6 +82,10 @@ export class IntentClassifierService implements IIntentClassifier {
           const lower = text.toLowerCase();
           if (/x-?ray|x\s*ray|radiology/i.test(lower)) requirements.service = 'X-ray';
           else if (/ultrasound|usg|sonography/i.test(lower)) requirements.service = 'Ultrasound';
+          else if (/\b(?:e\.?c\.?g\.?|electrocardiogram|electrocardiography)\b|ई\s*सी\s*जी/i.test(lower)) {
+            requirements.service = 'ECG';
+            requirements.serviceAliases = ['Electrocardiogram', 'Electrocardiography'];
+          }
           else if (/hba1c|glycosylated/i.test(lower)) requirements.service = 'HbA1c';
           else if (/cbc|complete blood count/i.test(lower)) requirements.service = 'CBC';
           else if (/blood glucose|blood sugar|sugar test/i.test(lower)) requirements.service = 'Blood glucose';
@@ -98,23 +109,35 @@ export class IntentClassifierService implements IIntentClassifier {
 
     const metadata = this.buildMetadata(
       aiCategory,
+      authorityCategory,
       confidence,
       semanticLanguage || detectedLang,
       'AI_MODEL',
     );
-    metadata.requirements = requirements;
+    const authorityAllowsService = [
+      AuthorityCategory.MEDICATION_ADHERENCE,
+      AuthorityCategory.FACILITY_NAVIGATION,
+      AuthorityCategory.SCHEME_ENTITLEMENT,
+    ].includes(authorityCategory);
+    metadata.requirements = authorityAllowsService ? requirements : undefined;
     const plan = this.contextPlanner.plan({
       intent: aiCategory,
-      requestedCategories: aiResultRequirements(requirements),
-      knowledgeRequired,
-      responseRequirements,
-      schemeInformationType,
+      requestedCategories: authorityAllowsService
+        ? aiResultRequirements(requirements)
+        : undefined,
+      knowledgeRequired: authorityAllowsService ? knowledgeRequired : false,
+      responseRequirements: authorityAllowsService
+        ? responseRequirements
+        : undefined,
+      schemeInformationType: authorityAllowsService
+        ? schemeInformationType
+        : undefined,
     });
-    metadata.requiredRecordCategories = plan.categories;
-    metadata.requiresClinicalContext = plan.categories.length > 0;
-    metadata.knowledgeRequired = plan.knowledgeRequired;
-    metadata.responseRequirements = plan.responseRequirements;
-    metadata.schemeInformationType = plan.schemeInformationType;
+    metadata.requiredRecordCategories = authorityAllowsService ? plan.categories : [];
+    metadata.requiresClinicalContext = authorityAllowsService && plan.categories.length > 0;
+    metadata.knowledgeRequired = authorityAllowsService && plan.knowledgeRequired;
+    metadata.responseRequirements = authorityAllowsService ? plan.responseRequirements : [];
+    metadata.schemeInformationType = authorityAllowsService ? plan.schemeInformationType : undefined;
     if (providerUsage) {
       // Telemetry only: preserve Gemini's reported usage for the tracing
       // wrapper without changing the serialized intent or routing contract.
@@ -135,6 +158,7 @@ export class IntentClassifierService implements IIntentClassifier {
       entityId: aiCategory,
       details: {
         intent: aiCategory,
+        authorityCategory,
         confidence,
         classifiedBy: 'AI_MODEL',
         language: detectedLang,
@@ -149,6 +173,7 @@ export class IntentClassifierService implements IIntentClassifier {
   // ---------------------------------------------------------------------------
   private buildMetadata(
     intent: IntentType,
+    authorityCategory: AuthorityCategory,
     confidence: number,
     language: string,
     classifiedBy: 'RULE_ENGINE' | 'AI_MODEL',
@@ -174,6 +199,7 @@ export class IntentClassifierService implements IIntentClassifier {
 
     return {
       intent,
+      authorityCategory,
       confidence,
       language,
       requiresClinicalContext,
@@ -181,6 +207,37 @@ export class IntentClassifierService implements IIntentClassifier {
       safetySensitivity,
       classifiedBy,
     };
+  }
+
+  /**
+   * Conservative compatibility mapping for providers that have not yet
+   * returned the new authority field. Broad clinical intents never gain
+   * access to a medical-answer agent through this fallback.
+   */
+  private fallbackAuthority(intent: IntentType): AuthorityCategory {
+    switch (intent) {
+      case IntentType.ADHERENCE_QUERY:
+      case IntentType.MEDICATION_QUERY:
+      case IntentType.PRESCRIPTION_QUERY:
+        return AuthorityCategory.MEDICATION_ADHERENCE;
+      case IntentType.FACILITY_QUERY:
+      case IntentType.REFERRAL_QUERY:
+      case IntentType.TELECONSULTATION_QUERY:
+        return AuthorityCategory.FACILITY_NAVIGATION;
+      case IntentType.GOVERNMENT_SCHEME_QUERY:
+        return AuthorityCategory.SCHEME_ENTITLEMENT;
+      case IntentType.LAB_RESULT_QUERY:
+      case IntentType.DIAGNOSIS_QUERY:
+      case IntentType.ALLERGY_QUERY:
+      case IntentType.GENERAL_HEALTH_QUERY:
+        return AuthorityCategory.CLINICAL_QUESTION;
+      case IntentType.CLARIFICATION:
+      case IntentType.UNKNOWN:
+        return AuthorityCategory.UNCERTAIN;
+      case IntentType.GREETING:
+      default:
+        return AuthorityCategory.OUT_OF_SCOPE;
+    }
   }
 }
 

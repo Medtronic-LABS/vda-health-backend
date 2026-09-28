@@ -305,6 +305,11 @@ export class ConfigurationService {
     return this.configService.get<string>('DEV_AUTH_TOKEN');
   }
 
+  get devAuthWorkerRole(): 'ASHA' | 'ANM' | 'CHO' | undefined {
+    const role = this.configService.get<string>('DEV_AUTH_WORKER_ROLE')?.trim().toUpperCase();
+    return role === 'ASHA' || role === 'ANM' || role === 'CHO' ? role : undefined;
+  }
+
   get mobileAuthJwtSecret(): string {
     const configured = this.configService.get<string>('MOBILE_AUTH_JWT_SECRET')?.trim();
     if (configured) return configured;

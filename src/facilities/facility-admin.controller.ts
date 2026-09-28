@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AuthGuard } from '../auth/auth.guard';
+import { WorkerRoleGuard } from '../auth/worker-role.guard';
 import {
   FacilityImportMetadata,
   FacilityImportService,
@@ -21,7 +22,7 @@ import { FacilitySearchService } from './facility-search.service';
 import { IphsLevel, ReferralLevel } from './iphs-classification';
 
 @Controller('admin/facilities')
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, WorkerRoleGuard)
 export class FacilityAdminController {
   constructor(
     private readonly importer: FacilityImportService,

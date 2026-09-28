@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsOptional, IsString, IsUUID, Matches, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsInt, IsOptional, IsString, IsUUID, Matches, Min, ValidateNested } from 'class-validator';
 
 export class PrescriptionReminderContextDto {
   @IsString()
@@ -14,8 +14,13 @@ export class PrescriptionReminderContextDto {
 
 /** The device submits only confirmed reminder times; medicine/test facts stay server-resolved. */
 export class RefreshPrescriptionSessionContextDto {
+  /** Database Prescription.id returned as `id` by GET .../prescriptions/current. */
   @IsUUID()
   prescription_id!: string;
+
+  @IsInt()
+  @Min(1)
+  plan_revision!: number;
 
   @IsArray()
   @ArrayMaxSize(20)

@@ -65,3 +65,29 @@ export function filterBySourceBackedServiceValues(
     ),
   );
 }
+
+/**
+ * Orders facility-specific service evidence ahead of other candidates that
+ * already match the IPHS-selected facility levels. An absent facility-level
+ * service field is not a reason to discard an IPHS-eligible candidate.
+ */
+export function prioritizeSourceBackedCandidates(
+  iphsEligibleResults: FacilitySearchResult[],
+  verifiedValues: string[],
+): FacilitySearchResult[] {
+  if (!verifiedValues.length) return [...iphsEligibleResults];
+
+  const sourceMatchedIds = new Set(
+    filterBySourceBackedServiceValues(iphsEligibleResults, verifiedValues).map(
+      ({ facility }) => facility.id,
+    ),
+  );
+  return [
+    ...iphsEligibleResults.filter(({ facility }) =>
+      sourceMatchedIds.has(facility.id),
+    ),
+    ...iphsEligibleResults.filter(
+      ({ facility }) => !sourceMatchedIds.has(facility.id),
+    ),
+  ];
+}

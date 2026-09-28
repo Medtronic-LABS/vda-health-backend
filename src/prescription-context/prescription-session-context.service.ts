@@ -46,18 +46,26 @@ export class PrescriptionSessionContextService {
     if (session.externalId !== identity.externalId || session.status !== 'ACTIVE') throw new ForbiddenException('TENANT_ACCESS_DENIED');
 
     const prescription = await this.prescriptions.findOne({
-      // The uploaded prescription remains tenant- and patient-bound. It may
-      // have been uploaded in an earlier VDA session, then selected locally as
-      // the active confirmed prescription for this new session.
-      where: { id: dto.prescription_id, tenantId: identity.tenantId, patientRef: session.subjectAbhaRef },
+      // The current session establishes the authenticated tenant/patient
+      // boundary above. The active plan itself is patient-scoped and may have
+      // been uploaded in an earlier session, so its upload session is not an
+      // ownership boundary for a later authorized session.
+      where: {
+        id: dto.prescription_id,
+        tenantId: identity.tenantId,
+        patientRef: session.subjectAbhaRef,
+        verificationStatus: 'VERIFIED',
+        activePlan: true,
+        planRevision: dto.plan_revision,
+      },
     });
-    if (!prescription || !['EXTRACTED', 'APPROVED'].includes(prescription.extractionStatus)) {
-      throw new BadRequestException('ACTIVE_CONFIRMED_PRESCRIPTION_REQUIRED');
+    if (!prescription || !prescription.verifiedMedications?.length) {
+      throw new BadRequestException('VERIFIED_PRESCRIPTION_REQUIRED');
     }
 
     const previous = await this.get(sessionId);
-    const medicines = (prescription.medications || []).map((medicine) => this.toMedicine(medicine));
-    const investigations = (prescription.investigations || []).map((investigation) => this.toInvestigation(investigation));
+    const medicines = prescription.verifiedMedications.map((medicine) => this.toMedicine(medicine));
+    const investigations = (prescription.verifiedInvestigations || []).map((investigation) => this.toInvestigation(investigation));
     const medicineByName = new Map(medicines.map((medicine) => [this.normalize(medicine.name), medicine.name]));
     const previousInvestigation = previous?.lastReferencedInvestigation;
     const context: SanitizedPrescriptionSessionContext = {

@@ -15,6 +15,7 @@ import { ConfigurationModule } from '../configuration/configuration.module';
 import { ConfigurationService } from '../configuration/configuration.service';
 import { RedisModule } from '../redis/redis.module';
 import { TenantRateLimiterGuard } from '../common/guards/tenant-rate-limiter.guard';
+import { WorkerRoleGuard } from './worker-role.guard';
 
 @Module({
   imports: [
@@ -38,7 +39,8 @@ import { TenantRateLimiterGuard } from '../common/guards/tenant-rate-limiter.gua
     MobileAuthService,
     MobileAuthTokenService,
     TenantRateLimiterGuard,
+    WorkerRoleGuard,
   ],
-  exports: [HostIdentityContext, AuthGuard, MobileAuthTokenService, TenantsModule],
+  exports: [HostIdentityContext, AuthGuard, WorkerRoleGuard, MobileAuthTokenService, TenantsModule],
 })
 export class AuthModule {}

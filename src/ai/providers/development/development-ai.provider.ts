@@ -7,6 +7,7 @@ import {
   AiClassifyResult,
   ProviderHealth,
 } from '../../interfaces/ai-provider.interface';
+import { AuthorityCategory } from '../../intents/intent.types';
 
 @Injectable()
 export class DevelopmentAiProvider implements IAiProvider {
@@ -187,6 +188,7 @@ export class DevelopmentAiProvider implements IAiProvider {
     let selected = candidates[0] || 'UNKNOWN';
 
     const lower = text.toLowerCase();
+    const clinicalMedicationAction = /(?:miss(?:ed)?|forgot|भूल|छूट).{0,40}(?:take|ले|लूं|लूँ|skip|double|दो|दोगुनी)|(?:stop|start|increase|decrease|double|band|बंद|बढ़ा|घटा).{0,30}(?:medicine|medication|dose|tablet|दवा|गोली|खुराक)/i.test(lower);
     if (
       lower.includes('दवाई') ||
       lower.includes('medication') ||
@@ -240,6 +242,21 @@ export class DevelopmentAiProvider implements IAiProvider {
 
     return {
       category: selected,
+      authorityCategory: clinicalMedicationAction
+        || selected.includes('LAB')
+        || selected.includes('DIAGNOSIS')
+        || selected.includes('ALLERGY')
+        || selected.includes('GENERAL_HEALTH')
+        ? AuthorityCategory.CLINICAL_QUESTION
+        : selected.includes('FACILITY') || selected.includes('REFERRAL') || selected.includes('TELECONSULTATION')
+          ? AuthorityCategory.FACILITY_NAVIGATION
+          : selected.includes('SCHEME')
+            ? AuthorityCategory.SCHEME_ENTITLEMENT
+            : selected.includes('MEDICATION') || selected.includes('PRESCRIPTION') || selected.includes('ADHERENCE')
+              ? AuthorityCategory.MEDICATION_ADHERENCE
+              : selected.includes('GREETING')
+                ? AuthorityCategory.OUT_OF_SCOPE
+                : AuthorityCategory.UNCERTAIN,
       confidence: 0.95,
       explanation:
         'Deterministic rule-based classification in development AI provider',

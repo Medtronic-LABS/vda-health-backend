@@ -44,6 +44,8 @@ export interface AiClassifyOptions {
 
 export interface AiClassifyResult {
   category: string;
+  /** High-level product authority boundary; evaluated before agent routing. */
+  authorityCategory?: AuthorityCategory;
   confidence: number;
   explanation?: string;
   /** Semantic constraints are source hints, never patient-facing facts. */
@@ -98,4 +100,7 @@ export interface IAiProvider {
 
   healthCheck(): Promise<ProviderHealth>;
 }
-import type { SchemeInformationType } from '../intents/intent.types';
+import type {
+  AuthorityCategory,
+  SchemeInformationType,
+} from '../intents/intent.types';

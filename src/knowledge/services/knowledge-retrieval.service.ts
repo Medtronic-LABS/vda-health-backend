@@ -14,6 +14,22 @@ import {
   KnowledgeSourceCitation,
 } from '../models/knowledge-retrieval.model';
 
+/** Exact service evidence only; broad words cannot become capability matches. */
+export function iphsServiceTermPattern(term: string): string | null {
+  const tokens = term.trim().toLowerCase().match(/[a-z0-9]+/g) || [];
+  const generic = new Set(['test', 'scan', 'blood', 'service', 'diagnostic', 'imaging']);
+  if (
+    term.length > 80 ||
+    !tokens.length ||
+    tokens.length > 6 ||
+    tokens.every((token) => generic.has(token)) ||
+    (tokens.length === 1 && tokens[0].length < 3)
+  ) {
+    return null;
+  }
+  return `(^|[^a-z0-9])${tokens.join('[^a-z0-9]+')}($|[^a-z0-9])`;
+}
+
 @Injectable()
 export class KnowledgeRetrievalService implements IKnowledgeRetrievalService {
   private readonly logger = new Logger(KnowledgeRetrievalService.name);
@@ -40,6 +56,76 @@ export class KnowledgeRetrievalService implements IKnowledgeRetrievalService {
       return false;
     }
     return true;
+  }
+
+  /** Bounded lexical supplement for the active, tenant-owned IPHS corpus. */
+  async retrieveIphsServiceChunks(
+    terms: string[],
+    tenantId: string,
+    state?: string,
+    maxResults = 3,
+  ): Promise<KnowledgeMatchChunk[]> {
+    if (!tenantId) return [];
+    if (!this.configService.knowledgeRagEnabled || !this.dataSource?.isInitialized) {
+      throw new Error('IPHS_INDEX_UNAVAILABLE');
+    }
+    const patterns = Array.from(new Set(terms.map(iphsServiceTermPattern).filter(
+      (pattern): pattern is string => Boolean(pattern),
+    )));
+    if (!patterns.length) return [];
+
+    try {
+      const embedding = await this.localEmbeddingProvider.generateEmbedding(terms.join(' '));
+      const parameters: unknown[] = [tenantId, patterns, `[${embedding.join(',')}]`];
+      const stateFilter = state
+        ? `AND (c.state = $${parameters.push(state)} OR c.state IS NULL)`
+        : '';
+      parameters.push(Math.min(Math.max(maxResults, 1), 6));
+      const rows: any[] = await this.dataSource.query(
+        `SELECT c.id AS "chunkId", c."documentId", c."documentVersion",
+                d.title, c.content, c.source, c.language, c.domain,
+                c.category, c.metadata,
+                (e.embedding <=> $3::vector) AS "cosineDistance"
+         FROM knowledge_embeddings e
+         JOIN knowledge_chunks c ON e."chunkId" = c.id
+         JOIN knowledge_documents d ON c."documentId" = d.id
+         WHERE d.status = 'ACTIVE'
+           AND d."tenantId" = $1 AND c."tenantId" = $1
+           AND d.domain = 'healthcare_facilities'
+           AND c.domain = 'healthcare_facilities'
+           AND d.category = 'iphs_2022_facility_standards'
+           AND c.category = 'iphs_2022_facility_standards'
+           AND d.title ILIKE 'IPHS 2022%'
+           AND d.source ILIKE '%Indian Public Health Standards%'
+           AND c.content ~* ANY($2::text[])
+           ${stateFilter}
+         ORDER BY "cosineDistance" ASC
+         LIMIT $${parameters.length}`,
+        parameters,
+      );
+      return rows.map((row) => {
+        const distance = Number(row.cosineDistance);
+        return {
+          chunkId: row.chunkId,
+          documentId: row.documentId,
+          documentVersion: row.documentVersion,
+          title: row.title,
+          content: row.content,
+          source: row.source,
+          language: row.language,
+          domain: row.domain,
+          category: row.category,
+          relevanceScore: Number(Math.max(0, Math.min(1, 1 - distance)).toFixed(4)),
+          distance: Number(distance.toFixed(4)),
+          metadata: row.metadata,
+        };
+      });
+    } catch (error: unknown) {
+      this.logger.warn(
+        `IPHS lexical retrieval unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw error;
+    }
   }
 
   async retrieve(

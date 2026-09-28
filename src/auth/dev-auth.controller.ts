@@ -1,4 +1,5 @@
-import { Controller, ForbiddenException, Get } from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Req } from '@nestjs/common';
+import type { Request } from 'express';
 import { ConfigurationService } from '../configuration/configuration.service';
 
 /**
@@ -11,8 +12,12 @@ export class DevAuthController {
   constructor(private readonly config: ConfigurationService) {}
 
   @Get('token')
-  getDevToken() {
-    if (!this.config.devAuthEnabled) {
+  getDevToken(@Req() request: Request) {
+    if (
+      this.config.nodeEnv !== 'development' ||
+      !this.config.devAuthEnabled ||
+      !this.isLocalRequest(request)
+    ) {
       throw new ForbiddenException('Development authentication is disabled.');
     }
 
@@ -22,5 +27,17 @@ export class DevAuthController {
     }
 
     return { token };
+  }
+
+  private isLocalRequest(request: Request): boolean {
+    const remoteAddress = request.socket.remoteAddress || '';
+    const isLoopbackAddress =
+      remoteAddress === '127.0.0.1' ||
+      remoteAddress === '::1' ||
+      remoteAddress === '::ffff:127.0.0.1';
+    const host = (request.hostname || '').toLowerCase();
+    const isLoopbackHost =
+      host === 'localhost' || host === '127.0.0.1' || host === '::1';
+    return isLoopbackAddress && isLoopbackHost;
   }
 }

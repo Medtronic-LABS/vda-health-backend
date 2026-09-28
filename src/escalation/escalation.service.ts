@@ -83,7 +83,7 @@ export class EscalationService {
    * reference; no location, distance, service capability, or facility fact is
    * inferred here.
    */
-  private async nearbyEmergencyFacilities(tenantId: string, sessionId: string): Promise<EmergencyFacilityOption[]> {
+  async emergencyFacilitiesForSession(tenantId: string, sessionId: string): Promise<EmergencyFacilityOption[]> {
     if (!this.sessions || !this.patientData || !this.facilitySearch) return [];
     const session = await this.sessions.findOne({ where: { id: sessionId, tenantId } });
     if (!session) return [];
@@ -241,7 +241,7 @@ export class EscalationService {
     // The emergency patient card is rendered as soon as SafetyGate escalates.
     // Use the existing structured emergency search for that card immediately;
     // teleconsultation eligibility remains independently time-gated above.
-    const nearbyFacilities = await this.nearbyEmergencyFacilities(
+    const nearbyFacilities = await this.emergencyFacilitiesForSession(
       tenantId,
       sessionId,
     );

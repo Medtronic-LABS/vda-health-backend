@@ -5,6 +5,7 @@ import {
   collectSourceBackedServiceValues,
   filterBySourceBackedServiceValues,
   matchSourceBackedServiceValues,
+  prioritizeSourceBackedCandidates,
 } from './facility-service-matcher';
 
 describe('facility service source verification', () => {
@@ -83,5 +84,29 @@ describe('facility service source verification', () => {
     expect(filterBySourceBackedServiceValues(facilities, matched)).toHaveLength(
       1,
     );
+  });
+
+  it('prioritizes facility-specific matches without dropping IPHS-level candidates', () => {
+    const candidates = [
+      result('IPHS_ONLY', null),
+      result('SERVICE_LISTED', ['HbA1c']),
+      result('ALSO_IPHS_ONLY', null),
+    ];
+
+    expect(
+      prioritizeSourceBackedCandidates(candidates, ['HbA1c']).map(
+        ({ facility }) => facility.id,
+      ),
+    ).toEqual(['SERVICE_LISTED', 'IPHS_ONLY', 'ALSO_IPHS_ONLY']);
+  });
+
+  it('keeps every IPHS-level candidate when facility service evidence is absent', () => {
+    const candidates = [result('A', null), result('B', null)];
+
+    expect(
+      prioritizeSourceBackedCandidates(candidates, []).map(
+        ({ facility }) => facility.id,
+      ),
+    ).toEqual(['A', 'B']);
   });
 });
