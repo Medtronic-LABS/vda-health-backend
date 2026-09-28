@@ -13,6 +13,8 @@ export class LocalSemanticEmbeddingProvider
   private readonly logger = new Logger(LocalSemanticEmbeddingProvider.name);
   private worker?: Worker;
   private workerReady?: Promise<void>;
+  private workerFailure?: Error;
+  private shuttingDown = false;
   private nextRequestId = 0;
   private readonly pending = new Map<
     number,
@@ -20,6 +22,9 @@ export class LocalSemanticEmbeddingProvider
   >();
   private readonly modelName = 'all-MiniLM-L6-v2';
   private readonly dimension = 384;
+  // A stalled first model load must fail before the 60-second ingress timeout.
+  // The worker may finish initializing later; no substitute vector is returned.
+  private readonly requestTimeoutMs = 30_000;
 
   constructor() {
     this.workerReady = this.startWorker();
@@ -58,8 +63,18 @@ export class LocalSemanticEmbeddingProvider
     `;
     return new Promise((resolve, reject) => {
       this.worker = new Worker(workerCode, { eval: true });
-      this.worker.once('error', (error) => {
+      const failWorker = (error: Error) => {
+        if (this.workerFailure) return;
+        this.workerFailure = error;
+        this.worker = undefined;
+        for (const request of this.pending.values()) request.reject(error);
+        this.pending.clear();
+        if (!this.shuttingDown) this.logger.error(`Local ONNX embedding worker failed: ${error.message}`);
         reject(error);
+      };
+      this.worker.on('error', failWorker);
+      this.worker.on('exit', (code) => {
+        failWorker(new Error(`Local ONNX embedding worker exited with code ${code}`));
       });
       this.worker.on('message', (message: any) => {
         if (message.ready) {
@@ -112,11 +127,30 @@ export class LocalSemanticEmbeddingProvider
   private async requestEmbeddings(texts: string[]): Promise<number[][]> {
     try {
       await this.workerReady;
+      if (this.workerFailure) throw this.workerFailure;
       if (!this.worker) throw new Error('Embedding worker is unavailable.');
       const id = ++this.nextRequestId;
       return await new Promise<number[][]>((resolve, reject) => {
-        this.pending.set(id, { resolve, reject });
-        this.worker!.postMessage({ id, texts });
+        const timer = setTimeout(() => {
+          this.pending.delete(id);
+          reject(new Error('Local ONNX embedding request timed out'));
+        }, this.requestTimeoutMs);
+        this.pending.set(id, {
+          resolve: (vectors) => {
+            clearTimeout(timer);
+            resolve(vectors);
+          },
+          reject: (error) => {
+            clearTimeout(timer);
+            reject(error);
+          },
+        });
+        try {
+          this.worker!.postMessage({ id, texts });
+        } catch (error) {
+          this.pending.get(id)?.reject(error instanceof Error ? error : new Error(String(error)));
+          this.pending.delete(id);
+        }
       });
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -125,6 +159,7 @@ export class LocalSemanticEmbeddingProvider
   }
 
   async onApplicationShutdown(): Promise<void> {
+    this.shuttingDown = true;
     await this.worker?.terminate();
   }
 }

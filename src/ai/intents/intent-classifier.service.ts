@@ -43,7 +43,7 @@ export class IntentClassifierService implements IIntentClassifier {
     // Normal VDA routing is always provider-classified. Deterministic rules
     // remain exclusively in SafetyGate, which runs before orchestration.
     this.logger.log(
-      `[IntentClassifier] Stage 2 AI Classification invoked for text: "${text.substring(0, 50)}"`,
+      `[IntentClassifier] Stage 2 AI Classification invoked correlationId=${corrId} inputLength=${text.length}`,
     );
 
     let aiCategory = IntentType.UNKNOWN;
