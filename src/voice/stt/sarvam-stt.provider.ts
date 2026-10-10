@@ -18,11 +18,16 @@ export class SarvamSttProvider implements SpeechToTextProvider {
       throw new SpeechToTextProviderError('NOT_CONFIGURED', 'Sarvam STT is not configured.');
     }
 
+    const mimeType = (input.mimeType || 'audio/webm').split(';', 1)[0].toLowerCase();
+    const extension = mimeType === 'audio/mp4' || mimeType === 'audio/x-m4a' ? '.m4a'
+      : mimeType === 'audio/ogg' ? '.ogg'
+      : mimeType === 'audio/wav' || mimeType === 'audio/x-wav' ? '.wav'
+      : mimeType === 'audio/mpeg' ? '.mp3' : '.webm';
     const form = new FormData();
     form.append(
       'file',
-      new Blob([new Uint8Array(input.audioBuffer)], { type: input.mimeType || 'audio/webm' }),
-      'recording.webm',
+      new Blob([new Uint8Array(input.audioBuffer)], { type: mimeType }),
+      `recording${extension}`,
     );
     form.append('model', this.config.sarvamSaarasSttModel || 'saaras:v3');
     form.append('mode', 'transcribe');

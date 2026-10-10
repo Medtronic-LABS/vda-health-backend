@@ -5,6 +5,8 @@ import {
   IsNumber,
   IsString,
   IsOptional,
+  Min,
+  Max,
   validateSync,
 } from 'class-validator';
 
@@ -44,6 +46,20 @@ export class EnvironmentVariables {
 
   @IsString()
   DB_DATABASE!: string;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(20)
+  @IsOptional()
+  DB_POOL_SIZE = 10;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1000)
+  @Max(30000)
+  @IsOptional()
+  DB_CONNECTION_TIMEOUT_MS = 5000;
 
   @IsString()
   REDIS_HOST!: string;
@@ -301,7 +317,7 @@ export class EnvironmentVariables {
   @Type(() => Number)
   @IsNumber()
   @IsOptional()
-  MOBILE_AUTH_TOKEN_TTL_SECONDS = 43200;
+  MOBILE_AUTH_TOKEN_TTL_SECONDS = 900;
 
   @IsString()
   @IsOptional()

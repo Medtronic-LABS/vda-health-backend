@@ -5,7 +5,6 @@ import {
   CallHandler,
   BadRequestException,
   ConflictException,
-  GatewayTimeoutException,
 } from '@nestjs/common';
 import { Observable, of } from 'rxjs';
 import { tap } from 'rxjs/operators';
@@ -51,8 +50,12 @@ export class IdempotencyInterceptor implements NestInterceptor {
       .update(requestBody)
       .digest('hex');
 
-    const cacheKey = `idempotency:session:${idempotencyKey}`;
-    const lockKey = `lock:idempotency:${idempotencyKey}`;
+    const principal = request['user'] as { tenantId?: string; externalId?: string } | undefined;
+    const scopeHash = crypto.createHash('sha256').update(JSON.stringify([
+      request['originalUrl'] || request['url'], principal?.tenantId, principal?.externalId, idempotencyKey,
+    ])).digest('hex');
+    const cacheKey = `idempotency:session:${scopeHash}`;
+    const lockKey = `lock:idempotency:${scopeHash}`;
     const ownerToken = crypto.randomUUID();
 
     // Check if idempotency record exists
@@ -118,8 +121,8 @@ export class IdempotencyInterceptor implements NestInterceptor {
         }
       }
 
-      // If wait expires, return UPSTREAM_TIMEOUT
-      throw new GatewayTimeoutException('UPSTREAM_TIMEOUT');
+      // The first request still owns the turn. A retry can use this key again.
+      throw new ConflictException('TURN_IN_PROGRESS');
     }
 
     // Lock acquired. Proceed with request execution

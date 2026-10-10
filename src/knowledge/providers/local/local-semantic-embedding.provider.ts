@@ -15,6 +15,9 @@ export class LocalSemanticEmbeddingProvider
   private workerReady?: Promise<void>;
   private workerFailure?: Error;
   private shuttingDown = false;
+  private restartTimer?: ReturnType<typeof setTimeout>;
+  private restartAttempts = 0;
+  private workerStartedAt = 0;
   private nextRequestId = 0;
   private readonly pending = new Map<
     number,
@@ -28,9 +31,12 @@ export class LocalSemanticEmbeddingProvider
 
   constructor() {
     this.workerReady = this.startWorker();
+    void this.workerReady.catch(() => undefined);
   }
 
   private startWorker(): Promise<void> {
+    this.workerFailure = undefined;
+    this.workerStartedAt = Date.now();
     const workerCode = `
       const { parentPort } = require('worker_threads');
       let pipeline;
@@ -62,21 +68,25 @@ export class LocalSemanticEmbeddingProvider
       parentPort.postMessage({ ready: true });
     `;
     return new Promise((resolve, reject) => {
-      this.worker = new Worker(workerCode, { eval: true });
+      const worker = new Worker(workerCode, { eval: true });
+      this.worker = worker;
       const failWorker = (error: Error) => {
-        if (this.workerFailure) return;
+        if (this.worker !== worker || this.workerFailure) return;
         this.workerFailure = error;
         this.worker = undefined;
         for (const request of this.pending.values()) request.reject(error);
         this.pending.clear();
-        if (!this.shuttingDown) this.logger.error(`Local ONNX embedding worker failed: ${error.message}`);
+        if (!this.shuttingDown) {
+          this.logger.error(`Local ONNX embedding worker failed: ${error.message}`);
+          this.scheduleRestart();
+        }
         reject(error);
       };
-      this.worker.on('error', failWorker);
-      this.worker.on('exit', (code) => {
+      worker.on('error', failWorker);
+      worker.on('exit', (code) => {
         failWorker(new Error(`Local ONNX embedding worker exited with code ${code}`));
       });
-      this.worker.on('message', (message: any) => {
+      worker.on('message', (message: any) => {
         if (message.ready) {
           this.logger.log('Local ONNX embedding worker initialized (all-MiniLM-L6-v2, 384-dim)');
           resolve();
@@ -89,6 +99,22 @@ export class LocalSemanticEmbeddingProvider
         else request.resolve(message.embeddings);
       });
     });
+  }
+
+  private scheduleRestart(): void {
+    if (this.shuttingDown || this.restartTimer) return;
+    if (Date.now() - this.workerStartedAt > 60_000) this.restartAttempts = 0;
+    if (this.restartAttempts >= 5) {
+      this.logger.error('Local ONNX embedding worker restart limit reached');
+      return;
+    }
+    const delayMs = Math.min(1000 * 2 ** this.restartAttempts++, 16_000);
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = undefined;
+      if (this.shuttingDown) return;
+      this.workerReady = this.startWorker();
+      void this.workerReady.catch(() => undefined);
+    }, delayMs);
   }
 
   getModelInfo(): ModelInfo {
@@ -160,6 +186,11 @@ export class LocalSemanticEmbeddingProvider
 
   async onApplicationShutdown(): Promise<void> {
     this.shuttingDown = true;
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = undefined;
+    const error = new Error('Local ONNX embedding worker is shutting down');
+    for (const request of this.pending.values()) request.reject(error);
+    this.pending.clear();
     await this.worker?.terminate();
   }
 }

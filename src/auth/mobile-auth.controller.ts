@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Post, Put, Req, UnauthorizedException, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Post, Put, Req, UnauthorizedException, UseGuards } from '@nestjs/common';
 import { TenantRateLimiterGuard } from '../common/guards/tenant-rate-limiter.guard';
 import { AuthGuard } from './auth.guard';
 import { MobileLoginDto } from './dto/mobile-login.dto';
+import { MobileRefreshDto, MobileRotateDto } from './dto/mobile-refresh.dto';
 import { MobileSignupDto } from './dto/mobile-signup.dto';
 import { UpdateMobileProfileDto } from './dto/update-mobile-profile.dto';
 import { HostIdentity } from './host-identity.context';
@@ -12,6 +13,8 @@ export class MobileAuthController {
   constructor(private readonly auth: MobileAuthService) {}
   @Post('signup') @UseGuards(TenantRateLimiterGuard) signup(@Body() dto: MobileSignupDto) { return this.auth.signup(dto); }
   @Post('login') @UseGuards(TenantRateLimiterGuard) login(@Body() dto: MobileLoginDto) { return this.auth.login(dto); }
+  @Post('refresh') @HttpCode(200) refresh(@Body() dto: MobileRotateDto) { return this.auth.refresh(dto.refreshToken, dto.nextRefreshToken); }
+  @Post('logout') @HttpCode(200) async logout(@Body() dto: MobileRefreshDto) { await this.auth.logout(dto.refreshToken); return { success: true }; }
   @Get('profile') @UseGuards(AuthGuard) profile(@Req() request: Record<string, unknown>) {
     const identity = this.mobileIdentity(request); return this.auth.getProfile(identity.mobileUserId!, identity.tenantId);
   }

@@ -10,9 +10,21 @@ export class DevelopmentSafetyGate implements ISafetyGate {
       /\b(?:seene mein bahut tez dard|chest me(?:in)?\s+(?:[a-zA-Z\s]{0,20})(?:pain|dard)|saans lene mein bahut dikkat|behosh|bahut zyada khoon beh raha|stroke ke lakshan|stroke)\b/i,
   };
 
+  private readonly additionalEmergencyPatterns = [
+    /\b(?:can(?:not| not|'t) breathe|unable to breathe|not breathing|gasping for air|severe breathlessness|breathing very hard|chest (?:pressure|tightness)|crushing chest|chest pain.{0,50}(?:left arm|arm)|(?:left arm|arm).{0,50}chest pain|heavy bleeding|bleeding heavily|blood (?:will not|won't) stop|(?:fainted|passed out).{0,30}(?:now|today|not waking|unresponsive)|unresponsive|not waking up|bleeding (?:won't|will not) stop|face (?:is )?droop(?:ing)?|speech (?:is )?slurred|sudden (?:one.sided )?(?:weakness|paralysis)|slurred speech|poison(?:ed|ing)|swallowed poison|overdos(?:e|ed)|took too many (?:pills|tablets))\b/i,
+    /(?:साँस|सांस|श्वास).{0,25}(?:नहीं|मुश्किल|दिक्कत|रुक|अटक)|(?:दम घुट|सांस बंद)|(?:सीने|छाती).{0,35}(?:दबाव|जकड़न|तेज दर्द|भयंकर दर्द)|(?:बाएं हाथ|बायें हाथ).{0,30}(?:दर्द|सीने)|(?:बहुत|तेज|ज्यादा).{0,15}(?:खून|रक्त).{0,15}(?:बह|निकल)|(?:लकवा|चेहरा टेढ़ा|बोली लड़खड़ा|एक तरफ कमजोरी|ज़हर|जहर|विष|ओवरडोज|ज्यादा गोलियां|ज्यादा दवाई|बेहोश|मूर्छित)/,
+    /\b(?:saans|sans|saanse?|saas).{0,30}(?:nahi|nahin|ruk|atak|mushkil|dikkat|ghut)|(?:dam ghut|saans band|sans band)|(?:seene|sine|chhati|chati|chest).{0,35}(?:dabav|pressure|tight|tez dard|bahut dard)|(?:bahut|bohot|zyada|jada|tez).{0,20}(?:khoon|khun).{0,20}(?:beh|nikal)|(?:lakwa|chehra tedha|boli ladkhad|zeher|zahar|poison|overdose|zyada goli|behosh)\b/i,
+  ];
+
+  private normalizeForSafety(text: string): string {
+    return text.normalize('NFKC')
+      .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g, '')
+      .replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+
   // self-harm patterns mapping
   private readonly selfHarmPatterns = {
-    en: /\b(?:suicide|kill myself|end my life|harm myself)\b/i,
+    en: /\b(?:suicide|kill myself|end my life|harm myself|cut my wrists|about to hurt myself|took pills to end my life)\b/i,
     hi: /(?:आत्महत्या|खुद को मारना|जीवन समाप्त करना|खुद को नुकसान पहुंचाना)/,
     hiLatn:
       /\b(?:suicide|khud ko marna|jaan de dunga|jaan de dungi|apni jaan lena|end my life|harm myself)\b/i,
@@ -33,40 +45,41 @@ export class DevelopmentSafetyGate implements ISafetyGate {
   ): Promise<SafetyResult> {
     await Promise.resolve();
     let inputLang = language || 'en';
+    const normalizedText = this.normalizeForSafety(text || '');
 
     // Override language context based on specific safety pattern matches
     if (!language) {
       if (
-        this.emergencyPatterns.hi.test(text) ||
-        this.selfHarmPatterns.hi.test(text) ||
-        this.medicationPatterns.hi.test(text)
+        this.emergencyPatterns.hi.test(normalizedText) ||
+        this.selfHarmPatterns.hi.test(normalizedText) ||
+        this.medicationPatterns.hi.test(normalizedText)
       ) {
         inputLang = 'hi';
       } else if (
-        this.emergencyPatterns.hiLatn.test(text) ||
-        this.selfHarmPatterns.hiLatn.test(text) ||
-        this.medicationPatterns.hiLatn.test(text)
+        this.emergencyPatterns.hiLatn.test(normalizedText) ||
+        this.selfHarmPatterns.hiLatn.test(normalizedText) ||
+        this.medicationPatterns.hiLatn.test(normalizedText)
       ) {
         inputLang = 'hi-Latn';
       }
     } else {
       if (
         (inputLang === 'en' || inputLang === 'hi-Latn') &&
-        (this.emergencyPatterns.hi.test(text) ||
-          this.selfHarmPatterns.hi.test(text) ||
-          this.medicationPatterns.hi.test(text))
+        (this.emergencyPatterns.hi.test(normalizedText) ||
+          this.selfHarmPatterns.hi.test(normalizedText) ||
+          this.medicationPatterns.hi.test(normalizedText))
       ) {
         inputLang = 'hi';
       } else if (
         inputLang === 'en' &&
-        (this.emergencyPatterns.hiLatn.test(text) ||
-          this.selfHarmPatterns.hiLatn.test(text) ||
-          this.medicationPatterns.hiLatn.test(text))
+        (this.emergencyPatterns.hiLatn.test(normalizedText) ||
+          this.selfHarmPatterns.hiLatn.test(normalizedText) ||
+          this.medicationPatterns.hiLatn.test(normalizedText))
       ) {
         const matchesEn =
-          this.emergencyPatterns.en.test(text) ||
-          this.selfHarmPatterns.en.test(text) ||
-          this.medicationPatterns.en.test(text);
+          this.emergencyPatterns.en.test(normalizedText) ||
+          this.selfHarmPatterns.en.test(normalizedText) ||
+          this.medicationPatterns.en.test(normalizedText);
         if (!matchesEn) {
           inputLang = 'hi-Latn';
         }
@@ -74,7 +87,7 @@ export class DevelopmentSafetyGate implements ISafetyGate {
     }
 
     // 1. INVALID_INPUT Rule Check (Highest Priority)
-    if (!text || text.trim() === '' || text.length < 2) {
+    if (!text || normalizedText === '' || normalizedText.length < 2) {
       return {
         status: 'INVALID_INPUT',
         ruleId: 'INVALID_INPUT_01',
@@ -88,7 +101,7 @@ export class DevelopmentSafetyGate implements ISafetyGate {
     }
 
     // Check for repetitive letters / obvious nonsense
-    if (/([a-zA-Z])\1{5,}/.test(text)) {
+    if (/^([a-zA-Z])\1{5,}$/.test(normalizedText)) {
       return {
         status: 'INVALID_INPUT',
         ruleId: 'INVALID_INPUT_01',
@@ -103,9 +116,10 @@ export class DevelopmentSafetyGate implements ISafetyGate {
 
     // 2. EMERGENCY Rule Check
     if (
-      this.emergencyPatterns.en.test(text) ||
-      this.emergencyPatterns.hi.test(text) ||
-      this.emergencyPatterns.hiLatn.test(text)
+      this.additionalEmergencyPatterns.some((pattern) => pattern.test(normalizedText)) ||
+      this.emergencyPatterns.en.test(normalizedText) ||
+      this.emergencyPatterns.hi.test(normalizedText) ||
+      this.emergencyPatterns.hiLatn.test(normalizedText)
     ) {
       let patientSafeMessage =
         'If you are experiencing a medical emergency, please contact local emergency services or visit the nearest emergency room immediately.';
@@ -131,9 +145,9 @@ export class DevelopmentSafetyGate implements ISafetyGate {
 
     // 3. SELF_HARM Rule Check
     if (
-      this.selfHarmPatterns.en.test(text) ||
-      this.selfHarmPatterns.hi.test(text) ||
-      this.selfHarmPatterns.hiLatn.test(text)
+      this.selfHarmPatterns.en.test(normalizedText) ||
+      this.selfHarmPatterns.hi.test(normalizedText) ||
+      this.selfHarmPatterns.hiLatn.test(normalizedText)
     ) {
       let patientSafeMessage =
         'If you are having thoughts of self-harm or suicide, please reach out for help immediately. Contact a mental health professional or call a support hotline.';
@@ -159,9 +173,9 @@ export class DevelopmentSafetyGate implements ISafetyGate {
 
     // 4. MEDICATION Rule Check
     if (
-      this.medicationPatterns.en.test(text) ||
-      this.medicationPatterns.hi.test(text) ||
-      this.medicationPatterns.hiLatn.test(text)
+      this.medicationPatterns.en.test(normalizedText) ||
+      this.medicationPatterns.hi.test(normalizedText) ||
+      this.medicationPatterns.hiLatn.test(normalizedText)
     ) {
       let patientSafeMessage =
         'Unsafe medication request detected. We cannot advise on modifying dosage, stopping, or starting high-risk medications without direct clinician consultation.';

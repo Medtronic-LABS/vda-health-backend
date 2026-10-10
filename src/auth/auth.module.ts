@@ -7,6 +7,8 @@ import { TenantsModule } from '../tenants/tenants.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { MobileUser } from '../database/entities/mobile-user.entity';
+import { MobileRefreshSession } from '../database/entities/mobile-refresh-session.entity';
+import { MobileRefreshSessionService } from './mobile-refresh-session.service';
 import { Tenant } from '../database/entities/tenant.entity';
 import { MobileAuthController } from './mobile-auth.controller';
 import { MobileAuthService } from './mobile-auth.service';
@@ -22,7 +24,7 @@ import { WorkerRoleGuard } from './worker-role.guard';
     TenantsModule,
     ConfigurationModule,
     RedisModule,
-    TypeOrmModule.forFeature([MobileUser, Tenant]),
+    TypeOrmModule.forFeature([MobileUser, Tenant, MobileRefreshSession]),
     JwtModule.registerAsync({
       imports: [ConfigurationModule],
       inject: [ConfigurationService],
@@ -38,6 +40,7 @@ import { WorkerRoleGuard } from './worker-role.guard';
     AuthGuard,
     MobileAuthService,
     MobileAuthTokenService,
+    MobileRefreshSessionService,
     TenantRateLimiterGuard,
     WorkerRoleGuard,
   ],

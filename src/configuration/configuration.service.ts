@@ -44,6 +44,14 @@ export class ConfigurationService {
     return this.configService.get<string>('DB_DATABASE')!;
   }
 
+  get dbPoolSize(): number {
+    return this.configService.get<number>('DB_POOL_SIZE', 10);
+  }
+
+  get dbConnectionTimeoutMs(): number {
+    return this.configService.get<number>('DB_CONNECTION_TIMEOUT_MS', 5000);
+  }
+
   get redisHost(): string {
     return this.configService.get<string>('REDIS_HOST')!;
   }
@@ -319,7 +327,7 @@ export class ConfigurationService {
   }
 
   get mobileAuthTokenTtlSeconds(): number {
-    return Number(this.configService.get<number>('MOBILE_AUTH_TOKEN_TTL_SECONDS')) || 43200;
+    return Number(this.configService.get<number>('MOBILE_AUTH_TOKEN_TTL_SECONDS')) || 900;
   }
 
   get mobileAuthTenantId(): string {

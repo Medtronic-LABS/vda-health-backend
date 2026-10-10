@@ -4,17 +4,18 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigurationService } from '../configuration/configuration.service';
 import { MobileUser } from '../database/entities/mobile-user.entity';
+import { MobileRefreshSession } from '../database/entities/mobile-refresh-session.entity';
 import { HostIdentity } from './host-identity.context';
 
-interface MobileTokenPayload { sub: string; typ: 'mobile'; tenant: string }
+interface MobileTokenPayload { sub: string; typ: 'mobile'; tenant: string; sid?: string }
 
 @Injectable()
 export class MobileAuthTokenService {
-  constructor(private readonly jwt: JwtService, private readonly config: ConfigurationService, @InjectRepository(MobileUser) private readonly users: Repository<MobileUser>) {}
-  issue(user: MobileUser) {
+  constructor(private readonly jwt: JwtService, private readonly config: ConfigurationService, @InjectRepository(MobileUser) private readonly users: Repository<MobileUser>, @InjectRepository(MobileRefreshSession) private readonly sessions: Repository<MobileRefreshSession>) {}
+  issue(user: MobileUser, sessionId?: string) {
     const expiresInSeconds = this.config.mobileAuthTokenTtlSeconds;
     return {
-      token: this.jwt.sign({ sub: user.id, typ: 'mobile', tenant: user.tenantId }, { expiresIn: expiresInSeconds }),
+      token: this.jwt.sign({ sub: user.id, typ: 'mobile', tenant: user.tenantId, ...(sessionId ? { sid: sessionId } : {}) }, { expiresIn: expiresInSeconds }),
       expiresAt: new Date(Date.now() + expiresInSeconds * 1000).toISOString(),
       expiresInSeconds,
     };
@@ -27,6 +28,10 @@ export class MobileAuthTokenService {
     if (payload.typ !== 'mobile' || !payload.sub || !payload.tenant) throw new UnauthorizedException('Invalid access token.');
     const user = await this.users.findOne({ where: { id: payload.sub, tenantId: payload.tenant, isActive: true } });
     if (!user) throw new UnauthorizedException('Mobile user is inactive or unavailable.');
+    if (payload.sid) {
+      const session = await this.sessions.findOne({ where: { id: payload.sid, userId: user.id, tenantId: user.tenantId } });
+      if (!session || session.revokedAt || session.expiresAt.getTime() <= Date.now()) throw new UnauthorizedException('Mobile session is revoked or expired.');
+    }
     return {
       partnerId: 'vda-android-pilot', tenantId: user.tenantId,
       externalId: `mobile-user:${user.id}`, subjectAbhaRef: `mobile-user:${user.id}`,

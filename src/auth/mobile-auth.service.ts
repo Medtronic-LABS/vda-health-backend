@@ -9,12 +9,13 @@ import { MobileLoginDto } from './dto/mobile-login.dto';
 import { MobileSignupDto } from './dto/mobile-signup.dto';
 import { UpdateMobileProfileDto } from './dto/update-mobile-profile.dto';
 import { MobileAuthTokenService } from './mobile-auth-token.service';
+import { MobileRefreshSessionService } from './mobile-refresh-session.service';
 
 @Injectable()
 export class MobileAuthService {
   private static readonly MAX_FAILED_LOGINS = 5;
   private static readonly LOCKOUT_MS = 15 * 60 * 1000;
-  constructor(@InjectRepository(MobileUser) private readonly users: Repository<MobileUser>, @InjectRepository(Tenant) private readonly tenants: Repository<Tenant>, private readonly tokens: MobileAuthTokenService, private readonly config: ConfigurationService) {}
+  constructor(@InjectRepository(MobileUser) private readonly users: Repository<MobileUser>, @InjectRepository(Tenant) private readonly tenants: Repository<Tenant>, private readonly tokens: MobileAuthTokenService, private readonly config: ConfigurationService, private readonly refreshSessions: MobileRefreshSessionService) {}
 
   async signup(dto: MobileSignupDto) {
     const phone = this.normalizePhone(dto.phone);
@@ -77,9 +78,15 @@ export class MobileAuthService {
     if (!user) throw new UnauthorizedException('Mobile user is inactive or unavailable.');
     return user;
   }
-  private authResponse(user: MobileUser) {
-    const issued = this.tokens.issue(user);
-    return { token: issued.token, tokenType: 'Bearer', expiresAt: issued.expiresAt, expiresInSeconds: issued.expiresInSeconds, user: this.safeProfile(user) };
+  async refresh(rawToken: string, nextToken: string) {
+    const rotated = await this.refreshSessions.rotate(rawToken, nextToken);
+    return this.authResponse(rotated.user, { sessionId: rotated.sessionId, refreshToken: rotated.refreshToken, refreshExpiresAt: rotated.refreshExpiresAt });
+  }
+  async logout(rawToken: string): Promise<void> { await this.refreshSessions.revoke(rawToken); }
+  private async authResponse(user: MobileUser, existingRefresh?: { sessionId: string; refreshToken: string; refreshExpiresAt: string }) {
+    const refresh = existingRefresh || await this.refreshSessions.issue(user);
+    const issued = this.tokens.issue(user, refresh.sessionId);
+    return { token: issued.token, tokenType: 'Bearer', expiresAt: issued.expiresAt, expiresInSeconds: issued.expiresInSeconds, refreshToken: refresh.refreshToken, refreshExpiresAt: refresh.refreshExpiresAt, user: this.safeProfile(user) };
   }
   private safeProfile(user: MobileUser) {
     return { id: user.id, fullName: user.fullName, phone: user.phone, age: user.age, gender: user.gender, state: user.state, district: user.district, language: user.preferredLanguage, preferredLanguage: user.preferredLanguage, ...(user.abhaNumber ? { abhaNumber: user.abhaNumber } : {}), createdAt: user.createdAt, updatedAt: user.updatedAt };

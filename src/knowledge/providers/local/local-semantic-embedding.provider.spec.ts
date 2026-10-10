@@ -33,6 +33,24 @@ describe('LocalSemanticEmbeddingProvider worker failures', () => {
     await new Promise((resolve) => setImmediate(resolve));
     worker().emit('exit', 1);
     await expect(pending).rejects.toThrow('Local ONNX embedding worker exited with code 1');
+    await provider.onApplicationShutdown();
+  });
+
+  it('restarts after a post-startup exit and serves a later request', async () => {
+    jest.useFakeTimers();
+    try {
+      const provider = new LocalSemanticEmbeddingProvider();
+      await Promise.resolve();
+      worker().emit('exit', 1);
+      await jest.advanceTimersByTimeAsync(1000);
+      const next = provider.generateEmbedding('MRI');
+      await Promise.resolve();
+      worker().emit('message', { id: 1, embeddings: [Array(384).fill(0.1)] });
+      await expect(next).resolves.toHaveLength(384);
+      await provider.onApplicationShutdown();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('propagates a native model-load error instead of fabricating a vector', async () => {

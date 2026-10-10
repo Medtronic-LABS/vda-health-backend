@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
@@ -140,6 +141,7 @@ export class TurnsService {
         if (existingTurn) {
           // If already completed or processing, return it.
           // The caller will handle checking status.
+          (existingTurn as ConversationTurn & { alreadyRegistered?: boolean }).alreadyRegistered = true;
           return existingTurn;
         }
       }
@@ -342,6 +344,11 @@ export class TurnsService {
     });
     if (!session) {
       throw new NotFoundException('SESSION_NOT_FOUND');
+    }
+
+    if ((turn as ConversationTurn & { alreadyRegistered?: boolean }).alreadyRegistered &&
+        turn.status !== 'COMPLETED' && turn.status !== 'WITHHELD') {
+      throw new ConflictException(turn.status === 'PROCESSING' ? 'TURN_IN_PROGRESS' : 'TURN_NOT_REPLAYABLE');
     }
 
     // 5. If it was already completed (idempotency DB hit), parse and return it immediately

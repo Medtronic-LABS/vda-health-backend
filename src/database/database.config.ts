@@ -25,6 +25,7 @@ import { RagEvaluationTrace } from './entities/rag-evaluation-trace.entity';
 import { ClinicalEscalation } from './entities/clinical-escalation.entity';
 import { ClinicalFollowUpAttendance } from './entities/clinical-follow-up-attendance.entity';
 import { MobileUser } from './entities/mobile-user.entity';
+import { MobileRefreshSession } from './entities/mobile-refresh-session.entity';
 
 @Injectable()
 export class DatabaseConfigService implements TypeOrmOptionsFactory {
@@ -64,11 +65,13 @@ export class DatabaseConfigService implements TypeOrmOptionsFactory {
         ClinicalEscalation,
         ClinicalFollowUpAttendance,
         MobileUser,
+        MobileRefreshSession,
       ],
       synchronize: false,
       migrationsRun: false,
       logging: !isProd,
-      poolSize: 10,
+      poolSize: this.configService.dbPoolSize,
+      extra: { connectionTimeoutMillis: this.configService.dbConnectionTimeoutMs },
       ssl:
         process.env.DATABASE_SSL === 'true'
           ? { rejectUnauthorized: false }
