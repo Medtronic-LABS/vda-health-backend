@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException, Optional, ServiceUnavailableException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomUUID } from 'crypto';
 import { DataSource, Repository } from 'typeorm';
@@ -8,6 +8,7 @@ import { HostIdentity } from '../auth/host-identity.context';
 import { Prescription, PrescriptionVerificationStatus } from '../database/entities/prescription.entity';
 import { MultiFormatParserService } from '../knowledge/ingestion/multi-format-parser.service';
 import { PrescriptionDecisionDto, VerifyPrescriptionDto } from './dto/verify-prescription.dto';
+import { PushNotificationsService } from '../notifications/push-notifications.service';
 
 @Injectable()
 export class PrescriptionService {
@@ -18,6 +19,7 @@ export class PrescriptionService {
     private readonly audit: AuditService,
     private readonly parser: MultiFormatParserService,
     @Inject('IAiProvider') private readonly aiProvider: IAiProvider,
+    @Optional() private readonly push?: PushNotificationsService,
   ) {}
 
   async upload(tenantId: string, patientRef: string, sessionId: string | null, file: { buffer: Buffer; filename: string; mimeType?: string }) {
@@ -115,12 +117,15 @@ export class PrescriptionService {
       record.verifiedAt = new Date();
       record.verificationNote = dto.note?.trim() || null;
       record.patientReviewReason = null;
-      return { saved: await repo.save(record), previous, previousVerificationStatus };
+      const saved = await repo.save(record);
+      await this.push?.enqueuePrescriptionDecision(manager, saved);
+      return { saved, previous, previousVerificationStatus };
     });
     if (result.previous && result.previous.id !== result.saved.id) await this.auditAction(result.previous, identity, correlationId, 'prescription_superseded', { previousVerificationStatus: 'VERIFIED', resultingVerificationStatus: 'SUPERSEDED' });
     const changedFields = this.changedFields(result.saved);
     if (changedFields.length) await this.auditAction(result.saved, identity, correlationId, 'prescription_corrected', { changedFields, previousVerificationStatus: result.previousVerificationStatus, resultingVerificationStatus: 'VERIFIED' });
     await this.auditAction(result.saved, identity, correlationId, 'prescription_verified', { changedFields, previousVerificationStatus: result.previousVerificationStatus, resultingVerificationStatus: 'VERIFIED' });
+    this.push?.wake();
     return this.patientView(result.saved);
   }
 
@@ -139,9 +144,12 @@ export class PrescriptionService {
       current.verifiedAt = new Date();
       current.verificationNote = dto.note?.trim() || null;
       current.patientReviewReason = dto.reason.trim();
-      return { saved: await repo.save(current), previousVerificationStatus };
+      const saved = await repo.save(current);
+      await this.push?.enqueuePrescriptionDecision(manager, saved);
+      return { saved, previousVerificationStatus };
     });
     await this.auditAction(record.saved, identity, correlationId, clearerImage ? 'prescription_resubmission_requested' : 'prescription_rejected', { reasonRecorded: true, previousVerificationStatus: record.previousVerificationStatus, resultingVerificationStatus: record.saved.verificationStatus });
+    this.push?.wake();
     return this.patientView(record.saved);
   }
 

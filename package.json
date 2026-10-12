@@ -21,6 +21,7 @@
     "typeorm": "npx typeorm-ts-node-commonjs",
     "migration:generate": "npx typeorm-ts-node-commonjs migration:generate -d src/database/data-source.ts",
     "migration:run": "npx typeorm-ts-node-commonjs migration:run -d src/database/data-source.ts",
+    "migration:run:prod": "typeorm migration:run -d dist/database/data-source.js",
     "migration:revert": "npx typeorm-ts-node-commonjs migration:revert -d src/database/data-source.ts",
     "seed:run": "npx ts-node src/database/seed.ts"
   },
@@ -36,6 +37,7 @@
     "bcryptjs": "^3.0.3",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
+    "firebase-admin": "^13.10.0",
     "ioredis": "^5.11.1",
     "langsmith": "^0.10.1",
     "mammoth": "^1.12.1",

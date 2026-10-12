@@ -73,6 +73,10 @@ export class KnowledgeRetrievalService implements IKnowledgeRetrievalService {
       (pattern): pattern is string => Boolean(pattern),
     )));
     if (!patterns.length) return [];
+    const rankServiceTable = terms.some((term) => /^(?:x[\s-]*ray|radiography|mri|magnetic resonance imaging)$/i.test(term.trim()));
+    const orderBy = rankServiceTable
+      ? `CASE WHEN c.content ~* 'Diagnostic Services' THEN 0 ELSE 1 END, "cosineDistance" ASC`
+      : `"cosineDistance" ASC`;
 
     try {
       const embedding = await this.localEmbeddingProvider.generateEmbedding(terms.join(' '));
@@ -99,7 +103,7 @@ export class KnowledgeRetrievalService implements IKnowledgeRetrievalService {
            AND d.source ILIKE '%Indian Public Health Standards%'
            AND c.content ~* ANY($2::text[])
            ${stateFilter}
-         ORDER BY "cosineDistance" ASC
+         ORDER BY ${orderBy}
          LIMIT $${parameters.length}`,
         parameters,
       );

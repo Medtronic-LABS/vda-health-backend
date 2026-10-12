@@ -50,4 +50,11 @@ describe('IntentClassifierService facility service normalization', () => {
       ]);
     },
   );
+
+  it.each(['Hospital for xray scan', 'X-ray scan', 'X ray', 'एक्स रे कहाँ होगा?', 'radiography near me'])(
+    'normalizes %s into X-ray service lookup', async (text) => {
+      const intent = await classifyWithoutService(text);
+      expect(intent.requirements?.service).toBe('X-ray');
+    },
+  );
 });

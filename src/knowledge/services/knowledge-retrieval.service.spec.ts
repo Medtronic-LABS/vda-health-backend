@@ -50,6 +50,7 @@ describe('bounded IPHS service lexical retrieval', () => {
     expect(sql).toContain("d.title ILIKE 'IPHS 2022%'");
     expect(sql).toContain("d.source ILIKE '%Indian Public Health Standards%'");
     expect(sql).toContain('c.content ~* ANY($2::text[])');
+    expect(sql).toContain("ORDER BY CASE WHEN c.content ~* 'Diagnostic Services' THEN 0 ELSE 1 END");
     expect(parameters[0]).toBe('tenant-one');
     expect(parameters[1]).toEqual([iphsServiceTermPattern('MRI')]);
     expect(parameters).toContain('Haryana');

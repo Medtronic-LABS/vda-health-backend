@@ -1,4 +1,5 @@
 import { Prescription } from '../database/entities/prescription.entity';
+import { PushNotificationsService } from '../notifications/push-notifications.service';
 import { PrescriptionService } from './prescription.service';
 
 const record = (overrides: Partial<Prescription>): Prescription => ({
@@ -35,7 +36,7 @@ const record = (overrides: Partial<Prescription>): Prescription => ({
 });
 
 describe('PrescriptionService patient decision guidance', () => {
-  const build = (records: Prescription[]) => {
+  const build = (records: Prescription[], pushOverride?: PushNotificationsService) => {
     const repository = {
       findOne: jest.fn(async ({ where }: any) => {
         const matches = records.filter((item) => Object.entries(where).every(([key, value]) => (item as any)[key] === value));
@@ -58,9 +59,41 @@ describe('PrescriptionService patient decision guidance', () => {
     });
     const dataSource = { transaction: jest.fn(async (work: (manager: any) => unknown) => work({ getRepository: () => transactionRepository })) };
     const audit = { logEvent: jest.fn(async () => undefined) };
-    const service = new PrescriptionService(repository as any, dataSource as any, audit as any, {} as any, {} as any);
-    return { service, audit };
+    const push = { enqueuePrescriptionDecision: jest.fn(async () => undefined), wake: jest.fn() };
+    const service = new PrescriptionService(repository as any, dataSource as any, audit as any, {} as any, {} as any, (pushOverride || push) as any);
+    return { service, audit, push, dataSource };
   };
+
+  it.each(['VERIFIED', 'REJECTED', 'NEEDS_RESUBMISSION'] as const)('persists %s without Firebase or push-table access', async (status) => {
+    const pending = record({ id: `no-fcm-${status}` });
+    const devices = { upsert: jest.fn(() => { throw new Error('push table accessed'); }), update: jest.fn(() => { throw new Error('push table accessed'); }) };
+    const push = new PushNotificationsService(devices as any, {} as any, {} as any, {} as any);
+    const { service, dataSource } = build([pending], push);
+    const worker = { tenantId: 'tenant-a', externalId: 'worker-1', workerRole: 'CHO' } as any;
+    const result = status === 'VERIFIED'
+      ? await service.verify('tenant-a', pending.id, { medications: [{ medicationName: 'Verified medicine' }], investigations: [] } as any, worker, 'correlation-id')
+      : await service.reject('tenant-a', pending.id, { reason: 'Please check the app.' }, worker, 'correlation-id', status === 'NEEDS_RESUBMISSION');
+    expect(result.verificationStatus).toBe(status);
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(devices.upsert).not.toHaveBeenCalled();
+    expect(devices.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['REJECTED', false],
+    ['NEEDS_RESUBMISSION', true],
+  ] as const)('queues a %s push only inside a saved decision transaction', async (status, clearerImage) => {
+    const pending = record({ id: `pending-${status}` });
+    const { service, push, dataSource } = build([pending]);
+    await service.reject('tenant-a', pending.id, { reason: 'Please review in the app.' },
+      { tenantId: 'tenant-a', externalId: 'worker-1', workerRole: 'CHO' } as any, 'correlation-id', clearerImage);
+    expect(pending.verificationStatus).toBe(status);
+    expect(push.enqueuePrescriptionDecision).toHaveBeenCalledWith(
+      expect.anything(), expect.objectContaining({ id: pending.id, tenantId: 'tenant-a', patientRef: pending.patientRef, verificationStatus: status }),
+    );
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(push.wake).toHaveBeenCalledTimes(1);
+  });
 
   it('returns only the latest current-patient safe reason and never the internal note', async () => {
     const records = [

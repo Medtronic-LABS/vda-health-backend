@@ -80,7 +80,7 @@ export class IntentClassifierService implements IIntentClassifier {
         if (!requirements) requirements = {};
         if (!requirements.service) {
           const lower = text.toLowerCase();
-          if (/x-?ray|x\s*ray|radiology/i.test(lower)) requirements.service = 'X-ray';
+          if (/x[\s-]*ray|radiograph|एक्स[\s-]*रे/i.test(lower)) requirements.service = 'X-ray';
           else if (/ultrasound|usg|sonography/i.test(lower)) requirements.service = 'Ultrasound';
           else if (/\b(?:e\.?c\.?g\.?|electrocardiogram|electrocardiography)\b|ई\s*सी\s*जी/i.test(lower)) {
             requirements.service = 'ECG';
@@ -91,6 +91,7 @@ export class IntentClassifierService implements IIntentClassifier {
           else if (/blood glucose|blood sugar|sugar test/i.test(lower)) requirements.service = 'Blood glucose';
           else if (/blood test|blood/i.test(lower)) requirements.service = 'Blood test';
         }
+        if (/x[\s-]*ray|radiograph|एक्स[\s-]*रे/i.test(text)) requirements.service = 'X-ray';
         if (
           !requirements.costPreference &&
           /\b(?:low\s*cost|affordable|free|cheap|less\s*(?:money|cost|expense)|kam\s*(?:paise|paiso|kharch)|sasta)\b|कम\s*(?:पैसे|पैसो|खर्च)|सस्ता|कम\s*खर्च/i.test(

@@ -22,6 +22,7 @@ import { ClinicalAiContextBuilder } from '../context/clinical-ai-context.builder
 import { ISafetyGate } from '../../safety/interfaces/safety-gate.interface';
 import { AuditService } from '../../audit/audit.service';
 import { ClinicalContext } from '../../abdm/models/clinical-context.models';
+import { HealthRecordCategory } from '../../abdm/interfaces/health-record-service.interface';
 import { ConversationHistoryService } from '../../conversations/services/conversation-history.service';
 import { ConversationResponseFormatter } from '../../conversations/formatters/conversation-response.formatter';
 import {
@@ -85,6 +86,16 @@ const IPHS_SERVICE_SEARCH_TERMS: Array<{
   evidenceTerms: string[];
 }> = [
   {
+    service: /^X-ray$/i,
+    query: 'IPHS 2022 X-ray radiography diagnostic facility',
+    evidenceTerms: ['X-ray', 'X ray', 'Xray', 'radiography'],
+  },
+  {
+    service: /^MRI$/i,
+    query: 'IPHS 2022 Magnetic Resonance Imaging MRI diagnostic facility',
+    evidenceTerms: ['Magnetic Resonance Imaging', 'MRI'],
+  },
+  {
     service: /^ecg$/i,
     query: 'Electrocardiography ECG',
     evidenceTerms: ['Electrocardiography', 'ECG'],
@@ -117,6 +128,7 @@ interface FacilityServiceContext {
 
 type PrescriptionContextResolution =
   | { kind: 'MEDICINE_LIST' }
+  | { kind: 'PRESCRIPTION_STATUS' }
   | { kind: 'MEDICINE_FACT'; medicine: SanitizedPrescriptionMedicine }
   | { kind: 'REMINDER_FACT'; medicine?: SanitizedPrescriptionMedicine }
   | { kind: 'CLINICAL_MEDICATION_DECISION' }
@@ -238,7 +250,15 @@ export class AiOrchestratorService implements IAiOrchestrator {
       return { kind: 'CLINICAL_MEDICATION_DECISION' };
     }
 
-    if (!context || (!context.medicines.length && !context.investigations.length)) return null;
+    const statusQuestion = /(?:\b(?:prescription|parchi)\b|पर्ची).{0,40}(?:\b(?:status|verify|verified|verification|approved|reviewed|check|pending)\b|स्थिति|जाँच|जांच|सत्यापित|मंजूर|मंज़ूर)|(?:\b(?:status|verification)\b|स्थिति).{0,35}(?:\b(?:prescription|parchi)\b|पर्ची)|^(?:my\s+prescription|meri\s+parchi|मेरी\s+पर्ची)[?.!]*$/i.test(input.trim());
+    if (statusQuestion) return { kind: 'PRESCRIPTION_STATUS' };
+    const genericMedicine = /(?:\b(?:my|meri|mera|mere|show|list|batao|dikhao)\b.{0,35}\b(?:medicine|medicines|medication|medications|dawa|dawai|dawain|dawaiyan)\b|\b(?:medicine|medicines|medication|medications|dawa|dawai|dawain|dawaiyan)\b.{0,30}\b(?:schedule|routine|timing|time|kab|list|show|batao|dikhao)\b|मेरी?\s*दवा(?:इ|ई)?(?:यां|याँ|यों|ओं|एं|एँ)?|दवा(?:इ|ई)?(?:यां|याँ|यों|ओं|एं|एँ)?.{0,20}(?:समय|कब|दिखा|बताओ))/i.test(input);
+    const genericTiming = /(?:\b(?:schedule|routine|timing|time|kab)\b|समय|कब)/i.test(input);
+    const genericList = genericMedicine || /^(?:my\s+)?(?:medicine|medicines|medication|medications|dawa|dawai|दवा|दवाई)(?:\s+(?:please|बताओ|दिखाओ))?\s*[?.!]*$/i.test(input.trim());
+    if (!context || (!context.medicines.length && !context.investigations.length)) {
+      if (genericList) return { kind: genericTiming ? 'REMINDER_FACT' : 'MEDICINE_LIST' };
+      return null;
+    }
     const mentions = <T extends { name: string }>(items: T[]): T | undefined =>
       items.find((item) => normalized.includes(this.normalizePrescriptionReference(item.name)));
     const refers = /(?:\b(?:ye|yeh|this|it|iski|iska|iske)\b|इसे|इसकी|इसका|इसके|ये|यह)/i.test(input);
@@ -253,7 +273,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
     const isReminder = /(?:reminder|रिमाइंडर)/i.test(input);
     const asksTiming = /(?:\b(?:kab|when)\b|कब\s*(?:लेना|लूं|लूँ|लें|है|होगा)|कितने बजे|timing|time|समय)/i.test(input);
     const asksMedicineSpecificDoseSafety = Boolean(medicine && (asksDoseAction || asksTreatmentChange));
-    const asksList = /(?:कौन\s*सी\s*दवा|कौनसी\s*दवाई|meri\s*(?:kaunsi|konsi)\s*(?:dawai|medicine)|my\s*medicines|medicines?\s*(?:are|in))/i.test(input);
+    const asksList = genericList || /(?:कौन\s*सी\s*दवा|कौनसी\s*दवाई|meri\s*(?:kaunsi|konsi)\s*(?:dawai|medicine)|my\s*medicines|medicines?\s*(?:are|in))/i.test(input);
     const asksTestList = /(?:कौन\s*सा\s*(?:test|टेस्ट|जांच)|kaunsa\s*(?:test|investigation)|which\s*(?:test|investigation)|prescription.*(?:test|जांच)|(?:test|जांच).*(?:prescription|पर्ची))/i.test(input);
     const asksGeneralUse = /(?:किस\s*(?:लिए|काम)|kis\s*(?:liye|liye)|क्या\s*(?:करती|करता|है)|kya\s*(?:karti|karta)|what\s*(?:does|is)|why\s*(?:is|was)|use\s*(?:करते|करती|hoti|hota|hai)|काम\s*(?:की|का|है)|side\s*effects?|नुकसान)/i.test(input);
     const asksBpMedicine = /(?:\b(?:bp|blood\s*pressure)\b|बीपी|ब्लड प्रेशर).*(?:दवा|दवाई|medicine)|(?:दवा|दवाई|medicine).*(?:\b(?:bp|blood\s*pressure)\b|बीपी|ब्लड प्रेशर)/i.test(input);
@@ -261,7 +281,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
     if ((asksMedicineSpecificDoseSafety || asksTreatmentChange) && medicine) {
       return { kind: 'CLINICAL_MEDICATION_DECISION' };
     }
-    if (isReminder) return { kind: 'REMINDER_FACT', medicine };
+    if (isReminder || (genericList && genericTiming)) return { kind: 'REMINDER_FACT', medicine };
     if (asksTiming && !medicine && context.medicines.length > 0) return { kind: 'REMINDER_FACT' };
     if (asksTestList) return { kind: 'INVESTIGATION_LIST' };
     if (investigation && asksGeneralUse) {
@@ -341,6 +361,8 @@ export class AiOrchestratorService implements IAiOrchestrator {
     const bullets = reminders.map((item) => `${item.medicineName}: ${item.reminderTimes.map((time) => this.patientReminderTime(time, hindi)).join(', ')}`);
     const summary = bullets.length
       ? (hindi ? 'आपके सेव किए हुए रिमाइंडर:' : 'Your saved reminders:')
+      : context.remindersUnavailable
+        ? (hindi ? 'दवाइयाँ सत्यापित हैं, लेकिन इस समय फोन पर सेव रिमाइंडर का समय यहाँ नहीं दिख रहा। दवाइयाँ टैब खोलें।' : 'Your medicines are verified, but saved reminder times are unavailable here right now. Open Medicines to sync them.')
       : resolution.medicine
         ? (hindi ? 'इस दवा की जानकारी सत्यापित है, लेकिन इसके लिए अभी कोई रिमाइंडर समय नहीं चुना गया है।' : 'This medicine is verified, but no reminder time has been selected for it yet.')
         : (hindi ? 'आपकी दवाइयों की जानकारी सत्यापित है, लेकिन आपने अभी रिमाइंडर का समय नहीं चुना है।' : 'Your medicines are verified, but you have not selected reminder times yet.');
@@ -424,25 +446,6 @@ export class AiOrchestratorService implements IAiOrchestrator {
     let state = current.state;
     let district = current.district;
 
-    if ((!state || !district) && this.conversationTurns) {
-      const history = await this.conversationTurns.find({
-        where: { sessionId, conversationRetentionGranted: true },
-        order: { createdAt: 'DESC' },
-        take: 5,
-      });
-      for (const turn of history) {
-        if (!turn.inputText) continue;
-        const prior = this.knowledgeQueryNormalizer?.normalize(
-          turn.inputText,
-          language,
-          IntentType.FACILITY_QUERY,
-        );
-        if (!state && prior?.state) state = prior.state;
-        if (!district && prior?.district) district = prior.district;
-        if (state && district) break;
-      }
-    }
-
     if ((!state || !district) && this.sessions && this.patientData) {
       const session = await this.sessions.findOne({ where: { id: sessionId } });
       if (session) {
@@ -454,6 +457,22 @@ export class AiOrchestratorService implements IAiOrchestrator {
           if (!state && patient.state) state = patient.state;
           if (!district && patient.district) district = patient.district;
         }
+      }
+    }
+
+    // An old conversation location must not override the updated profile.
+    if ((!state || !district) && this.conversationTurns) {
+      const history = await this.conversationTurns.find({
+        where: { sessionId, conversationRetentionGranted: true },
+        order: { createdAt: 'DESC' },
+        take: 5,
+      });
+      for (const turn of history) {
+        if (!turn.inputText) continue;
+        const prior = this.knowledgeQueryNormalizer?.normalize(turn.inputText, language, IntentType.FACILITY_QUERY);
+        if (!state && prior?.state) state = prior.state;
+        if (!district && prior?.district) district = prior.district;
+        if (state && district) break;
       }
     }
 
@@ -647,14 +666,14 @@ export class AiOrchestratorService implements IAiOrchestrator {
             ? `${serviceContext.requestedService} के लिए IPHS guidelines के अनुसार उपयुक्त facility level की कोई सुविधा ${scope || 'इस क्षेत्र'} में नहीं मिली।`
             : hasResolvedFacilityLevel
               ? `${serviceContext.requestedService} के लिए selected facility level की कोई सुविधा ${scope || 'इस क्षेत्र'} में नहीं मिली।`
-            : `${serviceContext.requestedService} के लिए उपयुक्त facility level source information से establish नहीं हो सका, इसलिए कोई facility recommendation नहीं दी जा सकती।`
+            : `${scope || 'इस क्षेत्र'} में ${serviceContext.requestedService} की सेवा की पुष्टि नहीं हो सकी। जाने से पहले नज़दीकी अस्पताल से उपलब्धता पूछें।`
           : serviceContext.iphsEvidenceStatus === 'UNAVAILABLE'
             ? 'The IPHS source could not be checked right now, so I cannot recommend a suitable facility. Please try again shortly.'
             : hasIphsSuitableCandidates
             ? `No facility at an IPHS-suitable level for ${serviceContext.requestedService} was found in ${scope || 'this area'}.`
             : hasResolvedFacilityLevel
               ? `No facility at the selected level for ${serviceContext.requestedService} was found in ${scope || 'this area'}.`
-            : `An appropriate facility level for ${serviceContext.requestedService} could not be established from the available source information, so no facility recommendation can be made.`
+            : `I could not confirm ${serviceContext.requestedService} service in ${scope || 'this area'}. Please check availability with a nearby hospital before travelling.`
       : results.length
         ? language === 'hi'
           ? `${scope || 'इस क्षेत्र'} में उपलब्ध अस्पताल नीचे दिए गए हैं। सूचीबद्ध योजना के लिए पात्रता अलग से जांचनी होगी।`
@@ -902,7 +921,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
             return pattern ? new RegExp(pattern, 'i').test(chunk.content) : false;
           }),
       )
-      .slice(0, evidenceTerms.length ? 3 : result.matchedChunks.length);
+      .slice(0, evidenceTerms.length ? 8 : result.matchedChunks.length);
     return {
       ...result,
       matchedChunks,
@@ -967,16 +986,17 @@ export class AiOrchestratorService implements IAiOrchestrator {
         return { levels: [], sources: [], evidenceStatus: 'UNAVAILABLE' };
       }
       const semanticEvidence = this.iphs2022Evidence(semantic, evidenceTerms);
-      const lexical = semanticEvidence.matchedChunks.length < 3
+      const ensureServiceTable = /^(?:X-ray|MRI)$/i.test(service.trim());
+      const lexical = ensureServiceTable || semanticEvidence.matchedChunks.length < 3
         ? await this.knowledgeRetrievalService.retrieveIphsServiceChunks?.(
             evidenceTerms,
             tenantId,
             state,
-            3,
+            ensureServiceTable ? 6 : 3,
           ) || []
         : [];
       const seen = new Set<string>();
-      const matchedChunks = [...semanticEvidence.matchedChunks, ...lexical].filter(
+      const matchedChunks = [...lexical, ...semanticEvidence.matchedChunks].filter(
         (chunk) => !seen.has(chunk.chunkId) && Boolean(seen.add(chunk.chunkId)),
       );
       const retrieved = this.iphs2022Evidence(
@@ -997,6 +1017,24 @@ export class AiOrchestratorService implements IAiOrchestrator {
       );
       if (!retrieved.matchedChunks.length) {
         return { levels: [], sources: [], evidenceStatus: 'NOT_VERIFIED' };
+      }
+
+      // The CHC IPHS 2022 diagnostic-services table explicitly marks digital
+      // X-ray essential. This exact, tenant-scoped source is stronger than
+      // incidental X-ray equipment mentions and does not assert availability
+      // at any named facility.
+      const xrayChcTable = /^X-ray$/i.test(service.trim())
+        ? retrieved.matchedChunks.find((chunk) =>
+            /IPHS 2022.*CHC/i.test(chunk.title) &&
+            /Diagnostic Services[\s\S]{0,800}Digital\s*x[\s-]*ray\s+E\b/i.test(chunk.content),
+          )
+        : undefined;
+      if (xrayChcTable) {
+        return {
+          levels: ['CHC'],
+          sources: retrieved.sources.filter((source) => source.title === xrayChcTable.title),
+          evidenceStatus: 'VERIFIED',
+        };
       }
 
       const generated = await this.aiProvider.generate(
@@ -1194,7 +1232,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
       return { isMismatch: false };
     }
 
-    const trimmedInput = inputText.trim();
+    const trimmedInput = inputText.normalize('NFKC').replace(/[’‘]/g, "'").replace(/\s+/g, ' ').trim();
     if (!trimmedInput) {
       return { isMismatch: false };
     }
@@ -1213,7 +1251,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
 
     const selfPatterns: RegExp[] = [
       // Hindi / Hinglish: "Main Sunita hoon", "Mai Sunita hu", "Hum Sunita hain"
-      /\b(?:main|mai|hum)\s+([a-zA-Z\u0900-\u097F]+(?:\s+[a-zA-Z\u0900-\u097F]+)?)\s+(?:hoon|hu|hun|hai|hain)\b/i,
+      /\b(?:main|mein|mai|hum)\s+([a-zA-Z\u0900-\u097F]+(?:\s+[a-zA-Z\u0900-\u097F]+)?)\s+(?:hoon|hu|hun|hai|hain)\b/i,
       // Hindi: "Mera naam Sunita hai", "Hamara naam Sunita hai"
       /\b(?:mera|hamara)\s+naam\s+(?:bhi\s+)?([a-zA-Z\u0900-\u097F]+(?:\s+[a-zA-Z\u0900-\u097F]+)?)\s+hai\b/i,
       // English: "I am Sunita", "I'm Sunita", "Im Sunita"
@@ -1224,8 +1262,20 @@ export class AiOrchestratorService implements IAiOrchestrator {
       /\b(?:switch\s+to|acting\s+as|speaking\s+as)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)/i,
     ];
 
-    let extractedClaim: string | null = null;
+    // A correction names the person after "but" or "नहीं". The earlier
+    // name is the one being denied, often the authenticated profile name.
+    const correctionPatterns = [
+      // "ak" is a common STT substitution for "am"; accept it only in this
+      // explicit "I ... not [name] but [name]" identity correction.
+      /\b(?:i\s*(?:am|ak)|i'm|im)\s+not\s+[a-z]+(?:\s+[a-z]+)?\s+(?:but|rather)\s+([a-z]+(?:\s+[a-z]+)?)(?:\b|$)/i,
+      /\b(?:main|mein|mai|hum)\s+[a-z]+(?:\s+[a-z]+)?\s+(?:nahi|nahin|nhi|nai)\s+([a-z]+(?:\s+[a-z]+)?)\s+(?:hoon|hu|hun|hain)\b/i,
+      /मैं\s+[\u0900-\u097F]+(?:\s+[\u0900-\u097F]+)?\s+नहीं\s+([\u0900-\u097F]+(?:\s+[\u0900-\u097F]+)?)\s+हूँ/u,
+    ];
+    let extractedClaim: string | null = correctionPatterns
+      .map((pattern) => trimmedInput.match(pattern)?.[1]?.trim())
+      .find((claim) => claim && !nonNameWords.has(claim.split(/\s+/)[0].toLowerCase())) || null;
     for (const pattern of selfPatterns) {
+      if (extractedClaim) break;
       const match = trimmedInput.match(pattern);
       if (match && match[1]) {
         const candidate = match[1].trim();
@@ -1306,7 +1356,10 @@ export class AiOrchestratorService implements IAiOrchestrator {
     // Prescription context is stored server-side and contains only the active
     // confirmed prescription's safe fields plus local reminder times. Raw input
     // resolves a minimal subset locally; it is never forwarded to Gemini.
-    const prescriptionContext = await this.prescriptionSessionContext.get(sessionId);
+    let prescriptionContext = await this.prescriptionSessionContext.get(sessionId);
+    if (!prescriptionContext && /\b(?:medicine|medicines|medication|dawa|dawai|prescription)\b|दवा|दवाई|दवाइ|पर्ची/i.test(inputText)) {
+      prescriptionContext = await this.prescriptionSessionContext.currentVerifiedForPatient(sessionId, identity);
+    }
     const prescriptionResponseLanguage = prescriptionContext?.pendingMedicationSafetyLanguage
       || (prescriptionContextRequired
         ? await this.languageProvider.detectLanguage(inputText)
@@ -1323,6 +1376,9 @@ export class AiOrchestratorService implements IAiOrchestrator {
       inputText,
       prescriptionResponseLanguage,
     );
+    const labReportQuestion = /(?:\b(?:sugar|glucose|hba1c)\b|शुगर|ग्लूकोज|एच\s*बी\s*ए\s*वन\s*सी)/i.test(inputText)
+      && /(?:\b(?:report|result|value|reading|explain|understand|mean)\b|रिपोर्ट|जांच|जाँच|समझ|नतीजा|परिणाम|मान)/i.test(inputText)
+      && prescriptionContextResolution?.kind !== 'CLINICAL_MEDICATION_DECISION';
     const isPrescriptionContextTurn = Boolean(prescriptionContextResolution);
     const isPrescriptionContextGenerationTurn = prescriptionContextResolution?.kind === 'MEDICINE_EDUCATION'
       || prescriptionContextResolution?.kind === 'INVESTIGATION_EDUCATION'
@@ -1559,6 +1615,34 @@ export class AiOrchestratorService implements IAiOrchestrator {
       };
     }
 
+    // Identity claims are checked after clinical safety, before any patient
+    // prescription facts or lab records can be returned.
+    const identityCheck = this.detectIdentityMismatch(inputText, authorizedPatientName);
+    if (identityCheck.isMismatch) {
+      this.logger.warn(`[AiOrchestrator] Identity mismatch blocked: session=${sessionId}`);
+      const identityResponseHindi = requestLanguage.startsWith('hi')
+        || /\b(?:main|mein|mai|hum)\b|[\u0900-\u097F]/i.test(inputText);
+      const message = identityResponseHindi
+        ? `अभी ${identityCheck.authorizedName} की प्रोफ़ाइल खुली है। ${identityCheck.claimedName} की जानकारी देखने के लिए उनकी सत्यापित प्रोफ़ाइल में जाएँ।`
+        : `You're currently using ${identityCheck.authorizedName}'s profile. To access ${identityCheck.claimedName}'s health information, please switch to ${identityCheck.claimedName}'s verified profile.`;
+      const content = {
+        summary: message,
+        [requestLanguage]: message,
+        actions: [{ label: identityResponseHindi ? 'प्रोफ़ाइल बदलें' : 'Switch Profile', action: 'SWITCH_PROFILE' }],
+      };
+      if (traceContext && this.tracer) {
+        await this.tracer.endTurn(traceContext, {
+          responseType: 'text', content, intent: IntentType.UNKNOWN,
+          selectedAgent: 'rbac-identity-guard', safetyStatus: 'IDENTITY_ACCESS_RESTRICTED',
+        });
+      }
+      return {
+        responseType: 'text', content, intent: IntentType.UNKNOWN,
+        selectedAgent: 'rbac-identity-guard', safetyStatus: 'IDENTITY_ACCESS_RESTRICTED',
+        latencyMs: Date.now() - startTime,
+      };
+    }
+
     // Prescription-scoped treatment decisions are resolved locally and
     // deflected before intent classification, RAG, ClinicalContext, or answer
     // generation. Raw prescription questions therefore retain the existing
@@ -1586,6 +1670,37 @@ export class AiOrchestratorService implements IAiOrchestrator {
         safetyStatus: 'SAFE',
         latencyMs: Date.now() - startTime,
       };
+    }
+
+    if (prescriptionContextResolution?.kind === 'PRESCRIPTION_STATUS') {
+      const latest = await this.prescriptions?.findOne({
+        where: { tenantId: identity.tenantId, patientRef: authorizedPatientRef },
+        order: { createdAt: 'DESC' },
+      });
+      const hindi = requestLanguage.startsWith('hi');
+      const message = !latest
+        ? (hindi ? 'अभी आपकी कोई पर्ची अपलोड नहीं हुई है।' : 'You have not uploaded a prescription yet.')
+        : latest.verificationStatus === 'VERIFIED'
+          ? (hindi ? 'आपकी पर्ची की जाँच हो गई है। दवाइयाँ टैब में इसे देखें।' : 'Your prescription has been reviewed. Check it in Medicines.')
+          : latest.verificationStatus === 'REJECTED'
+            ? (hindi ? 'आपकी पर्ची मंज़ूर नहीं हुई। दवाइयाँ टैब में कारण देखें।' : 'Your prescription was not approved. Check the reason in Medicines.')
+            : latest.verificationStatus === 'NEEDS_RESUBMISSION'
+              ? (hindi ? 'आपकी पर्ची के लिए साफ़ फोटो चाहिए। दवाइयाँ टैब देखें।' : 'A clearer prescription is needed. Check Medicines.')
+              : (hindi ? 'आपकी पर्ची की जाँच अभी बाकी है।' : 'Your prescription is still awaiting review.');
+      return { responseType: 'text', content: { summary: message, [requestLanguage]: message }, intent: IntentType.PRESCRIPTION_QUERY, selectedAgent: 'prescription-status', safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
+    }
+
+    if (prescriptionContextResolution?.kind === 'MEDICINE_LIST' && !prescriptionContext?.medicines.length) {
+      const message = requestLanguage.startsWith('hi')
+        ? 'अभी आपकी कोई सत्यापित दवा उपलब्ध नहीं है। पर्ची की जाँच बाकी हो तो दवाइयाँ टैब में स्थिति देखें।'
+        : 'No verified medicines are available yet. If your prescription is awaiting review, check its status in Medicines.';
+      return { responseType: 'text', content: { summary: message, [requestLanguage]: message }, intent: IntentType.MEDICATION_QUERY, selectedAgent: 'medication-agent', safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
+    }
+    if (prescriptionContextResolution?.kind === 'REMINDER_FACT' && !prescriptionContext?.medicines.length) {
+      const message = requestLanguage.startsWith('hi')
+        ? 'अभी कोई सत्यापित दवा या रिमाइंडर समय उपलब्ध नहीं है। दवाइयाँ टैब में पर्ची की स्थिति देखें।'
+        : 'No verified medicine or reminder time is available yet. Check the prescription status in Medicines.';
+      return { responseType: 'text', content: { summary: message, [requestLanguage]: message }, intent: IntentType.MEDICATION_QUERY, selectedAgent: 'medication-reminder-service', safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
     }
 
     // Prescription facts and missed-dose clarification are deterministic facts
@@ -1643,7 +1758,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
     // The app marks medicine/test questions as prescription-scoped. If the
     // server context is missing or cannot resolve the reference, fail closed
     // rather than falling through to ClinicalContext or FHIR medications.
-    if (prescriptionContextRequired && !prescriptionContextResolution) {
+    if (prescriptionContextRequired && !prescriptionContextResolution && !labReportQuestion) {
       const message = requestLanguage.startsWith('hi')
         ? (prescriptionContext
           ? 'यह दवा या जांच आपकी अभी सेव की हुई पर्ची में नहीं मिली। कृपया पर्ची में लिखा नाम जांचें।'
@@ -1725,74 +1840,36 @@ export class AiOrchestratorService implements IAiOrchestrator {
       };
     }
 
-    // ─── Step 1.5: Deterministic Patient Identity & RBAC Guard ───────────────
-    const identityCheck = this.detectIdentityMismatch(
-      resolvedInputText,
-      authorizedPatientName,
-    );
-    if (identityCheck.isMismatch) {
-      this.logger.warn(
-        `[AiOrchestrator] RBAC Identity mismatch blocked: session=${sessionId} authorized=${identityCheck.authorizedName} claimed=${identityCheck.claimedName}`,
-      );
-
-      const rbacMessage = requestLanguage.startsWith('hi')
-        ? `यह सत्र ${identityCheck.authorizedName} के स्वास्थ्य रिकॉर्ड के लिए अधिकृत है। सुरक्षा और गोपनीयता नियमों (RBAC) के अनुसार, किसी अन्य व्यक्ति (${identityCheck.claimedName}) का विवरण इस खाते से नहीं देखा जा सकता। कृपया उस व्यक्ति के रिकॉर्ड देखने के लिए ऐप में उनकी प्रोफ़ाइल चुनें या स्विच करें।`
-        : `This session is authorized for ${identityCheck.authorizedName}'s health records. Under role-based access control (RBAC) and privacy policy, records for another individual (${identityCheck.claimedName}) cannot be accessed from this profile. Please switch to their profile in the app to view their records.`;
-
-      const rbacContent: Record<string, any> = {
-        summary: rbacMessage,
-        [requestLanguage]: rbacMessage,
-        sections: [
-          {
-            title: requestLanguage.startsWith('hi') ? 'प्रोफ़ाइल और गोपनीयता सुरक्षा' : 'Profile & Privacy Protection',
-            body: requestLanguage.startsWith('hi')
-              ? `वर्तमान में चयनित प्रोफ़ाइल: ${identityCheck.authorizedName}। गोपनीयता बनाए रखने के लिए, प्रत्येक व्यक्ति का स्वास्थ्य डेटा केवल उनकी अपनी प्रोफ़ाइल में ही सुरक्षित रखा जाता है।`
-              : `Currently selected profile: ${identityCheck.authorizedName}. To protect patient confidentiality, each person's health records can only be accessed under their own verified profile.`,
-          },
-        ],
-        actions: [
-          {
-            label: requestLanguage.startsWith('hi') ? 'प्रोफ़ाइल बदलें' : 'Switch Profile',
-            action: 'SWITCH_PROFILE',
-          },
-        ],
-      };
-
-      if (traceContext && this.tracer) {
-        await this.tracer.traceStep(
-          traceContext,
-          {
-            name: 'rbac_identity_guard',
-            runType: 'tool',
-            provider: 'rule-engine',
-            model: 'deterministic-rbac',
-            necessity: 'NECESSARY',
-            necessityReason:
-              'Enforces role-based access control and prevents cross-patient data leakage.',
-          },
-          async () => ({
-            status: 'BLOCKED',
-            authorizedName: identityCheck.authorizedName,
-            claimedName: identityCheck.claimedName,
-          }),
-        );
-        await this.tracer.endTurn(traceContext, {
-          responseType: 'text',
-          content: rbacContent,
-          intent: IntentType.UNKNOWN,
-          selectedAgent: 'rbac-identity-guard',
-          safetyStatus: 'IDENTITY_ACCESS_RESTRICTED',
-        });
+    if (labReportQuestion) {
+      let report: ClinicalContext | null = null;
+      if (vdaConsentArtifactId) {
+        try {
+          report = await this.clinicalContextService.buildContext({
+            sessionId,
+            tenantId: identity.tenantId,
+            subjectAbhaRef: identity.externalId,
+            vdaConsentArtifactId,
+            intent: IntentType.LAB_RESULT_QUERY,
+            requiredRecordCategories: [HealthRecordCategory.LAB_REPORT, HealthRecordCategory.INVESTIGATION],
+            correlationId,
+          });
+        } catch {
+          // Missing consent or unavailable records are not evidence of a result.
+        }
       }
-
-      return {
-        responseType: 'text',
-        content: rbacContent,
-        intent: IntentType.UNKNOWN,
-        selectedAgent: 'rbac-identity-guard',
-        safetyStatus: 'IDENTITY_ACCESS_RESTRICTED',
-        latencyMs: Date.now() - startTime,
-      };
+      const requestedTest = /hba1c|एच\s*बी\s*ए\s*वन\s*सी/i.test(inputText) ? /hba1c|glycated|glycosylated/i : /glucose|sugar|शुगर/i;
+      const matching = (report?.labResults || []).filter((item) => requestedTest.test(item.testName));
+      const hindi = requestLanguage.startsWith('hi');
+      const markedCritical = matching.some((item) => /critical|panic|गंभीर/i.test(item.interpretation || ''));
+      const summary = matching.length
+        ? (hindi ? 'आपकी उपलब्ध रिपोर्ट में यह दर्ज है:' : 'Your available report records:')
+        : (hindi ? 'मुझे आपकी शुगर रिपोर्ट का परिणाम नहीं मिला। कृपया रिपोर्ट चुनें या साझा करें।' : 'I could not find your sugar report result. Please select or share the report.');
+      const bullets = matching.slice(0, 5).map((item) => `${item.testName}: ${item.value || (hindi ? 'मान उपलब्ध नहीं' : 'value unavailable')}${item.unit ? ` ${item.unit}` : ''}${item.referenceRange ? ` (${hindi ? 'रिपोर्ट की सीमा' : 'reported range'}: ${item.referenceRange})` : ''}`);
+      const guidance = markedCritical
+        ? (hindi ? 'रिपोर्ट में गंभीर परिणाम लिखा है। जल्द डॉक्टर से बात करें; तबीयत बिगड़ रही हो तो 108/112 पर कॉल करें।' : 'The report marks a result as critical. Speak to a doctor promptly; if you feel unwell or worse, call 108/112.')
+        : (hindi ? 'इन मानों का मतलब और इलाज के बारे में डॉक्टर या CHO से बात करें।' : 'Ask a doctor or CHO what these results mean for your care.');
+      const content = { summary, [requestLanguage]: summary, ...(bullets.length ? { sections: [{ title: hindi ? 'रिपोर्ट के दर्ज मान' : 'Recorded results', bullets }, { body: guidance }] } : {}) };
+      return { responseType: 'text', content, intent: IntentType.LAB_RESULT_QUERY, selectedAgent: 'clinical-record-facts', safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
     }
 
     // ─── Step 2: Gemini semantic classification ─────────────────────────────
@@ -2137,9 +2214,14 @@ export class AiOrchestratorService implements IAiOrchestrator {
         resolvedInputText,
         intentMeta.language,
       );
-      location.state = intentMeta.requirements?.state || location.state;
-      location.district =
-        intentMeta.requirements?.district || location.district;
+      const statedDistrict = intentMeta.requirements?.district;
+      const statedState = intentMeta.requirements?.state;
+      if (statedDistrict && resolvedInputText.toLocaleLowerCase().includes(statedDistrict.toLocaleLowerCase())) {
+        location.district = statedDistrict;
+      }
+      if (statedState && resolvedInputText.toLocaleLowerCase().includes(statedState.toLocaleLowerCase())) {
+        location.state = statedState;
+      }
       // Facility constraints are extracted semantically by Gemini. We only use
       // source-backed filters; a requested service is never assumed available.
       const scheme = intentMeta.requirements?.scheme;

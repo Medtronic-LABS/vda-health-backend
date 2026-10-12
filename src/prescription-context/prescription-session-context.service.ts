@@ -21,6 +21,7 @@ export type SanitizedPrescriptionInvestigation = { name: string };
 export type SanitizedPrescriptionSessionContext = {
   medicines: SanitizedPrescriptionMedicine[];
   reminders: SanitizedPrescriptionReminder[];
+  remindersUnavailable?: boolean;
   investigations: SanitizedPrescriptionInvestigation[];
   lastReferencedMedicine?: string;
   lastReferencedInvestigation?: string;
@@ -100,6 +101,23 @@ export class PrescriptionSessionContextService {
     } catch {
       return null;
     }
+  }
+
+  /** Read-only fallback when the short-lived reminder context has expired. */
+  async currentVerifiedForPatient(sessionId: string, identity: HostIdentity): Promise<SanitizedPrescriptionSessionContext | null> {
+    const session = await this.sessions.findOne({ where: { id: sessionId, tenantId: identity.tenantId } });
+    if (!session || session.externalId !== identity.externalId || session.status !== 'ACTIVE') return null;
+    const prescription = await this.prescriptions.findOne({
+      where: { tenantId: identity.tenantId, patientRef: session.subjectAbhaRef, verificationStatus: 'VERIFIED', activePlan: true },
+      order: { planRevision: 'DESC', createdAt: 'DESC' },
+    });
+    if (!prescription) return null;
+    return {
+      medicines: (prescription.verifiedMedications || []).map((item) => this.toMedicine(item)),
+      investigations: (prescription.verifiedInvestigations || []).map((item) => this.toInvestigation(item)),
+      reminders: [],
+      remindersUnavailable: true,
+    };
   }
 
   async setLastReferencedMedicine(sessionId: string, medicineName: string): Promise<void> {

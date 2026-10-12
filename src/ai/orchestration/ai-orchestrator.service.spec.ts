@@ -1,5 +1,6 @@
 import { Facility } from '../../database/entities/facility.entity';
 import { FacilitySearchResult } from '../../facilities/facility-search.service';
+import { FacilityDirectoryLoader } from '../../facilities/facility-directory.loader';
 import { prioritizeSourceBackedCandidates } from '../../facilities/facility-service-matcher';
 import { AiOrchestratorService } from './ai-orchestrator.service';
 
@@ -215,7 +216,7 @@ describe('IPHS service-specific retrieval', () => {
       'pilot-tenant', 'MRI', 'hi', 'Haryana', 'focused-check',
     );
     expect(service.knowledgeRetrievalService.retrieveIphsServiceChunks)
-      .toHaveBeenCalledWith(['MRI'], 'pilot-tenant', 'Haryana', 3);
+      .toHaveBeenCalledWith(['Magnetic Resonance Imaging', 'MRI'], 'pilot-tenant', 'Haryana', 6);
     const [prompt] = service.aiProvider.generate.mock.calls[0];
     expect(prompt).toContain(mri.content);
     expect(prompt).not.toContain(generic.content);
@@ -264,7 +265,34 @@ describe('IPHS service-specific retrieval', () => {
       });
     expect(content.cards).toEqual([]);
     expect(content.facility_results).toEqual([]);
-    expect(content.summary).toContain('कोई facility recommendation नहीं');
+    expect(content.summary).toContain('सेवा की पुष्टि नहीं हो सकी');
+  });
+
+  it('uses the explicit CHC diagnostic-services X-ray table and keeps named availability unverified', async () => {
+    const service = Object.create(AiOrchestratorService.prototype) as any;
+    const incidental = chunk('IPHS 2022 - CHC Guidelines', 'An x-Ray view box should be provided.', 'incidental');
+    const table = chunk('IPHS 2022 - CHC Guidelines', 'Diagnostic Services\nUSG D E E\nDigital x-Ray E E E E E\nSupport Services', 'table');
+    service.knowledgeRetrievalService = {
+      retrieve: jest.fn().mockResolvedValue({ matchedChunks: [incidental], sources: [], formattedKnowledgePrompt: '', retrievedCount: 1, intent: 'FACILITY_SERVICE_LEVEL', providerType: 'postgres_pgvector', latencyMs: 1 }),
+      retrieveIphsServiceChunks: jest.fn().mockResolvedValue([table]),
+    };
+    service.aiProvider = { generate: jest.fn() };
+    const resolved = await service.resolveIphsLevelsForService('pilot-tenant', 'X-ray', 'en', 'HARYANA', 'focused-check');
+    expect(resolved.evidenceStatus).toBe('VERIFIED');
+    expect(resolved.levels).toEqual(['CHC']);
+    expect(service.aiProvider.generate).not.toHaveBeenCalled();
+    expect(service.knowledgeRetrievalService.retrieveIphsServiceChunks).toHaveBeenCalledWith(
+      expect.arrayContaining(['X-ray', 'Xray']), 'pilot-tenant', 'HARYANA', 6,
+    );
+    const candidates = new FacilityDirectoryLoader().find({ state: 'HARYANA', district: 'FARIDABAD', iphsLevels: resolved.levels });
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates.every((item) => item.iphsLevel === 'CHC')).toBe(true);
+    const content = service.facilityContent(service.directoryFacilityResults(candidates), { district: 'Faridabad' }, 'en', undefined, false, {
+      requestedService: 'X-ray', appropriateIphsLevels: resolved.levels, lowCostPreference: false,
+      matchedSourceValues: [], iphsSources: resolved.sources, iphsEvidenceStatus: resolved.evidenceStatus,
+    });
+    expect(content.summary).toContain('Current X-ray availability');
+    expect(content.summary).not.toContain('confirmed');
   });
 
   it('treats retrieval infrastructure failure as retryable, not absent IPHS support', async () => {
@@ -312,5 +340,46 @@ describe('IPHS service-specific retrieval', () => {
       'pilot-tenant', 'X-ray', 'hi', 'Haryana', 'focused-check',
     );
     expect(resolved).toEqual({ levels: [], sources: [], evidenceStatus: 'UNAVAILABLE' });
+  });
+});
+
+describe('patient prescription question routing', () => {
+  const service = Object.create(AiOrchestratorService.prototype) as any;
+  const context = {
+    medicines: [{ name: 'Amlodipine', frequency: 'daily' }],
+    reminders: [{ medicineName: 'Amlodipine', reminderTimes: ['08:00'] }],
+    investigations: [{ name: 'HbA1c' }],
+  };
+
+  it.each(['My medicine', 'My medicines', 'Meri dawai batao', 'मेरी दवाइयां दिखाओ'])(
+    'routes %s to the verified medicine list', (question) => {
+      expect(service.resolvePrescriptionContextQuestion(context, question, 'hi').kind).toBe('MEDICINE_LIST');
+    },
+  );
+
+  it.each(['My medication schedule', 'Dawa kab leni hai', 'मेरी दवा का समय'])(
+    'routes %s to saved reminder times', (question) => {
+      expect(service.resolvePrescriptionContextQuestion(context, question, 'hi').kind).toBe('REMINDER_FACT');
+    },
+  );
+
+  it('keeps dose changes in the clinical safety path', () => {
+    expect(service.resolvePrescriptionContextQuestion(context, 'Should I stop my medicine?', 'en').kind).toBe('CLINICAL_MEDICATION_DECISION');
+  });
+
+  it('recognizes prescription status without a cached medicine context', () => {
+    expect(service.resolvePrescriptionContextQuestion(null, 'मेरी पर्ची की जाँच हुई क्या?', 'hi').kind).toBe('PRESCRIPTION_STATUS');
+  });
+});
+
+describe('facility location precedence', () => {
+  it('uses the latest patient profile before an older conversation location', async () => {
+    const service = Object.create(AiOrchestratorService.prototype) as any;
+    service.knowledgeQueryNormalizer = { normalize: jest.fn().mockReturnValue({}) };
+    service.sessions = { findOne: jest.fn().mockResolvedValue({ tenantId: 'tenant', subjectAbhaRef: 'patient' }) };
+    service.patientData = { getPatientByReference: jest.fn().mockResolvedValue({ state: 'HARYANA', district: 'FARIDABAD' }) };
+    service.conversationTurns = { find: jest.fn() };
+    expect(await service.facilityLocation('session', 'X-ray near me', 'en')).toEqual({ state: 'HARYANA', district: 'FARIDABAD' });
+    expect(service.conversationTurns.find).not.toHaveBeenCalled();
   });
 });

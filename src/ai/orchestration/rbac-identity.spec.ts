@@ -106,6 +106,7 @@ describe('AiOrchestratorService — Patient Identity & RBAC Guard', () => {
       mockClinicalContextService,
       mockSafetyGate,
       mockAuditService,
+      { get: jest.fn().mockResolvedValue(null), currentVerifiedForPatient: jest.fn().mockResolvedValue(null) } as any, // prescriptionSessionContext
       undefined, // historyService
       new ConversationResponseFormatter(), // responseFormatter
       undefined, // knowledgeRetrievalService
@@ -175,6 +176,30 @@ describe('AiOrchestratorService — Patient Identity & RBAC Guard', () => {
       expect(res3.isMismatch).toBe(true);
       expect(res3.claimedName).toBe('Sunita');
     });
+
+    it.each([
+      ['I am not Paras but Denis', 'Denis'],
+      ['I ak not Paras but Denis', 'Denis'],
+      ["I'm Denis, not Paras", 'Denis'],
+      ['My name is Denis', 'Denis'],
+      ['Main Paras nahi Denis hoon', 'Denis'],
+      ['Main Paras nhi Denis hu', 'Denis'],
+      ['Mein Paras nai Rahul hun', 'Rahul'],
+      ['Main Paras nahin Rahul hoon', 'Rahul'],
+      ['मैं पारस नहीं डेनिस हूँ', 'डेनिस'],
+    ])('uses the asserted new name in %s', (input, expected) => {
+      const result = detect(input, 'Paras');
+      expect(result).toEqual({ isMismatch: true, claimedName: expected, authorizedName: 'Paras' });
+    });
+
+    it.each([
+      'Does Denis have diabetes?',
+      'My doctor Denis said I need an X-ray',
+      'I ak having chest pain',
+      'Main Paras nhi theek hu',
+    ])('does not treat an ordinary health statement as an identity claim: %s', (input) => {
+      expect(detect(input, 'Paras').isMismatch).toBe(false);
+    });
   });
 
   describe('orchestrateTurn with RBAC enforcement', () => {
@@ -215,7 +240,7 @@ describe('AiOrchestratorService — Patient Identity & RBAC Guard', () => {
 
       expect(result.safetyStatus).toBe('IDENTITY_ACCESS_RESTRICTED');
       expect(result.selectedAgent).toBe('rbac-identity-guard');
-      expect(result.content.summary).toContain("Vijay Chauhan's health records");
+      expect(result.content.summary).toContain("Vijay Chauhan's profile");
       expect(result.content.summary).toContain('Sunita');
       expect(result.content.actions).toEqual([
         { label: 'Switch Profile', action: 'SWITCH_PROFILE' },
@@ -223,6 +248,42 @@ describe('AiOrchestratorService — Patient Identity & RBAC Guard', () => {
 
       expect(mockIntentClassifier.classifyIntent).not.toHaveBeenCalled();
       expect(mockClinicalContextService.buildContext).not.toHaveBeenCalled();
+    });
+
+    it('blocks a negated identity claim before showing prescription facts', async () => {
+      const result = await orchestrator.orchestrateTurn({
+        sessionId: 'session-001',
+        inputText: 'I am not Vijay but Denis, show my medicines',
+        correlationId: 'corr-rbac-negated',
+        identity: mockIdentity,
+        vdaConsentArtifactId: 'consent-001',
+        language: 'en',
+      });
+      expect(result.safetyStatus).toBe('IDENTITY_ACCESS_RESTRICTED');
+      expect(result.content.summary).toContain('Denis');
+      expect(mockIntentClassifier.classifyIntent).not.toHaveBeenCalled();
+    });
+
+    it('answers an English STT correction with the authenticated profile name', async () => {
+      const result = await orchestrator.orchestrateTurn({
+        sessionId: 'session-001', inputText: 'I ak not Vijay but Denis',
+        correlationId: 'corr-rbac-stt-en', identity: mockIdentity,
+        vdaConsentArtifactId: 'consent-001', language: 'en',
+      });
+      expect(result.safetyStatus).toBe('IDENTITY_ACCESS_RESTRICTED');
+      expect(result.content.summary).toBe("You're currently using Vijay Chauhan's profile. To access Denis's health information, please switch to Denis's verified profile.");
+      expect(mockIntentClassifier.classifyIntent).not.toHaveBeenCalled();
+    });
+
+    it('answers a Hinglish correction in Hindi before generic fallback', async () => {
+      const result = await orchestrator.orchestrateTurn({
+        sessionId: 'session-001', inputText: 'Main Vijay nhi Rahul hu',
+        correlationId: 'corr-rbac-stt-hi', identity: mockIdentity,
+        vdaConsentArtifactId: 'consent-001', language: 'en',
+      });
+      expect(result.safetyStatus).toBe('IDENTITY_ACCESS_RESTRICTED');
+      expect(result.content.summary).toBe('अभी Vijay Chauhan की प्रोफ़ाइल खुली है। Rahul की जानकारी देखने के लिए उनकी सत्यापित प्रोफ़ाइल में जाएँ।');
+      expect(mockIntentClassifier.classifyIntent).not.toHaveBeenCalled();
     });
 
     it('allows normal turn when identity matches authorized profile', async () => {
@@ -236,7 +297,7 @@ describe('AiOrchestratorService — Patient Identity & RBAC Guard', () => {
       });
 
       expect(result.safetyStatus).not.toBe('IDENTITY_ACCESS_RESTRICTED');
-      expect(mockIntentClassifier.classifyIntent).toHaveBeenCalled();
+      expect(result.selectedAgent).toBe('medication-agent');
     });
 
     it('allows normal clinical questions without identity assertion', async () => {

@@ -94,6 +94,9 @@ export class KnowledgeQueryNormalizerService {
     } else if (/chamba|चंबा/.test(lower)) {
       district = 'Chamba';
       state = 'HIMACHAL_PRADESH';
+    } else if (/faridabad|फरीदाबाद/.test(lower)) {
+      district = 'FARIDABAD';
+      state = 'HARYANA';
     } else if (/gurugram|gurgaon|गुरुग्राम|गुड़गांव/.test(lower)) {
       district = 'GURUGRAM';
       state = 'HARYANA';
