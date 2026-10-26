@@ -11,6 +11,7 @@ import {
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { ConversationTurn } from '../database/entities/conversation-turn.entity';
+import { MedicalReport } from '../database/entities/medical-report.entity';
 import { Session } from '../database/entities/session.entity';
 import { ConsentArtifact } from '../database/entities/consent-artifact.entity';
 import { AuditService } from '../audit/audit.service';
@@ -146,8 +147,20 @@ export class TurnsService {
         }
       }
 
+      if (dto.report_id) {
+        if (identity.authType !== 'MOBILE' || !identity.mobileUserId ||
+            session.subjectAbhaRef !== `mobile-user:${identity.mobileUserId}`) {
+          throw new ForbiddenException('MOBILE_PATIENT_REQUIRED');
+        }
+        const report = await manager.findOne(MedicalReport, {
+          where: { id: dto.report_id, tenantId: identity.tenantId, patientRef: session.subjectAbhaRef },
+          lock: { mode: 'pessimistic_read' },
+        });
+        if (!report) throw new NotFoundException('REPORT_NOT_FOUND');
+      }
+
       // 8. Capture conversation retention decision
-      const conversationRetentionGranted = consent.scopes.includes(
+      const conversationRetentionGranted = !dto.report_id && consent.scopes.includes(
         'conversation_retention',
       );
 
@@ -169,6 +182,7 @@ export class TurnsService {
       // 11. Create turn in PROCESSING status
       const turn = new ConversationTurn();
       turn.sessionId = sessionId;
+      turn.reportId = dto.report_id || null;
       turn.turnNumber = nextTurnNumber;
       turn.correlationId = correlationId;
       turn.speaker = session.speaker;
@@ -225,6 +239,22 @@ export class TurnsService {
         throw new NotFoundException('TURN_NOT_FOUND');
       }
 
+      if (turn.status === 'REDACTED') return turn;
+      if (turn.reportId) {
+        const report = await manager.findOne(MedicalReport, {
+          where: { id: turn.reportId, tenantId: identity.tenantId, patientRef: turn.subjectRef },
+          lock: { mode: 'pessimistic_read' },
+        });
+        if (!report) {
+          turn.status = 'REDACTED';
+          turn.reportId = null;
+          turn.inputText = null;
+          turn.outputText = null;
+          turn.selectedAgent = undefined;
+          return manager.save(turn);
+        }
+      }
+
       const now = new Date();
       const latency = turn.processingStartedAt
         ? now.getTime() - turn.processingStartedAt.getTime()
@@ -233,7 +263,7 @@ export class TurnsService {
       turn.status = status;
       turn.responseType = result.responseType;
       // Enforce captured retention decision
-      turn.outputText = turn.conversationRetentionGranted
+      turn.outputText = turn.conversationRetentionGranted && !turn.reportId
         ? JSON.stringify(result.content)
         : null;
       turn.intent = result.intent || undefined;
@@ -269,12 +299,14 @@ export class TurnsService {
     await this.dataSource.transaction(async (manager) => {
       const turn = await manager.findOne(ConversationTurn, {
         where: { id: turnId },
+        lock: { mode: 'pessimistic_write' },
       });
       if (!turn) return;
+      if (turn.status === 'REDACTED') return;
 
       turn.status = 'REJECTED';
       turn.intent = 'processing-failure';
-      turn.selectedAgent = error.message
+      turn.selectedAgent = turn.reportId ? 'report-processing-failure' : error.message
         ? error.message.substring(0, 100)
         : 'unknown-error';
 
@@ -290,7 +322,7 @@ export class TurnsService {
         action: 'turn_rejected',
         entityName: 'conversation_turn',
         entityId: turn.id,
-        details: { reason: error.message || 'Processing failed' },
+        details: { reason: turn.reportId ? 'Report processing failed' : (error.message || 'Processing failed') },
       });
     });
   }
@@ -353,11 +385,12 @@ export class TurnsService {
 
     // 5. If it was already completed (idempotency DB hit), parse and return it immediately
     if (turn.status === 'COMPLETED' || turn.status === 'WITHHELD') {
-      let contentObj = {};
+      let contentObj: Record<string, any> = dto.report_id
+        ? { summary: 'This report answer is not retained. Please ask again while the report is available.' } : {};
       try {
-        contentObj = turn.outputText
+        contentObj = !dto.report_id && turn.outputText
           ? (JSON.parse(turn.outputText) as Record<string, any>)
-          : {};
+          : contentObj;
       } catch {
         contentObj = { text: turn.outputText };
       }
@@ -443,6 +476,8 @@ export class TurnsService {
           session.consentArtifactId,
           dto.prescription_id,
           dto.prescription_context_required,
+          dto.report_id,
+          dto.language,
         );
         responseType = result.responseType;
         content = result.content;
@@ -453,6 +488,16 @@ export class TurnsService {
         // SafetyGate emergencies are deterministic, per-turn responses. They
         // do not create a clinician-review case or waiting/chat lifecycle.
       } catch (err: any) {
+        if (dto.report_id) {
+          const current = await this.dataSource.getRepository(ConversationTurn).findOneBy({ id: turn.id });
+          if (current?.status === 'REDACTED') {
+            return { turn_number: current.turnNumber, session_id: current.sessionId, response_type: 'text',
+              content: { summary: 'This report was deleted. Its answer is no longer available.' },
+              correlation_id: current.correlationId, safety_status: current.safetyStatus,
+              intent: 'REPORT_DELETED', selected_agent: null, latency: current.latency,
+              created_at: current.createdAt.toISOString() };
+          }
+        }
         await this.failTurn(turn.id, err as Error, correlationId, identity);
         throw err;
       }
@@ -555,6 +600,17 @@ export class TurnsService {
       identity,
       finalStatus,
     );
+
+    // A deletion may commit just after resolution. Recheck the tagged turn
+    // before assembling the HTTP response; Android also suppresses late replies.
+    const latestReportTurn = dto.report_id && resolved.status !== 'REDACTED'
+      ? await this.dataSource.getRepository(ConversationTurn).findOneBy({ id: resolved.id }) : null;
+    if (resolved.status === 'REDACTED' || latestReportTurn?.status === 'REDACTED') {
+      content = { summary: 'This report was deleted. Its answer is no longer available.' };
+      responseType = 'text';
+      intent = 'REPORT_DELETED';
+      selectedAgent = null;
+    }
 
     if (this.metricsService) {
       try {

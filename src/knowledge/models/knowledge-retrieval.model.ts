@@ -1,5 +1,7 @@
 export interface KnowledgeRetrievalOptions {
   tenantId?: string;
+  /** Restrict retrieval to one approved source document. */
+  documentId?: string;
   query?: string;
   intent?: string;
   language?: string;

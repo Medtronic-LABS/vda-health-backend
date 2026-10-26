@@ -35,6 +35,7 @@ import { SchemeModule } from './schemes/scheme.module';
 import { PrescriptionModule } from './prescriptions/prescription.module';
 import { FollowUpModule } from './follow-ups/follow-up.module';
 import { PrescriptionSessionContextModule } from './prescription-context/prescription-session-context.module';
+import { MedicalReportModule } from './reports/medical-report.module';
 import { GlobalExceptionFilter } from './common/global-exception.filter';
 import { CorrelationIdMiddleware } from './observability/correlation-id.middleware';
 
@@ -72,6 +73,7 @@ import { CorrelationIdMiddleware } from './observability/correlation-id.middlewa
     PrescriptionModule,
     FollowUpModule,
     PrescriptionSessionContextModule,
+    MedicalReportModule,
     CommonModule,
   ],
   controllers: [AppController],

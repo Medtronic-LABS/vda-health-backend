@@ -10,6 +10,8 @@ export interface IConversationProcessor {
     consentArtifactId: string,
     prescriptionId?: string,
     prescriptionContextRequired?: boolean,
+    reportId?: string,
+    selectedLanguage?: string,
   ): Promise<{
     responseType: string;
     content: Record<string, any>;

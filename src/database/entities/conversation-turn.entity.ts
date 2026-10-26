@@ -18,6 +18,11 @@ export class ConversationTurn {
   @Column('uuid')
   sessionId!: string;
 
+  /** Explicit provenance for newly created report turns; null after report deletion. */
+  @Index()
+  @Column('uuid', { nullable: true })
+  reportId?: string | null;
+
   /** Set only for messages belonging to an active Clinical Escalation conversation. */
   @Index()
   @Column('uuid', { nullable: true })
@@ -52,8 +57,8 @@ export class ConversationTurn {
   @Column({ nullable: true })
   intent?: string;
 
-  @Column({ nullable: true })
-  selectedAgent?: string;
+  @Column({ type: 'varchar', nullable: true })
+  selectedAgent?: string | null;
 
   @Column()
   latency!: number; // ms

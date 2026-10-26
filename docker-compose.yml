@@ -5,6 +5,7 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     container_name: vda_postgres_dev
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -23,6 +24,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: vda_redis_dev
+    restart: unless-stopped
     ports:
       - '6379:6379'
     volumes:
@@ -39,6 +41,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: vda_backend_dev
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy

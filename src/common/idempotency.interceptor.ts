@@ -45,6 +45,9 @@ export class IdempotencyInterceptor implements NestInterceptor {
     }
 
     const requestBody = JSON.stringify(request['body'] || {});
+    // Report answers contain extracted health values. Keep the in-flight lock and
+    // database idempotency key, but never replay or write a response-body cache.
+    const reportTurn = typeof (request['body'] as { report_id?: unknown } | undefined)?.report_id === 'string';
     const requestHash = crypto
       .createHash('sha256')
       .update(requestBody)
@@ -59,7 +62,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
     const ownerToken = crypto.randomUUID();
 
     // Check if idempotency record exists
-    const cachedRecordStr = await this.redisService.get(cacheKey);
+    const cachedRecordStr = reportTurn ? null : await this.redisService.get(cacheKey);
     if (cachedRecordStr) {
       const cached = JSON.parse(cachedRecordStr) as {
         requestHash: string;
@@ -88,6 +91,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
       10,
     ); // 10s safety lock
     if (!acquired) {
+      if (reportTurn) throw new ConflictException('TURN_IN_PROGRESS');
       // Simultaneous request is in flight. Loop and wait.
       const waitTimeout = this.configService.idempotencyWaitTimeoutMs;
       const interval = 100; // 100ms
@@ -129,6 +133,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
     return next.handle().pipe(
       tap({
         next: (val: unknown) => {
+          if (reportTurn) {
+            void this.redisService.releaseLock(lockKey, ownerToken);
+            return;
+          }
           const status = (response['statusCode'] as number) || 201;
           const ttl = parseInt(
             process.env.IDEMPOTENCY_TTL_SECONDS || '86400',

@@ -128,6 +128,8 @@ interface FacilityServiceContext {
 
 type PrescriptionContextResolution =
   | { kind: 'MEDICINE_LIST' }
+  | { kind: 'ADHERENCE_STATUS'; question: 'PENDING' | 'MISSED' | 'STREAK' | 'CORRECTION' }
+  | { kind: 'REFILL_SUPPORT' }
   | { kind: 'PRESCRIPTION_STATUS' }
   | { kind: 'MEDICINE_FACT'; medicine: SanitizedPrescriptionMedicine }
   | { kind: 'REMINDER_FACT'; medicine?: SanitizedPrescriptionMedicine }
@@ -236,9 +238,10 @@ export class AiOrchestratorService implements IAiOrchestrator {
     const asksDoseAction = /(?:\b(?:abhi|now)\b.{0,20}\b(?:le|lu|loon|lena|take)\b|\b(?:do|two|2|double|agli|next)\b.{0,20}\b(?:tablet|pill|dose|khurak|goli|skip|le|lu|take)\b|(?:अभी|अब).{0,20}(?:ले|लूं|लूँ|लेना)|(?:दो|दोगुनी|अगली).{0,20}(?:गोली|खुराक|दवा|छोड़|स्किप|ले|लूं|लूँ))/i.test(input);
     const asksTreatmentChange = /(?:\b(?:stop|start|increase|decrease|change|adjust|double|band|badhau|badha|ghatau|ghata)\b|बंद|शुरू|बढ़ा|घटा|बदल|दोगुनी)/i.test(input);
     const asksWhatToDoAfterMiss = /(?:\b(?:ab|now|what)\b.{0,20}\b(?:kya|what|karu|karoon|do|take|skip)\b|(?:अब|तो|फिर).{0,20}(?:क्या\s*करूँ|क्या\s*करूं|ले\s*लूं|ले\s*लूँ|छोड़\s*दूं|स्किप))/i.test(input);
-    const hasGenericMedicineReference = /(?:\b(?:medicine|medication|dose|dosage|tablet|pill|dawai|dawa|khurak|goli)\b|दवा|दवाई|गोली|खुराक|टैबलेट)/i.test(input);
+    const hasGenericMedicineReference = /(?:\b(?:medicines?|medications?|doses?|dosage|tablets?|pills?|dawai|dawa|khurak|goli)\b|दवा|दवाई|गोली|खुराक|टैबलेट)/i.test(input);
     const asksNamedTreatmentChange = /(?:\b(?:band|start|change|badha|badhau|ghata|ghatau)\s*(?:kar)?\s*(?:du|dun|doon|lu|loon|sakta|sakti)\b|(?:बंद|शुरू|बदल|बढ़ा|घटा)\s*(?:कर)?\s*(?:दूं|दूँ|लूं|लूँ|सकता|सकती))/i.test(input);
-    const clinicalMedicationDecision = asksDoseAction
+    const strengthSubstitution = /\b\d+(?:\.\d+)?\s*(?:mg|mcg|ml|g)\b.{0,48}\b(?:instead|replace|rather|jagah|badle)\b.{0,48}\b\d+(?:\.\d+)?\s*(?:mg|mcg|ml|g)\b|\b(?:jagah|badle|instead|replace)\b.{0,48}\b\d+(?:\.\d+)?\s*(?:mg|mcg|ml|g)\b/i.test(input);
+    const clinicalMedicationDecision = strengthSubstitution || asksDoseAction
       || (asksMissedDose && asksWhatToDoAfterMiss)
       || (asksTreatmentChange && (hasGenericMedicineReference || asksNamedTreatmentChange));
 
@@ -250,11 +253,34 @@ export class AiOrchestratorService implements IAiOrchestrator {
       return { kind: 'CLINICAL_MEDICATION_DECISION' };
     }
 
+    // Adherence is recorded on the patient's device. A prescription lists
+    // medicines and times, but cannot establish whether a dose was taken.
+    // Keep these intents ahead of the broad prescription-list matcher.
+    if (/\b(?:galti|galat|accidental(?:ly)?|mistake|wrong)\b.{0,45}\b(?:taken|mark|le\s*li|liya)\b|गलती.{0,45}(?:ले ली|मार्क|दर्ज)/i.test(input)) {
+      return { kind: 'ADHERENCE_STATUS', question: 'CORRECTION' };
+    }
+    if (/\b(?:streak|lagatar|continuous)\b|लगातार.{0,25}(?:दिन|दवा)|स्ट्रीक/i.test(input)) {
+      return { kind: 'ADHERENCE_STATUS', question: 'STREAK' };
+    }
+    if (/\b(?:pending|remaining|left to take|baaki|baki)\b|बाकी|लंबित/i.test(input) && hasGenericMedicineReference) {
+      return { kind: 'ADHERENCE_STATUS', question: 'PENDING' };
+    }
+    if ((asksMissedDose || (hasGenericMedicineReference && /\b(?:missed|skipped|bhool|chhoot)\b|छूट|भूल/i.test(input)))
+      && /\b(?:show|list|dikhao|kal|yesterday|which|kaunsi|konsi)\b|दिखाओ|कौनसी|कौन\s*सी|कल/i.test(input)) {
+      return { kind: 'ADHERENCE_STATUS', question: 'MISSED' };
+    }
+    if (/\b(?:refill|run(?:ning)? out|finished|khatam|stock)\b|खत्म|समाप्त/i.test(input) && hasGenericMedicineReference) {
+      return { kind: 'REFILL_SUPPORT' };
+    }
+
     const statusQuestion = /(?:\b(?:prescription|parchi)\b|पर्ची).{0,40}(?:\b(?:status|verify|verified|verification|approved|reviewed|check|pending)\b|स्थिति|जाँच|जांच|सत्यापित|मंजूर|मंज़ूर)|(?:\b(?:status|verification)\b|स्थिति).{0,35}(?:\b(?:prescription|parchi)\b|पर्ची)|^(?:my\s+prescription|meri\s+parchi|मेरी\s+पर्ची)[?.!]*$/i.test(input.trim());
     if (statusQuestion) return { kind: 'PRESCRIPTION_STATUS' };
     const genericMedicine = /(?:\b(?:my|meri|mera|mere|show|list|batao|dikhao)\b.{0,35}\b(?:medicine|medicines|medication|medications|dawa|dawai|dawain|dawaiyan)\b|\b(?:medicine|medicines|medication|medications|dawa|dawai|dawain|dawaiyan)\b.{0,30}\b(?:schedule|routine|timing|time|kab|list|show|batao|dikhao)\b|मेरी?\s*दवा(?:इ|ई)?(?:यां|याँ|यों|ओं|एं|एँ)?|दवा(?:इ|ई)?(?:यां|याँ|यों|ओं|एं|एँ)?.{0,20}(?:समय|कब|दिखा|बताओ))/i.test(input);
     const genericTiming = /(?:\b(?:schedule|routine|timing|time|kab)\b|समय|कब)/i.test(input);
-    const genericList = genericMedicine || /^(?:my\s+)?(?:medicine|medicines|medication|medications|dawa|dawai|दवा|दवाई)(?:\s+(?:please|बताओ|दिखाओ))?\s*[?.!]*$/i.test(input.trim());
+    const genericList = genericMedicine
+      || /(?:आज\s*की|aaj\s*ki|today(?:'s)?)\s*(?:दवा|दवाई|दवाइयाँ|dawa|dawai|medicines?)/i.test(input)
+      || /\bwhat\s+(?:medicines|medications)\s+am\s+i\s+taking\b/i.test(input)
+      || /^(?:my\s+)?(?:medicine|medicines|medication|medications|dawa|dawai|दवा|दवाई)(?:\s+(?:please|बताओ|दिखाओ))?\s*[?.!]*$/i.test(input.trim());
     if (!context || (!context.medicines.length && !context.investigations.length)) {
       if (genericList) return { kind: genericTiming ? 'REMINDER_FACT' : 'MEDICINE_LIST' };
       return null;
@@ -262,7 +288,11 @@ export class AiOrchestratorService implements IAiOrchestrator {
     const mentions = <T extends { name: string }>(items: T[]): T | undefined =>
       items.find((item) => normalized.includes(this.normalizePrescriptionReference(item.name)));
     const refers = /(?:\b(?:ye|yeh|this|it|iski|iska|iske)\b|इसे|इसकी|इसका|इसके|ये|यह)/i.test(input);
-    const medicine = mentions(context.medicines)
+    const medicineMatches = this.matchVerifiedMedicines(context.medicines, input);
+    // A short brand may refer to multiple verified products or strengths.
+    // Show the verified list so the patient can name the exact one.
+    if (medicineMatches.length > 1) return { kind: 'MEDICINE_LIST' };
+    const medicine = medicineMatches[0]
       || (refers && context.lastReferencedMedicine
         ? context.medicines.find((item) => item.name === context.lastReferencedMedicine)
         : undefined);
@@ -282,7 +312,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
       return { kind: 'CLINICAL_MEDICATION_DECISION' };
     }
     if (isReminder || (genericList && genericTiming)) return { kind: 'REMINDER_FACT', medicine };
-    if (asksTiming && !medicine && context.medicines.length > 0) return { kind: 'REMINDER_FACT' };
+    if (asksTiming && !medicine && genericList && context.medicines.length > 0) return { kind: 'REMINDER_FACT' };
     if (asksTestList) return { kind: 'INVESTIGATION_LIST' };
     if (investigation && asksGeneralUse) {
       return {
@@ -349,10 +379,16 @@ export class AiOrchestratorService implements IAiOrchestrator {
       return { summary, [language]: summary, ...(bullets.length ? { sections: [{ title: hindi ? 'जांचें' : 'Tests', bullets }] } : {}) };
     }
     if (resolution.kind === 'MEDICINE_FACT') {
-      const bullets = [this.patientPrescriptionMedicineLine(resolution.medicine, hindi)];
+      const medicine = resolution.medicine;
+      const bullets = [
+        `${hindi ? 'पर्ची में लिखी बारंबारता' : 'Prescribed frequency'}: ${this.patientPrescriptionFrequency(medicine.frequency, hindi) || (hindi ? 'दर्ज नहीं' : 'not recorded')}`,
+        `${hindi ? 'पर्ची में लिखा समय' : 'Prescribed timing'}: ${this.patientPrescriptionTiming(medicine.timingInstruction, hindi) || (hindi ? 'दर्ज नहीं' : 'not recorded')}`,
+      ];
+      const reminders = context.reminders.filter((item) => this.normalizePrescriptionReference(item.medicineName) === this.normalizePrescriptionReference(medicine.name));
+      if (reminders.length) bullets.push(`${hindi ? 'फ़ोन पर सेव रिमाइंडर' : 'Device reminder'}: ${reminders.flatMap((item) => item.reminderTimes).map((time) => this.patientReminderTime(time, hindi)).join(', ')}`);
       const summary = hindi
-        ? `आपकी सेव की हुई पर्ची में ${resolution.medicine.name} के लिए यह जानकारी है:`
-        : `Your saved prescription contains this information for ${resolution.medicine.name}:`;
+        ? `${medicine.name} के लिए पर्ची और फ़ोन में दर्ज जानकारी:`
+        : `Recorded prescription and phone information for ${medicine.name}:`;
       return { summary, [language]: summary, sections: [{ title: hindi ? 'पर्ची में लिखी जानकारी' : 'Prescription information', bullets }] };
     }
     const reminders = resolution.medicine
@@ -371,6 +407,24 @@ export class AiOrchestratorService implements IAiOrchestrator {
 
   private normalizePrescriptionReference(value: string): string {
     return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+  }
+
+  private matchVerifiedMedicines(items: SanitizedPrescriptionMedicine[], input: string): SanitizedPrescriptionMedicine[] {
+    const words = (value: string) => value.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
+    const question = words(input);
+    const hasSequence = (sequence: string[]) => sequence.length > 0 && question.some((_, start) =>
+      sequence.every((word, offset) => question[start + offset] === word));
+    // Full names take precedence over short brand mentions. A requested number
+    // must agree with the verified name, so "Telma 80" cannot select Telma 40.
+    const full = items.filter((item) => hasSequence(words(item.name)));
+    if (full.length) return full;
+    return items.filter((item) => {
+      const name = words(item.name);
+      const brand = name.filter((word) => !/^\d+(?:\.\d+)?$/.test(word) && !/^(?:mg|mcg|ml|g|iu)$/.test(word));
+      if (!brand.length || !hasSequence(brand)) return false;
+      const next = question.findIndex((_, index) => brand.every((word, offset) => question[index + offset] === word)) + brand.length;
+      return !/^\d+(?:\.\d+)?$/.test(question[next] || '');
+    });
   }
 
   private patientReminderTime(value: string, hindi: boolean): string {
@@ -1361,10 +1415,9 @@ export class AiOrchestratorService implements IAiOrchestrator {
       prescriptionContext = await this.prescriptionSessionContext.currentVerifiedForPatient(sessionId, identity);
     }
     const prescriptionResponseLanguage = prescriptionContext?.pendingMedicationSafetyLanguage
-      || (prescriptionContextRequired
-        ? await this.languageProvider.detectLanguage(inputText)
-        : language)
       || language
+      || (prescriptionContextRequired ? await this.languageProvider.detectLanguage(inputText) : undefined)
+      || identity.preferredLanguage
       || 'en';
     // A missed-dose selection is valid for the immediately following turn only.
     // The loaded value remains available to this turn's resolver, then is cleared.
@@ -1672,6 +1725,29 @@ export class AiOrchestratorService implements IAiOrchestrator {
       };
     }
 
+    if (prescriptionContextResolution?.kind === 'ADHERENCE_STATUS'
+      || prescriptionContextResolution?.kind === 'REFILL_SUPPORT') {
+      const hindi = requestLanguage.startsWith('hi') || /[\u0900-\u097f]|\b(?:meri|mera|maine|mujhe|kaunsi|dikhao|galti|khatam|kal)\b/i.test(inputText);
+      const message = prescriptionContextResolution.kind === 'REFILL_SUPPORT'
+        ? (hindi
+          ? 'दवा खत्म हो रही है तो पर्ची लेकर डॉक्टर, CHO या ANM से रिफिल के लिए संपर्क करें। बिना सलाह दवा बंद या खुराक न बदलें।'
+          : 'If your medicine is running out, contact your doctor, CHO, or ANM with your prescription for a refill. Do not stop or change the dose on your own.')
+        : prescriptionContextResolution.question === 'CORRECTION'
+          ? /\b(?:yesterday|kal)\b|कल/i.test(inputText)
+            ? (hindi
+              ? 'कल का रिकॉर्ड दवाइयाँ टैब से अभी नहीं बदल सकता। मैंने रिकॉर्ड नहीं बदला है।'
+              : 'The Medicines tab cannot correct yesterday’s record yet. I have not changed it.')
+            : (hindi
+              ? 'आज की उसी दवा और समय के लिए दवाइयाँ टैब में “नहीं ली” चुनें। मैंने अभी रिकॉर्ड नहीं बदला है।'
+              : 'For today’s dose, select “Not taken” in Medicines for the same medicine and time. I have not changed the record.')
+          : (hindi
+            ? 'लेने या छूटने का रिकॉर्ड इस फोन के दवाइयाँ टैब में है; यहाँ सर्वर पर इसकी पुष्टि नहीं हो सकती। कृपया उसी टैब में स्थिति देखें।'
+            : 'Dose tracking is stored in Medicines on this device. I cannot verify its current status from the server; please check that tab.');
+      return { responseType: 'text', content: { summary: message, [requestLanguage]: message },
+        intent: IntentType.ADHERENCE_QUERY, selectedAgent: 'medication-adherence',
+        safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
+    }
+
     if (prescriptionContextResolution?.kind === 'PRESCRIPTION_STATUS') {
       const latest = await this.prescriptions?.findOne({
         where: { tenantId: identity.tenantId, patientRef: authorizedPatientRef },
@@ -1718,6 +1794,13 @@ export class AiOrchestratorService implements IAiOrchestrator {
         prescriptionContextResolution,
         requestLanguage,
       );
+      if (authorizedPatientName && /\b(?:what is my name|what's my name|who am i)\b|मेरा नाम क्या है|मेरी पहचान क्या है/i.test(inputText)) {
+        const namePrefix = requestLanguage.startsWith('hi')
+          ? `आप ${authorizedPatientName} की सत्यापित प्रोफ़ाइल में हैं। `
+          : `You are using ${authorizedPatientName}'s verified profile. `;
+        content['summary'] = `${namePrefix}${content['summary']}`;
+        content[requestLanguage] = content['summary'];
+      }
       content['provenance'] = prescriptionContextResolution.kind === 'REMINDER_FACT'
         ? 'REMINDER'
         : 'PRESCRIPTION';

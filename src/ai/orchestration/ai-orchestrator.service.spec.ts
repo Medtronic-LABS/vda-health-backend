@@ -351,7 +351,7 @@ describe('patient prescription question routing', () => {
     investigations: [{ name: 'HbA1c' }],
   };
 
-  it.each(['My medicine', 'My medicines', 'Meri dawai batao', 'मेरी दवाइयां दिखाओ'])(
+  it.each(['My medicine', 'My medicines', 'Meri dawai batao', 'मेरी दवाइयां दिखाओ', 'आज की दवाइयाँ कौन सी हैं?'])(
     'routes %s to the verified medicine list', (question) => {
       expect(service.resolvePrescriptionContextQuestion(context, question, 'hi').kind).toBe('MEDICINE_LIST');
     },
@@ -365,6 +365,55 @@ describe('patient prescription question routing', () => {
 
   it('keeps dose changes in the clinical safety path', () => {
     expect(service.resolvePrescriptionContextQuestion(context, 'Should I stop my medicine?', 'en').kind).toBe('CLINICAL_MEDICATION_DECISION');
+  });
+
+  it.each([
+    ['Aaj ki kaunsi medicine pending hai?', 'ADHERENCE_STATUS'],
+    ['Kal ki missed medicines dikhao.', 'ADHERENCE_STATUS'],
+    ['Meri medicine lene ki streak kitni hai?', 'ADHERENCE_STATUS'],
+    ['Maine galti se medicine taken mark kar di.', 'ADHERENCE_STATUS'],
+    ['Meri BP ki medicine khatam ho gayi hai, kya karun?', 'REFILL_SUPPORT'],
+    ['Meri sari medicines band kar do.', 'CLINICAL_MEDICATION_DECISION'],
+    ['Kya main Metformin 500 mg ki jagah 1000 mg le sakta hoon?', 'CLINICAL_MEDICATION_DECISION'],
+    ['What medicines am I taking and when?', 'REMINDER_FACT'],
+  ])('keeps %s out of unrelated prescription lists', (question, kind) => {
+    expect(service.resolvePrescriptionContextQuestion(context, question, 'hi')?.kind).toBe(kind);
+  });
+
+  it('does not show unrelated reminders for an unknown named medicine', () => {
+    expect(service.resolvePrescriptionContextQuestion(context, 'Mujhe Metformin kab leni hai?', 'hi')).toBeNull();
+  });
+
+  it.each([
+    ['Mujhe telma kab leni hai?', 'Telma 40'],
+    ['Mujhe Telma 40 kab leni hai?', 'Telma 40'],
+    ['TELMA kab leni hai?', 'Telma 40'],
+    ['टेलमा नहीं, Ozomet VG 2 कब लेना है?', 'Ozomet VG 2'],
+    ['Ozomet VG 2 timing', 'Ozomet VG 2'],
+  ])('matches a unique verified medicine in %s', (question, expected) => {
+    const verified = { ...context, medicines: [{ name: 'Telma 40', frequency: 'daily' },
+      { name: 'Ozomet VG 2', frequency: 'twice daily' }] };
+    const result = service.resolvePrescriptionContextQuestion(verified, question, 'hi');
+    expect(result.kind).toBe('MEDICINE_FACT');
+    expect(result.medicine.name).toBe(expected);
+  });
+
+  it('does not select a different strength or an ambiguous brand', () => {
+    const verified = { ...context, medicines: [{ name: 'Telma 40' }, { name: 'Telma 80' }] };
+    expect(service.resolvePrescriptionContextQuestion(verified, 'Telma kab leni hai?', 'hi').kind).toBe('MEDICINE_LIST');
+    expect(service.resolvePrescriptionContextQuestion(verified, 'Telma 20 kab leni hai?', 'hi')).toBeNull();
+  });
+
+  it('keeps frequency, prescribed timing, and phone reminders distinct', () => {
+    const verified = { ...context, medicines: [{ name: 'Telma 40', frequency: 'once daily', timingInstruction: undefined }],
+      reminders: [{ medicineName: 'Telma 40', reminderTimes: ['08:00'] }] };
+    const resolution = service.resolvePrescriptionContextQuestion(verified, 'Telma kab leni hai?', 'hi');
+    const answer = service.prescriptionContextDirectContent(verified, resolution, 'hi');
+    expect(answer.sections[0].bullets).toEqual(expect.arrayContaining([
+      expect.stringContaining('दिन में 1 बार'),
+      expect.stringContaining('पर्ची में लिखा समय: दर्ज नहीं'),
+      expect.stringContaining('फ़ोन पर सेव रिमाइंडर'),
+    ]));
   });
 
   it('recognizes prescription status without a cached medicine context', () => {

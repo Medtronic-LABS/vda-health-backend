@@ -192,6 +192,7 @@ export class KnowledgeRetrievalService implements IKnowledgeRetrievalService {
       const parameters: unknown[] = [vectorStr];
       parameters.push(options.tenantId);
       predicates.push(`c."tenantId" = $${parameters.length}`);
+      predicates.push(`d."tenantId" = $${parameters.length}`);
       const addFilter = (column: string, value?: string, allowGlobal = false) => {
         if (!value) return;
         parameters.push(value);
@@ -203,6 +204,7 @@ export class KnowledgeRetrievalService implements IKnowledgeRetrievalService {
         );
       };
       addFilter('domain', options?.domain);
+      addFilter('"documentId"', options?.documentId);
       addFilter('category', options?.category);
       addFilter('role', options?.role, true);
       addFilter('state', options?.state, options?.stateMatchMode !== 'EXACT');

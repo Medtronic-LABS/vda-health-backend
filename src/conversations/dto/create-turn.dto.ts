@@ -60,4 +60,9 @@ export class CreateTurnDto {
   @IsOptional()
   prescription_context_required?: boolean;
 
+  /** Exact report chosen by the patient; never inferred from chat text. */
+  @IsUUID()
+  @IsOptional()
+  report_id?: string;
+
 }

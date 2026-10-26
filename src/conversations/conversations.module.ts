@@ -20,6 +20,9 @@ import { TenantRateLimiterGuard } from '../common/guards/tenant-rate-limiter.gua
 import { FacilityModule } from '../facilities/facility.module';
 import { SyntheticPatient } from '../database/entities/synthetic-patient.entity';
 import { EscalationModule } from '../escalation/escalation.module';
+import { MedicalReportModule } from '../reports/medical-report.module';
+import { KnowledgeModule } from '../knowledge/knowledge.module';
+import { AshaEducationService } from '../ai/education/asha-education.service';
 
 @Module({
   imports: [
@@ -34,11 +37,14 @@ import { EscalationModule } from '../escalation/escalation.module';
     RedisModule,
     FacilityModule,
     EscalationModule,
+    MedicalReportModule,
+    KnowledgeModule,
   ],
   controllers: [TurnsController],
   providers: [
     TurnsService,
     AiConversationProcessor,
+    AshaEducationService,
     ConversationResponseFormatter,
     ConversationHistoryService,
     TenantRateLimiterGuard,

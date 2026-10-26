@@ -28,6 +28,7 @@ import { MobileUser } from './entities/mobile-user.entity';
 import { MobileRefreshSession } from './entities/mobile-refresh-session.entity';
 import { MobilePushDevice } from './entities/mobile-push-device.entity';
 import { PrescriptionPushDelivery } from './entities/prescription-push-delivery.entity';
+import { MedicalReport } from './entities/medical-report.entity';
 
 @Injectable()
 export class DatabaseConfigService implements TypeOrmOptionsFactory {
@@ -70,6 +71,7 @@ export class DatabaseConfigService implements TypeOrmOptionsFactory {
         MobileRefreshSession,
         MobilePushDevice,
         PrescriptionPushDelivery,
+        MedicalReport,
       ],
       synchronize: false,
       migrationsRun: false,
