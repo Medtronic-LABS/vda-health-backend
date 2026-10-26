@@ -16,7 +16,7 @@ export class MedicalReport {
   @Column({ type: 'text', nullable: true, select: false }) extractedText!: string | null;
   @Column({ type: 'jsonb', default: {} }) extractedFacts!: Record<string, unknown>;
   @Column({ type: 'text', nullable: true }) explanation!: string | null;
-  @Column({ type: 'varchar', length: 24 }) extractionStatus!: 'EXTRACTED' | 'REVIEW_REQUIRED' | 'UNREADABLE';
+  @Column({ type: 'varchar', length: 24 }) extractionStatus!: 'EXTRACTED' | 'REVIEW_REQUIRED' | 'UNREADABLE' | 'EXTRACTION_FAILED';
   @Column({ type: 'varchar', length: 40, nullable: true }) category!: string | null;
   @Column({ type: 'boolean', default: true }) isCurrent!: boolean;
   @Column({ type: 'uuid', nullable: true }) replacementOf!: string | null;
