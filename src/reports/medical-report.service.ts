@@ -80,6 +80,10 @@ export class MedicalReportService {
       const value = typeof item.value === 'string' ? item.value.trim().slice(0, 60) : null;
       if (!name || !value) continue;
       const afterName = evidence.slice(evidence.indexOf(name) + name.length);
+      // Interpretation prose is not a measured result, even if it mentions a threshold.
+      if (/^(?:interpretation|comments?|notes?)\b/i.test(evidence)
+        || /[<>]/.test(afterName)
+        || !/^\s*[:=-]?\s*\d/u.test(afterName)) continue;
       const firstReading = afterName.match(/(?:^|[\s:=-])(\d+(?:\.\d+)?)(?=\s|$)/);
       const printedUnit = typeof item.unit === 'string' ? item.unit.trim() : '';
       const measuredPart = printedUnit && afterName.includes(printedUnit)
@@ -98,16 +102,36 @@ export class MedicalReportService {
 
   private factsFromTextLayer(text: string, lines?: OcrLine[]): ReportFacts {
     const tests: ReportFact[] = [];
-    for (const line of text.split(/\r?\n/).slice(0, 250)) {
-      const match = line.trim().match(/(?:^|\/\s*)(fasting blood glucose|blood glucose|fasting blood sugar|blood sugar|glucose|hba1c|hb a1c)\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*(mg\s*\/\s*dL|%)\s*(?:\(?\s*(\d+(?:\.\d+)?\s*[-–]\s*\d+(?:\.\d+)?\s*(?:mg\s*\/\s*dL|%)?)\s*\)?)?\s*$/i);
+    const sourceLines = text.split(/\r?\n/).slice(0, 250).map((line) => line.trim());
+    const interpretation = sourceLines.findIndex((line) => /^(?:interpretation|comments?|notes?)\b/i.test(line));
+    const resultLines = sourceLines.slice(0, interpretation < 0 ? undefined : interpretation);
+    const namePattern = '(?:glucose,?\\s*fasting|fasting\\s+(?:blood\\s+)?(?:glucose|sugar)|random\\s+(?:blood\\s+)?(?:glucose|sugar)|rbs|blood\\s+glucose|blood\\s+sugar|glucose|hba1c|hb\\s*a1c)';
+    const row = new RegExp(`^(${namePattern})\\s*[:\\-]?\\s*(\\d+(?:\\.\\d+)?)\\s*(mg\\s*\\/\\s*dL|%)\\s*(?:\\(?\\s*(\\d+(?:\\.\\d+)?\\s*[-–]\\s*\\d+(?:\\.\\d+)?\\s*(?:mg\\s*\\/\\s*dL|%)?)\\s*\\)?)?$`, 'i');
+    for (const line of resultLines) {
+      const match = line.match(row) || line.match(new RegExp(`^(?:[^/]+/\\s*)(${namePattern})\\s*[:\\-]?\\s*(\\d+(?:\\.\\d+)?)\\s*(mg\\s*\\/\\s*dL|%)\\s*(?:\\(?\\s*(\\d+(?:\\.\\d+)?\\s*[-–]\\s*\\d+(?:\\.\\d+)?\\s*(?:mg\\s*\\/\\s*dL|%)?)\\s*\\)?)?$`, 'i'));
       if (match) {
-        const sourceLine = lines?.find((source) => source.text === line.trim());
+        const sourceLine = lines?.find((source) => source.text === line);
         tests.push({ name: match[1], value: match[2], unit: match[3], referenceRange: match[4] || null,
-          evidence: line.trim(), ...(sourceLine ? { source: { page: sourceLine.page, confidence: sourceLine.confidence,
+          evidence: line, ...(sourceLine ? { source: { page: sourceLine.page, confidence: sourceLine.confidence,
             bbox: sourceLine.bbox, rotationDegrees: sourceLine.rotationDegrees } } : {}) });
       }
     }
-    return { reportName: null, reportDate: null, tests };
+    // Some text PDFs place the analyte, assay method, and numeric columns on separate lines.
+    // Accept only a standalone test label followed by a strict numeric row before interpretation.
+    for (let index = 0; index < resultLines.length - 1; index++) {
+      const name = resultLines[index].match(new RegExp(`^(${namePattern})$`, 'i'))?.[1];
+      if (!name) continue;
+      const next = resultLines[index + 1];
+      const valueLine = /^(?:hexokinase|enzymatic|photometric)$/i.test(next)
+        ? resultLines[index + 2] : next;
+      const result = valueLine?.match(/^(\d+(?:\.\d+)?)\s+(mg\s*\/\s*dL|%)\s+(\d+(?:\.\d+)?\s*[-–]\s*\d+(?:\.\d+)?(?:\s*(?:mg\s*\/\s*dL|%))?)$/i);
+      if (!result) continue;
+      tests.push({ name, value: result[1], unit: result[2], referenceRange: result[3],
+        evidence: `${name}\n${valueLine}` });
+    }
+    const reportDate = resultLines.find((line) => /^(?:report\s+)?date\s*[:\t ]+\d{1,2}\/[A-Za-z]{3}\/\d{4}$/i.test(line))
+      ?.match(/\d{1,2}\/[A-Za-z]{3}\/\d{4}/)?.[0] || null;
+    return { reportName: null, reportDate, tests };
   }
 
   private conflictingNames(lines: OcrLine[]): Set<string> {
@@ -153,6 +177,11 @@ export class MedicalReportService {
     }
     if (!text.trim()) return { text: '', facts: { reportName: null, reportDate: null, tests: [] }, source: null, failed: false };
     const conflicts = ocrLines ? this.conflictingNames(ocrLines) : new Set<string>();
+    const partialTableFacts: ReportFact[] = (ocrLines || []).filter((line) => line.measurement).map((line) => ({
+      ...line.measurement!, evidence: line.text,
+      source: { page: line.page, confidence: line.confidence, bbox: line.bbox,
+        rotationDegrees: line.rotationDegrees },
+    }));
     const verifiedFacts = (facts: ReportFacts): ReportFacts => {
       const readings = new Map<string, Set<string>>();
       for (const test of facts.tests) {
@@ -163,14 +192,17 @@ export class MedicalReportService {
       const tests = facts.tests.filter((test) => {
         const key = test.name.toLowerCase().replace(/[^\p{L}\d]/gu, '');
         return !conflicts.has(key) && readings.get(key)?.size === 1;
-      });
+      }).filter((test, index, all) => all.findIndex((other) => other.name === test.name && other.value === test.value) === index);
       return { ...facts, tests, partialReading: hasUncertainRows,
         ...(tests.length ? { verification: source === 'INDEPENDENT_OCR_V1'
           ? 'INDEPENDENT_OCR_V1' as const : 'PDF_TEXT_LAYER_V1' as const } : {}) };
     };
-    const fallback = () => verifiedFacts(this.factsFromTextLayer(text, ocrLines));
+    const fallback = () => {
+      const parsed = this.factsFromTextLayer(text, ocrLines);
+      return verifiedFacts({ ...parsed, tests: [...parsed.tests, ...partialTableFacts] });
+    };
     const deterministic = fallback();
-    if (source === 'INDEPENDENT_OCR_V1' && deterministic.tests.length) {
+    if (deterministic.tests.length) {
       return { text, facts: deterministic, source, failed: false };
     }
     try {
@@ -197,28 +229,66 @@ export class MedicalReportService {
     }
   }
 
-  private async explain(facts: ReportFacts, language: string): Promise<string> {
+  private explain(facts: ReportFacts, language: string): string {
     const hindi = language === 'hi';
     if (!facts.tests.length) return hindi
       ? 'रिपोर्ट साफ़ पढ़ी नहीं जा सकी। कृपया साफ़ फोटो लें या डॉक्टर से बात करें।'
       : 'The report could not be read clearly. Please upload a clearer copy or speak to a clinician.';
-    const category = this.categoryFromFacts(facts);
-    if (hindi) {
-      if (category === 'BLOOD_GLUCOSE') return 'इस रिपोर्ट में खून की शुगर की जाँच लिखी है। नीचे लिखा नतीजा और लैब की सीमा असली रिपोर्ट से मिलाएँ। इसका मतलब डॉक्टर से पूछें।';
-      if (category === 'HBA1C') return 'इस रिपोर्ट में HbA1c की जाँच लिखी है। यह पिछले कुछ महीनों की औसत शुगर से जुड़ी जाँच है। नतीजे का मतलब डॉक्टर से पूछें।';
-      if (category === 'GLUCOSE_HBA1C') return 'इस रिपोर्ट में खून की शुगर और HbA1c की जाँचें लिखी हैं। नीचे दिए नतीजे असली रिपोर्ट से मिलाएँ और डॉक्टर से बात करें।';
-      return 'रिपोर्ट में लिखी जाँचें और नतीजे नीचे दिखाए गए हैं। इनका मतलब डॉक्टर से पूछें।';
-    }
-    if (category === 'BLOOD_GLUCOSE') return 'This report lists a blood glucose test. Check the result and lab range against the original, and discuss it with a clinician.';
-    if (category === 'HBA1C') return 'This report lists an HbA1c test, which relates to average blood sugar over recent months. Discuss the result with a clinician.';
-    return 'The tests and results found in this report are shown below. Check the original and discuss them with a clinician.';
+    const paragraphs = facts.tests.map((test) => {
+      const name = test.name.toLowerCase();
+      const kind = /\b(?:hba1c|hb\s*a1c|glycated\s+hemoglobin)\b/i.test(name) ? 'hba1c'
+        : /fasting/i.test(name) ? 'fasting' : /\b(?:random|rbs)\b/i.test(name) ? 'random' : 'other';
+      const measured = Number(test.value);
+      const range = test.referenceRange?.match(/^\s*(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*(mg\s*\/\s*dL|%)?\s*$/i);
+      const sameUnit = !range?.[3] || range[3].replace(/\s/g, '').toLowerCase() === test.unit?.replace(/\s/g, '').toLowerCase();
+      const lower = range ? Number(range[1]) : NaN;
+      const upper = range ? Number(range[2]) : NaN;
+      const comparable = Number.isFinite(measured) && Number.isFinite(lower) && Number.isFinite(upper)
+        && lower < upper && sameUnit;
+      const relative = comparable ? measured < lower ? 'below' : measured > upper ? 'above' : 'within' : null;
+      const unitSuffix = test.unit === '%' ? '%' : test.unit ? ` ${test.unit}` : '';
+      const reading = `${test.value}${unitSuffix}`;
+      const printedRange = range ? `${range[1]}–${range[2]}${unitSuffix}` : '';
+      if (hindi) {
+        const meaning = kind === 'fasting' ? 'यह जाँच खाली पेट खून में शुगर की मात्रा बताती है।'
+          : kind === 'random' ? 'यह जाँच किसी भी समय खून में शुगर की मात्रा बताती है।'
+            : kind === 'hba1c' ? 'यह जाँच पिछले लगभग 3 महीनों की औसत शुगर का संकेत देती है।' : '';
+        const comparison = relative ? ` लैब की छपी सीमा ${printedRange} है; नतीजा ${relative === 'above' ? 'उससे ऊपर' : relative === 'below' ? 'उससे नीचे' : 'उसके भीतर'} है।`
+          : ' लैब की सीमा भरोसे से नहीं पढ़ी गई, इसलिए तुलना नहीं की गई।';
+        const next = relative === 'above' || relative === 'below'
+          ? kind === 'fasting' && measured > upper * 2 ? ' इस नतीजे पर जल्द डॉक्टर से बात करें।'
+            : ' इस नतीजे पर डॉक्टर से बात करें।'
+          : relative === 'within' ? ' एक नतीजे से बीमारी की पुष्टि या खारिज नहीं होती।'
+            : ' असली रिपोर्ट देखें और इस नतीजे पर डॉक्टर से बात करें।';
+        return `${test.name}: ${meaning} रिपोर्ट में ${reading} लिखा है।${comparison}${next}`;
+      }
+      const meaning = kind === 'fasting' ? 'This measures blood sugar after fasting.'
+        : kind === 'random' ? 'This measures blood sugar at any time of day.'
+          : kind === 'hba1c' ? 'This reflects average blood sugar over about three months.' : '';
+      const comparison = relative ? ` The printed lab range is ${printedRange}; this result is ${relative} that range.`
+        : ' The lab range was not read reliably, so no comparison was made.';
+      const next = relative === 'above' || relative === 'below'
+        ? kind === 'fasting' && measured > upper * 2 ? ' Discuss this result with a clinician soon.'
+          : ' Discuss this result with a clinician.'
+        : relative === 'within' ? ' One result cannot confirm or rule out a condition.'
+          : ' Check the original report and discuss this result with a clinician.';
+      return `${test.name}: ${meaning} The reported result is ${reading}.${comparison}${next}`;
+    });
+    paragraphs.push(hindi ? 'दवा या खुराक डॉक्टर की सलाह के बिना न बदलें। असली रिपोर्ट से मिलाएँ।'
+      : 'Do not change medicines or doses without medical advice. Compare with the original report.');
+    return paragraphs.join('\n\n');
+  }
+
+  private explanationForFacts(facts: ReportFacts, language: string): string {
+    return this.explain(facts, language) + (language === 'hi'
+      ? '\n\nकुछ नतीजे छूट सकते हैं।' : '\n\nSome results may have been missed.');
   }
 
   private categoryFromFacts(facts: ReportFacts): string | null {
     // Only evidence-backed test names classify a report. A title alone can be wrong.
     const names = facts.tests.map((test) => test.name).join(' ');
     const hba1c = /\b(?:hba1c|hb\s*a1c|glycated\s+hemoglobin|glycosylated\s+haemoglobin)\b/i.test(names);
-    const glucose = /\b(?:glucose|blood\s+sugar|fasting\s+(?:blood\s+)?sugar|post\s*prandial\s+(?:blood\s+)?sugar)\b/i.test(names);
+    const glucose = /\b(?:glucose|rbs|blood\s+sugar|fasting\s+(?:blood\s+)?sugar|post\s*prandial\s+(?:blood\s+)?sugar)\b/i.test(names);
     if (hba1c && glucose) return 'GLUCOSE_HBA1C';
     if (hba1c) return 'HBA1C';
     if (glucose) return 'BLOOD_GLUCOSE';
@@ -256,13 +326,10 @@ export class MedicalReportService {
     let explanation = extracted.failed
       ? language === 'hi' ? 'रिपोर्ट पढ़ने की सेवा अभी काम नहीं कर रही। कृपया थोड़ी देर बाद फिर कोशिश करें।'
         : 'Report processing failed. Please try again later.'
-      : extracted.source && facts.tests.length ? await this.explain(facts, language)
+      : extracted.source && facts.tests.length ? this.explanationForFacts(facts, language)
       : language === 'hi'
         ? 'इस फोटो या स्कैन से नतीजे भरोसे से नहीं पढ़े जा सकते। असली रिपोर्ट देखें और डॉक्टर से बात करें।'
         : 'Results cannot be read reliably from this image or scan. View the original and discuss it with a clinician.';
-    if (facts.tests.length) explanation += language === 'hi'
-      ? ' कुछ नतीजे छूट सकते हैं। असली रिपोर्ट से मिलाएँ।'
-      : ' Some results may have been missed. Compare with the original report.';
     const report = await this.reports.manager.transaction(async (manager) => {
       if (category) await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`${identity.tenantId}:${owner.subject}:${category}`]);
       const current = category ? await manager.findOne(MedicalReport, {
@@ -286,7 +353,7 @@ export class MedicalReportService {
     const verified = this.isVerifiedReport(row);
     return { id: row.id, filename: row.filename, mimeType: row.mimeType,
       facts: verified ? row.extractedFacts : { reportName: null, reportDate: null, tests: [] },
-      explanation: verified ? row.explanation : row.extractionStatus === 'EXTRACTED'
+      explanation: verified ? this.explanationForFacts(row.extractedFacts as ReportFacts, language) : row.extractionStatus === 'EXTRACTED'
         ? language === 'hi' ? 'पुरानी रिपोर्ट के नतीजों का स्रोत सत्यापित नहीं है। असली रिपोर्ट देखें।'
           : 'Earlier extracted results have no verifiable source. View the original report.'
         : row.extractionStatus === 'EXTRACTION_FAILED'
@@ -380,7 +447,7 @@ export class MedicalReportService {
       ? report.extractedFacts as ReportFacts : { reportName: null, reportDate: null, tests: [] };
     const hindi = /[\u0900-\u097f]/u.test(question) || identity.preferredLanguage === 'hi'
       || /\b(kya|samjha|batao|hai|nahi|mujhe)\b/i.test(question);
-    const unsupported = /diagnos|disease|treat|medicin|dose|tablet|stop|start|change|danger|normal|abnormal|मुझे क्या हुआ|इलाज|दवा|खुराक|सामान्य|असामान्य/i.test(question);
+    const unsupported = /diagnos|disease|treat|medicin|dose|tablet|stop|start|change|danger|मुझे क्या हुआ|इलाज|दवा|खुराक/i.test(question);
     let summary = unsupported
       ? (hindi ? 'मैं इस रिपोर्ट से बीमारी या इलाज तय नहीं कर सकता। कृपया डॉक्टर से बात करें।'
         : 'I cannot diagnose or decide treatment from this report. Please speak to a clinician.')
@@ -390,13 +457,12 @@ export class MedicalReportService {
       : !facts.tests?.length
         ? (hindi ? 'यह रिपोर्ट साफ़ पढ़ी नहीं जा सकी। कृपया साफ़ प्रति दें या डॉक्टर से बात करें।'
           : 'This report could not be read clearly. Please provide a clearer copy or speak to a clinician.')
-        : (hindi ? 'इस रिपोर्ट में लिखे जाँच के नाम और नतीजे नीचे हैं। इनका मतलब डॉक्टर से पूछें।'
-          : 'These are the test names and results visible in this report. Ask a clinician what they mean for you.');
-    if (!unsupported && facts.tests?.length) summary += hindi
-      ? ' कुछ नतीजे छूट सकते हैं। असली रिपोर्ट से मिलाएँ।'
-      : ' Some results may have been missed. Compare with the original report.';
+        : await this.explain(facts, hindi ? 'hi' : 'en');
+    if (!unsupported && facts.tests?.length && facts.partialReading) summary += hindi
+      ? '\n\nरिपोर्ट का कुछ हिस्सा छूटा हो सकता है। असली रिपोर्ट देखें।'
+      : '\n\nSome results may have been missed. Check the original report.';
     return { responseType: 'text', content: { summary, en: summary, hi: summary,
-      sections: unsupported ? [] : (facts.tests || []).map((fact) => ({ body: `${fact.name}: ${fact.value}${fact.unit ? ` ${fact.unit}` : ''}${fact.referenceRange ? ` (${fact.referenceRange})` : ''}` })),
+      sections: [],
       report_id: report.id }, intent: 'REPORT_EDUCATION', selectedAgent: 'report-reader', safetyStatus: 'SAFE' };
   }
 }

@@ -12,6 +12,8 @@ export type OcrLine = {
   confidence: number;
   bbox: { x0: number; y0: number; x1: number; y1: number };
   rotationDegrees?: number;
+  /** Fields independently legible even when another part of a table row is uncertain. */
+  measurement?: { name: string; value: string; unit: string; referenceRange: null };
 };
 export type OcrReadResult = { lines: OcrLine[]; hasUncertainRows: boolean };
 
@@ -35,6 +37,22 @@ export class ReportOcrService {
       && line.words.filter((word) => /^\d/.test(word.text)).every((word) => word.confidence >= 85);
   }
 
+  private partialTableMeasurement(line: { text: string; words: Array<{ text: string; confidence: number }> }) {
+    const text = this.normalized(line.text);
+    // A narrow laboratory-row shape: the measured value must immediately follow the test name.
+    const match = text.match(/^((?:glucose,\s*fasting,?(?:\s*plasma,?)?|fasting blood glucose))\s+(\d+(?:\.\d+)?)\s+(?:(?:very\s+)?high|low|normal)\s+\d+(?:\.\d+)?\s*[-–]\s*\d+(?:\.\d+)?\s+(mg\s*\/\s*dL)$/i);
+    if (!match) return null;
+    const nameWords = match[1].split(/\s+/).length;
+    const words = line.words;
+    const valueWord = words[nameWords];
+    const unitWord = words[words.length - 1];
+    if (!words.slice(0, nameWords).every((word) => word.confidence >= this.minLineConfidence)
+      || valueWord?.text !== match[2] || valueWord.confidence < this.minLineConfidence
+      || unitWord?.text !== match[3] || unitWord.confidence < this.minLineConfidence) return null;
+    return { evidence: `${match[1]} ${match[2]}`, name: match[1].replace(/,\s*$/, ''),
+      value: match[2], unit: match[3], referenceRange: null as null };
+  }
+
   private async rescueLine(worker: Awaited<ReturnType<typeof createWorker>>, image: Buffer,
     line: { text: string; bbox: OcrLine['bbox'] }, page: number, angle: number, deadline: number): Promise<OcrLine | null> {
     const metadata = await sharp(image).metadata();
@@ -50,11 +68,18 @@ export class ReportOcrService {
       await this.bounded(worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE }), deadline);
       const result = await this.bounded(worker.recognize(crop, {}, { text: true, blocks: true }), deadline);
       const recognized = (result.data.blocks || []).flatMap((block) => block.paragraphs.flatMap((paragraph) => paragraph.lines))[0];
-      if (!recognized || this.normalized(recognized.text) !== this.normalized(line.text)
-        || !this.strongLine(recognized)
-        || recognized.words.some((word) => /[\p{L}\d]/u.test(word.text) && word.confidence < 85)) return null;
-      return { text: this.normalized(recognized.text), page, confidence: Math.round(recognized.confidence),
-        bbox: line.bbox, rotationDegrees: angle };
+      if (!recognized || this.normalized(recognized.text) !== this.normalized(line.text)) return null;
+      if (this.strongLine(recognized)
+        && !recognized.words.some((word) => /[\p{L}\d]/u.test(word.text) && word.confidence < 85)) {
+        return { text: this.normalized(recognized.text), page, confidence: Math.round(recognized.confidence),
+          bbox: line.bbox, rotationDegrees: angle };
+      }
+      const partial = this.partialTableMeasurement(recognized);
+      if (!partial) return null;
+      return { text: partial.evidence, page, confidence: Math.round(Math.min(
+        ...recognized.words.slice(0, partial.name.split(/\s+/).length + 1).map((word) => word.confidence),
+        recognized.words[recognized.words.length - 1].confidence)), bbox: line.bbox, rotationDegrees: angle,
+      measurement: { name: partial.name, value: partial.value, unit: partial.unit, referenceRange: null } };
     } finally {
       await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK });
     }

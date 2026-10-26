@@ -27,6 +27,21 @@ async function upload(name: string) {
 }
 
 describe('local OCR with synthetic reports', () => {
+  it('accepts only a clearly read glucose table value and omits an uncertain range', () => {
+    const ocr = new ReportOcrService();
+    const text = 'GLUCOSE, FASTING, 245.00 Very High 70.00 - 100.00 mg/dL';
+    const words = ['GLUCOSE,', 'FASTING,', '245.00', 'Very', 'High', '70.00', '-', '100.00', 'mg/dL']
+      .map((word, index) => ({ text: word, confidence: index === 5 || index === 6 ? 71 : 95 }));
+    expect((ocr as any).partialTableMeasurement({ text, words })).toEqual({
+      evidence: 'GLUCOSE, FASTING, 245.00', name: 'GLUCOSE, FASTING',
+      value: '245.00', unit: 'mg/dL', referenceRange: null,
+    });
+    words[2].confidence = 70;
+    expect((ocr as any).partialTableMeasurement({ text, words })).toBeNull();
+    words[2].confidence = 95;
+    expect((ocr as any).partialTableMeasurement({ text: text.replace('245.00', '245.00 or 425.00'), words })).toBeNull();
+  });
+
   it('does not treat printable bytes in a malformed PDF as a verified text layer', async () => {
     const malformed = Buffer.from('%PDF- Glucose 110 mg/dL 70-99 mg/dL');
     await expect(new ReportOcrService().readPdfTextLayer(malformed)).rejects.toThrow();

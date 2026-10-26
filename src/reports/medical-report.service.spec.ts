@@ -47,6 +47,66 @@ describe('patient medical reports', () => {
       unit: 'mg/dL', referenceRange: '70-99 mg/dL' })]);
   });
 
+  it('reads a split RBS PDF table but never treats interpretation thresholds as measured results', async () => {
+    const { service, ocr, ai, reports } = build();
+    ocr.readPdfTextLayer.mockResolvedValue([
+      'Random Blood Sugar, RBS (Glucose), Fluoride Plasma',
+      'Date \t03/Apr/2023', 'Unit \tBio Ref Interval', 'Random Glucose', 'Hexokinase',
+      '84 \tmg/dL \t74 - 140',
+      'Interpretation A random plasma glucose of > 200 mg/dL may need follow-up.',
+    ].join('\n'));
+    ai.healthCheck.mockResolvedValue({ status: 'AVAILABLE' });
+    const file = { buffer: Buffer.from('%PDF- synthetic RBS table'), originalname: 'synthetic.pdf', mimetype: 'application/pdf' };
+    const result = await service.upload('session-a', identity, file, true, 'hi', 'corr');
+    expect(result.extractionStatus).toBe('EXTRACTED');
+    expect(result.facts.reportDate).toBe('03/Apr/2023');
+    expect(result.facts.tests).toEqual([expect.objectContaining({ name: 'Random Glucose', value: '84',
+      unit: 'mg/dL', referenceRange: '74 - 140' })]);
+    expect(result.explanation).toContain('84 mg/dL');
+    expect(result.explanation).toContain('74–140 mg/dL');
+    expect(result.explanation).toContain('उसके भीतर');
+    expect(result.explanation).not.toContain('200');
+    expect(ai.generate).not.toHaveBeenCalled();
+    const builder: any = { where: jest.fn(), getOne: jest.fn().mockResolvedValue({
+      id: 'synthetic-rbs', tenantId: 'tenant-a', patientRef: 'mobile-user:patient-a',
+      mimeType: 'application/pdf', extractionStatus: 'EXTRACTED', extractedFacts: result.facts,
+    }) };
+    builder.where.mockReturnValue(builder);
+    reports.createQueryBuilder.mockReturnValue(builder);
+    const detail = await service.detail('session-a', 'synthetic-rbs', { ...identity, preferredLanguage: 'hi' });
+    expect(detail.explanation).toContain('84 mg/dL');
+    expect(detail.explanation).toContain('उसके भीतर');
+    const answer = await service.answerQuestion('session-a', 'synthetic-rbs', { ...identity, preferredLanguage: 'hi' },
+      'क्या यह नतीजा सामान्य सीमा में है?');
+    expect(answer.content.summary).toContain('84 mg/dL');
+    expect(answer.content.summary).toContain('उसके भीतर');
+    expect(answer.content.sections).toEqual([]);
+  });
+
+  it('rejects an AI candidate taken from an interpretation threshold', () => {
+    const { service } = build();
+    const evidence = 'Interpretation A random plasma glucose of > 200 mg/dL may need follow-up.';
+    const facts = (service as any).factsFromOcr({ tests: [{ name: 'glucose', value: '200',
+      unit: 'mg/dL', evidence }] }, evidence);
+    expect(facts.tests).toEqual([]);
+  });
+
+  it.each([
+    ['GLUCOSE, FASTING', '245.00', 'mg/dL', '70.00-100.00', 'उससे ऊपर'],
+    ['HbA1c', '6.2', '%', '4.0-5.6', 'उससे ऊपर'],
+    ['Random Glucose', '84', 'mg/dL', '74-140', 'उसके भीतर'],
+  ])('explains verified %s against its printed lab range', async (name, value, unit, referenceRange, comparison) => {
+    const { service, ocr } = build();
+    ocr.readPdfTextLayer.mockResolvedValue(`${name} ${value} ${unit} ${referenceRange}`);
+    const file = { buffer: Buffer.from('%PDF- synthetic measurement'), originalname: 'synthetic.pdf', mimetype: 'application/pdf' };
+    const result = await service.upload('session-a', identity, file, true, 'hi', 'corr');
+    expect(result.extractionStatus).toBe('EXTRACTED');
+    expect((result.facts.tests as any[])[0]).toEqual(expect.objectContaining({ name, value, unit, referenceRange }));
+    expect(result.explanation).toContain(unit === '%' ? `${value}%` : `${value} ${unit}`);
+    expect(result.explanation).toContain(comparison);
+    expect(result.explanation).toContain('दवा या खुराक डॉक्टर की सलाह के बिना न बदलें');
+  });
+
   it('requires explicit upload consent and rejects a mismatched file signature', async () => {
     const { service, reports } = build();
     const fakePdf = { buffer: Buffer.from('not a PDF'), originalname: 'report.pdf', mimetype: 'application/pdf' };
@@ -124,6 +184,25 @@ describe('patient medical reports', () => {
     expect(result.category).toBeNull();
     expect(result.readingCompleteness).toBe('POSSIBLY_PARTIAL');
     expect(result.explanation).toContain('Some results may have been missed');
+  });
+
+  it('shows a verified table value while withholding its uncertain reference range', async () => {
+    const { service, ocr, ai } = build();
+    ocr.read.mockResolvedValue({ lines: [{ text: 'GLUCOSE, FASTING, 245.00', page: 1, confidence: 95,
+      bbox: { x0: 1, y0: 2, x1: 100, y1: 20 },
+      measurement: { name: 'GLUCOSE, FASTING', value: '245.00', unit: 'mg/dL', referenceRange: null } }],
+    hasUncertainRows: true });
+    const file = { buffer: Buffer.from([0xff, 0xd8, 0xff, 0x00]), originalname: 'table.jpg', mimetype: 'image/jpeg' };
+    const result = await service.upload('session-a', identity, file, true, 'en', 'corr');
+    expect(result.extractionStatus).toBe('EXTRACTED');
+    expect(result.facts.tests).toEqual([expect.objectContaining({ name: 'GLUCOSE, FASTING', value: '245.00',
+      unit: 'mg/dL', referenceRange: null, evidence: 'GLUCOSE, FASTING, 245.00' })]);
+    expect(result.readingCompleteness).toBe('POSSIBLY_PARTIAL');
+    expect(result.category).toBeNull();
+    expect(result.explanation).toContain('245.00 mg/dL');
+    expect(result.explanation).toContain('lab range was not read reliably');
+    expect(result.explanation).not.toContain('70–100');
+    expect(ai.generate).not.toHaveBeenCalled();
   });
 
   it('rejects a model value that differs from an OCR line', async () => {
@@ -268,7 +347,8 @@ describe('patient medical reports', () => {
     expect(answer.content.sections).toEqual([]);
     expect(answer.content.summary).toContain('cannot diagnose or decide treatment');
     const hinglish = await service.answerQuestion('session-a', 'report-a', { ...identity, preferredLanguage: 'hi' }, 'Mujhe samjha do');
-    expect(hinglish.content.summary).toContain('इस रिपोर्ट');
+    expect(hinglish.content.summary).toContain('रिपोर्ट में 110 लिखा है');
+    expect(hinglish.content.sections).toEqual([]);
   });
 
   it('keeps a patient’s reports available after a new valid session and consent', async () => {
