@@ -18,14 +18,16 @@ export class SarvamTtsProvider implements TextToSpeechProvider {
     if (!this.config.sarvamEnabled || !this.config.sarvamApiKey) {
       throw new TextToSpeechProviderError('NOT_CONFIGURED', 'Sarvam TTS is not configured.');
     }
+    const model = this.config.sarvamBulbulTtsModel || 'bulbul:v3';
     const response = await this.request('/text-to-speech', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         text: input.text,
         language_code: input.languageCode || 'hi-IN',
-        model: this.config.sarvamBulbulTtsModel || 'bulbul:v3',
-        speaker: input.voiceId || 'shubh',
+        model,
+        speaker: model === 'bulbul:v3' ? input.voiceId || 'shubh' : 'shubh',
+        ...(input.pace !== undefined ? { pace: input.pace } : {}),
         output_audio_codec: 'mp3',
       }),
     });

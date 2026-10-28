@@ -1,4 +1,4 @@
-import { IsIn, IsString, MaxLength } from 'class-validator';
+import { IsIn, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 export class VoiceTtsDto {
   @IsString()
@@ -7,4 +7,14 @@ export class VoiceTtsDto {
 
   @IsIn(['hi-IN', 'en-IN', 'ta-IN', 'kn-IN'])
   language_code!: 'hi-IN' | 'en-IN' | 'ta-IN' | 'kn-IN';
+
+  @IsOptional()
+  @IsIn(['priya', 'ishita', 'neha'])
+  voice_id?: 'priya' | 'ishita' | 'neha';
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0.8)
+  @Max(1)
+  pace?: number;
 }

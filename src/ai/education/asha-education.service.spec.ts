@@ -59,6 +59,11 @@ describe('ASHA NCD evidence gate', () => {
 
     const answer = await service.maybeAnswer('What is diabetes?', identity, 'corr');
     expect(answer?.content.summary).toContain('Diabetes affects blood sugar.');
+    const [prompt] = ai.generate.mock.calls[0];
+    expect(prompt).toContain('calm, respectful warmth of an ASHA Didi');
+    expect(prompt).toContain('not a human ASHA, ANM, nurse, or doctor');
+    expect(prompt).toContain('Do not promise free care, scheme eligibility');
+    expect(prompt).toContain('strictly use no more than 25 spoken words');
     expect(audit.logEvent).toHaveBeenCalledWith(expect.objectContaining({
       details: { citations: [{ documentId: 'doc-a', chunkId: 'chunk-a', version: '1', page: 2, section: 'NCD basics' }] },
     }));

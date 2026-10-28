@@ -4,6 +4,7 @@ export interface TTSRequest {
   text: string;
   voiceId?: string;
   languageCode?: string;
+  pace?: number;
 }
 
 export interface TTSResponse {

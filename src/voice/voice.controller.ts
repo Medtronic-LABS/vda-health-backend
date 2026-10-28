@@ -101,7 +101,8 @@ export class VoiceController {
           necessityReason: 'Creates accessibility playback from the final patient-facing response.',
         },
         async () => {
-          result = await this.voice.synthesize({ text: body.text, languageCode: body.language_code });
+          result = await this.voice.synthesize({ text: body.text, languageCode: body.language_code,
+            voiceId: body.voice_id, pace: body.pace });
           return {
             provider: result.provider,
             model: result.model,
