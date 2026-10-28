@@ -422,7 +422,7 @@ export class PrescriptionService {
       abhaNumber: null,
     };
   }
-  private async resolvePatientMap(tenantId: string, patientRefs: string[]): Promise<Map<string, PrescriptionPatientSummary>> {
+  private async resolvePatientMap(_tenantId: string, patientRefs: string[]): Promise<Map<string, PrescriptionPatientSummary>> {
     const map = new Map<string, PrescriptionPatientSummary>();
     for (const ref of patientRefs) {
       map.set(ref, this.fallbackPatientSummary(ref));
