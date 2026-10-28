@@ -24,6 +24,131 @@ function build() {
 }
 
 describe('patient medical reports', () => {
+  it.each([
+    ['CBC', 'Hemoglobin 12.4 g/dL 12.0-15.5 g/dL\nWBC Count 6800 /uL 4000-11000 /uL\nPlatelets 250000 /uL 150000-450000 /uL',
+      [['Hemoglobin', '12.4', '12.0-15.5 g/dL'], ['WBC Count', '6800', '4000-11000 /uL'], ['Platelets', '250000', '150000-450000 /uL']]],
+    ['thyroid', 'TSH 2.4 uIU/mL 0.4-4.0 uIU/mL\nT4 8.1 mcg/dL 5-12 mcg/dL',
+      [['TSH', '2.4', '0.4-4.0 uIU/mL'], ['T4', '8.1', '5-12 mcg/dL']]],
+    ['kidney', 'Creatinine 1.1 mg/dL 0.6-1.3 mg/dL\nUrea 28 mg/dL 15-40 mg/dL',
+      [['Creatinine', '1.1', '0.6-1.3 mg/dL'], ['Urea', '28', '15-40 mg/dL']]],
+    ['liver', 'ALT 32 U/L 7-56 U/L\nBilirubin 0.8 mg/dL 0.2-1.2 mg/dL',
+      [['ALT', '32', '7-56 U/L'], ['Bilirubin', '0.8', '0.2-1.2 mg/dL']]],
+    ['lipids', 'Total Cholesterol 180 mg/dL 125-200 mg/dL\nHDL 50 mg/dL 40-60 mg/dL\nLDL 110 mg/dL 0-130 mg/dL\nTriglycerides 140 mg/dL 0-150 mg/dL',
+      [['Total Cholesterol', '180', '125-200 mg/dL'], ['HDL', '50', '40-60 mg/dL'],
+        ['LDL', '110', '0-130 mg/dL'], ['Triglycerides', '140', '0-150 mg/dL']]],
+    ['unknown', 'Mystery Marker 7.3 U/L 5-9 U/L', [['Mystery Marker', '7.3', '5-9 U/L']]],
+  ])('reads generic %s rows without assuming a glucose test', (_kind, source, expected) => {
+    const { service } = build();
+    const facts = (service as any).factsFromTextLayer(source);
+    expect(facts.tests.map(({ name, value, referenceRange }: any) => [name, value, referenceRange])).toEqual(expected);
+  });
+
+  it('reads a printed urine result and reference category without a numeric comparison', () => {
+    const { service } = build();
+    const facts = (service as any).factsFromTextLayer('Urine Protein Negative Negative');
+    expect(facts.tests).toEqual([expect.objectContaining({ name: 'Urine Protein', value: 'Negative',
+      referenceRange: 'Negative', unit: null })]);
+  });
+
+  it('retains a lab-printed high flag without using it as the measured value', () => {
+    const { service } = build();
+    const facts = (service as any).factsFromTextLayer('GLUCOSE, FASTING 245.00 Very High 70.00-100.00 mg/dL');
+    expect(facts.tests).toEqual([expect.objectContaining({ name: 'GLUCOSE, FASTING', value: '245.00',
+      unit: 'mg/dL', referenceRange: '70.00-100.00 mg/dL', flag: 'Very High' })]);
+  });
+
+  it('answers a named CBC test without repeating other results and identifies only verified high rows', async () => {
+    const { service, reports } = build();
+    const row = { id: 'cbc-a', tenantId: 'tenant-a', patientRef: 'mobile-user:patient-a',
+      mimeType: 'application/pdf', extractionStatus: 'EXTRACTED',
+      extractedFacts: { reportName: 'Complete Blood Count', reportDate: '03/Apr/2023', verification: 'PDF_TEXT_LAYER_V1',
+        tests: [
+          { name: 'Hemoglobin', value: '12.4', unit: 'g/dL', referenceRange: '12.0-15.5 g/dL', evidence: 'Hemoglobin 12.4 g/dL 12.0-15.5 g/dL' },
+          { name: 'WBC Count', value: '13000', unit: '/uL', referenceRange: '4000-11000 /uL', evidence: 'WBC Count 13000 /uL 4000-11000 /uL' },
+          { name: 'Platelets', value: '250000', unit: '/uL', referenceRange: null, evidence: 'Platelets 250000 /uL' },
+        ] } };
+    const builder: any = { where: jest.fn(), getOne: jest.fn().mockResolvedValue(row) };
+    builder.where.mockReturnValue(builder);
+    reports.createQueryBuilder.mockReturnValue(builder);
+    const detail = await service.detail('session-a', 'cbc-a', identity);
+    expect(detail.reportType).toBe('CBC');
+    const named = await service.answerQuestion('session-a', 'cbc-a', identity, 'Mera hemoglobin kitna hai?');
+    expect(named.content.summary).toContain('Hemoglobin:');
+    expect(named.content.summary).toContain('12.4 g/dL');
+    expect(named.content.summary).not.toContain('WBC Count:');
+    const absent = await service.answerQuestion('session-a', 'cbc-a', identity, 'Mera thyroid kitna hai?');
+    expect(absent.content.summary).toContain('सत्यापित नतीजों में नहीं मिली');
+    expect(absent.content.summary).not.toContain('Hemoglobin:');
+    const high = await service.answerQuestion('session-a', 'cbc-a', identity, 'Kaun si values high hain?');
+    expect(high.content.summary).toContain('WBC Count:');
+    expect(high.content.summary).toContain('13000 /uL');
+    expect(high.content.summary).not.toContain('Hemoglobin:');
+    expect(high.content.summary).not.toContain('Platelets:');
+    const doctor = await service.answerQuestion('session-a', 'cbc-a', identity, 'Doctor ko dikhana chahiye?');
+    expect(doctor.content.summary).toContain('डॉक्टर से बात करें');
+  });
+
+  it('compares only the same verified test and unit across dated reports for the same patient', async () => {
+    const { service, reports } = build();
+    const current = { id: 'current', tenantId: 'tenant-a', patientRef: 'mobile-user:patient-a',
+      mimeType: 'application/pdf', extractionStatus: 'EXTRACTED',
+      extractedFacts: { reportName: null, reportDate: '03/Apr/2023', verification: 'PDF_TEXT_LAYER_V1',
+        tests: [{ name: 'Fasting Glucose', value: '110', unit: 'mg/dL', referenceRange: '70-99 mg/dL' }] } };
+    const old = { ...current, id: 'old', extractedFacts: { ...current.extractedFacts, reportDate: '01/Apr/2023',
+      tests: [{ name: 'Fasting Glucose', value: '100', unit: 'mg/dL', referenceRange: '70-99 mg/dL' },
+        { name: 'Random Glucose', value: '180', unit: 'mg/dL', referenceRange: '74-140 mg/dL' }] } };
+    const otherPatient = { ...old, id: 'foreign', patientRef: 'mobile-user:patient-b',
+      extractedFacts: { ...old.extractedFacts, tests: [{ name: 'Fasting Glucose', value: '999', unit: 'mg/dL', referenceRange: null }] } };
+    const builder: any = { where: jest.fn(), getOne: jest.fn().mockResolvedValue(current) };
+    builder.where.mockReturnValue(builder);
+    reports.createQueryBuilder.mockReturnValue(builder);
+    reports.find.mockResolvedValue([otherPatient, old, current]);
+    const answer = await service.answerQuestion('session-a', 'current', identity, 'Pichli report se kya difference hai?');
+    expect(answer.content.summary).toContain('100 mg/dL');
+    expect(answer.content.summary).toContain('110 mg/dL');
+    expect(answer.content.summary).not.toContain('999');
+    expect(answer.content.summary).not.toContain('180');
+  });
+
+  it('reconstructs one OCR table row from aligned column boxes with page provenance', () => {
+    const { service } = build();
+    const boxes = [
+      { text: 'Hemoglobin', bbox: { x0: 10, y0: 100, x1: 120, y1: 120 } },
+      { text: '12.4', bbox: { x0: 160, y0: 101, x1: 195, y1: 120 } },
+      { text: 'g/dL', bbox: { x0: 210, y0: 100, x1: 245, y1: 120 } },
+      { text: '12.0-15.5', bbox: { x0: 270, y0: 102, x1: 350, y1: 121 } },
+    ].map((line) => ({ ...line, page: 2, confidence: 94 }));
+    const facts = (service as any).factsFromTextLayer(boxes.map((line) => line.text).join('\n'), boxes);
+    expect(facts.tests).toEqual([expect.objectContaining({ name: 'Hemoglobin', value: '12.4',
+      unit: 'g/dL', referenceRange: '12.0-15.5', source: expect.objectContaining({ page: 2, confidence: 94,
+        bbox: { x0: 10, y0: 100, x1: 350, y1: 121 } }) })]);
+  });
+
+  it('does not merge values from separate OCR table rows', () => {
+    const { service } = build();
+    const lines = [
+      { text: 'Hemoglobin', page: 1, confidence: 95, bbox: { x0: 10, y0: 100, x1: 120, y1: 120 } },
+      { text: '12.4 g/dL', page: 1, confidence: 95, bbox: { x0: 150, y0: 100, x1: 230, y1: 120 } },
+      { text: 'WBC Count', page: 1, confidence: 95, bbox: { x0: 10, y0: 145, x1: 120, y1: 165 } },
+      { text: '6800 /uL', page: 1, confidence: 95, bbox: { x0: 150, y0: 145, x1: 230, y1: 165 } },
+    ];
+    const facts = (service as any).factsFromTextLayer(lines.map((line) => line.text).join('\n'), lines);
+    expect(facts.tests.map(({ name, value }: any) => [name, value])).toEqual([
+      ['Hemoglobin', '12.4'], ['WBC Count', '6800'],
+    ]);
+  });
+
+  it('does not reconstruct a measured value from aligned interpretation text', () => {
+    const { service } = build();
+    const lines = [
+      { text: 'Interpretation', page: 1, confidence: 96, bbox: { x0: 10, y0: 200, x1: 150, y1: 220 } },
+      { text: 'Glucose', page: 1, confidence: 95, bbox: { x0: 10, y0: 240, x1: 110, y1: 260 } },
+      { text: '200 mg/dL', page: 1, confidence: 95, bbox: { x0: 150, y0: 240, x1: 290, y1: 260 } },
+    ];
+    const facts = (service as any).factsFromTextLayer(lines.map((line) => line.text).join('\n'), lines);
+    expect(facts.tests).toEqual([]);
+  });
+
   it('rejects an overlong PDF before extracting or storing it', async () => {
     const { service, ocr, reports } = build();
     ocr.assertPdfPageLimit.mockRejectedValue(new Error('REPORT_PDF_PAGE_LIMIT'));
@@ -64,7 +189,8 @@ describe('patient medical reports', () => {
       unit: 'mg/dL', referenceRange: '74 - 140' })]);
     expect(result.explanation).toContain('84 mg/dL');
     expect(result.explanation).toContain('74–140 mg/dL');
-    expect(result.explanation).toContain('उसके भीतर');
+    expect(result.explanation).toContain('इस सीमा के भीतर है');
+    expect(result.explanation).toContain('एक रिपोर्ट से बीमारी की पुष्टि या खारिज नहीं होती');
     expect(result.explanation).not.toContain('200');
     expect(ai.generate).not.toHaveBeenCalled();
     const builder: any = { where: jest.fn(), getOne: jest.fn().mockResolvedValue({
@@ -75,11 +201,11 @@ describe('patient medical reports', () => {
     reports.createQueryBuilder.mockReturnValue(builder);
     const detail = await service.detail('session-a', 'synthetic-rbs', { ...identity, preferredLanguage: 'hi' });
     expect(detail.explanation).toContain('84 mg/dL');
-    expect(detail.explanation).toContain('उसके भीतर');
+    expect(detail.explanation).toContain('इस सीमा के भीतर है');
     const answer = await service.answerQuestion('session-a', 'synthetic-rbs', { ...identity, preferredLanguage: 'hi' },
       'क्या यह नतीजा सामान्य सीमा में है?');
     expect(answer.content.summary).toContain('84 mg/dL');
-    expect(answer.content.summary).toContain('उसके भीतर');
+    expect(answer.content.summary).toContain('इस सीमा के भीतर है');
     expect(answer.content.sections).toEqual([]);
   });
 
@@ -92,9 +218,9 @@ describe('patient medical reports', () => {
   });
 
   it.each([
-    ['GLUCOSE, FASTING', '245.00', 'mg/dL', '70.00-100.00', 'उससे ऊपर'],
-    ['HbA1c', '6.2', '%', '4.0-5.6', 'उससे ऊपर'],
-    ['Random Glucose', '84', 'mg/dL', '74-140', 'उसके भीतर'],
+    ['GLUCOSE, FASTING', '245.00', 'mg/dL', '70.00-100.00', 'इससे ज्यादा है'],
+    ['HbA1c', '6.2', '%', '4.0-5.6', 'इससे ज्यादा है'],
+    ['Random Glucose', '84', 'mg/dL', '74-140', 'इस सीमा के भीतर है'],
   ])('explains verified %s against its printed lab range', async (name, value, unit, referenceRange, comparison) => {
     const { service, ocr } = build();
     ocr.readPdfTextLayer.mockResolvedValue(`${name} ${value} ${unit} ${referenceRange}`);
@@ -104,6 +230,8 @@ describe('patient medical reports', () => {
     expect((result.facts.tests as any[])[0]).toEqual(expect.objectContaining({ name, value, unit, referenceRange }));
     expect(result.explanation).toContain(unit === '%' ? `${value}%` : `${value} ${unit}`);
     expect(result.explanation).toContain(comparison);
+    expect(result.explanation).toContain('इस लैब की छपी सीमा');
+    if (comparison === 'इससे ज्यादा है') expect(result.explanation).toContain('डॉक्टर से बात करें');
     expect(result.explanation).toContain('दवा या खुराक डॉक्टर की सलाह के बिना न बदलें');
   });
 
@@ -201,11 +329,15 @@ describe('patient medical reports', () => {
     expect(result.category).toBeNull();
     expect(result.explanation).toContain('245.00 mg/dL');
     expect(result.explanation).toContain('lab range was not read reliably');
+    expect(result.explanation).toContain('cannot be called normal, high, or low');
     expect(result.explanation).not.toContain('70–100');
     expect(ai.generate).not.toHaveBeenCalled();
+    const hindi = (service as any).explain(result.facts, 'hi');
+    expect(hindi).toContain('इसे सामान्य, ज्यादा या कम नहीं कह सकते');
+    expect(hindi).not.toContain('इससे ज्यादा है');
   });
 
-  it('rejects a model value that differs from an OCR line', async () => {
+  it('uses an independently read hemoglobin row and rejects a conflicting model value', async () => {
     const { service, ocr, ai } = build();
     ocr.read.mockResolvedValue({ lines: [{ text: 'Hemoglobin 13.2 g/dL', page: 1, confidence: 96,
       bbox: { x0: 1, y0: 2, x1: 100, y1: 20 } }], hasUncertainRows: false });
@@ -214,9 +346,11 @@ describe('patient medical reports', () => {
       evidence: 'Hemoglobin 13.2 g/dL' }] } });
     const file = { buffer: Buffer.from([0xff, 0xd8, 0xff, 0x00]), originalname: 'report.jpg', mimetype: 'image/jpeg' };
     const result = await service.upload('session-a', identity, file, true, 'en', 'corr');
-    expect(ai.generate).toHaveBeenCalledTimes(1);
-    expect(result.extractionStatus).toBe('UNREADABLE');
-    expect(result.facts.tests).toEqual([]);
+    expect(ai.generate).not.toHaveBeenCalled();
+    expect(result.extractionStatus).toBe('EXTRACTED');
+    expect(result.facts.tests).toEqual([expect.objectContaining({ name: 'Hemoglobin', value: '13.2', unit: 'g/dL' })]);
+    expect((service as any).factsFromOcr({ tests: [{ name: 'Hemoglobin', value: '13.9', unit: 'g/dL',
+      evidence: 'Hemoglobin 13.2 g/dL' }] }, 'Hemoglobin 13.2 g/dL').tests).toEqual([]);
   });
 
   it('masks previously stored unverified image values in API and chat responses', async () => {

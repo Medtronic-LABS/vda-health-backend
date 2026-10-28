@@ -139,6 +139,19 @@ type PrescriptionContextResolution =
   | { kind: 'INVESTIGATION_EDUCATION'; investigation: SanitizedPrescriptionInvestigation; question: string }
   | { kind: 'MEDICINE_FOR_BP'; medicines: SanitizedPrescriptionMedicine[]; question: string };
 
+/** Narrow education route; the orchestrator applies it only after safety and identity checks. */
+export function basicEducationTopic(inputText: string, patientAge: number | null | undefined): 'FEVER' | 'HBA1C' | null {
+  if (inputText.length > 75 || /\b(?:report|result|value|reading|dose|medicine|tablet|pill|prescription)\b|रिपोर्ट|नतीजा|मान|खुराक|दवा|गोली|पर्ची/u.test(inputText)
+    || /\d/u.test(inputText.replace(/\b(?:hba1c|a1c)\b/giu, ''))) return null;
+  if (Number(patientAge) >= 18 && /\b(?:fever|bukhar)\b|बुखार/u.test(inputText)
+    && !/\b(?:headache|cough|vomit|rash|pain|breath|pregnan|child)\b|सिरदर्द|सिर\s*दर्द|खांसी|खाँसी|उल्टी|दर्द|सांस|साँस|गर्भ/u.test(inputText)
+    && /\b(?:what should i do|what can i do|self care|kya karu|kya karun)\b|क्या\s*(?:करूं|करूँ|करना|करें)/iu.test(inputText)) return 'FEVER';
+  if (/\b(?:hba1c|a1c)\b|एच\s*बी\s*ए\s*वन\s*सी/iu.test(inputText)
+    && !/\b(?:my|mine|meri|mera|mujhe|i have)\b|मेरी|मेरा|मुझे/u.test(inputText)
+    && /\b(?:what|mean|meaning|explain|kya|hota|hai)\b|क्या|होता|समझा/u.test(inputText)) return 'HBA1C';
+  return null;
+}
+
 @Injectable()
 export class AiOrchestratorService implements IAiOrchestrator {
   private readonly logger = new Logger(AiOrchestratorService.name);
@@ -1696,6 +1709,36 @@ export class AiOrchestratorService implements IAiOrchestrator {
       };
     }
 
+    // Narrow, non-prescriptive education for topics absent from the published
+    // ASHA NCD module. Sources: NHS fever in adults and CDC A1C testing.
+    // This runs only after the safety and identity gates; report values and
+    // prescription questions keep their existing authorized routes.
+    const educationTopic = !prescriptionId && !prescriptionContextResolution
+      ? basicEducationTopic(inputText, authorizedPatient?.age) : null;
+    const hindiEducation = requestLanguage.startsWith('hi');
+    const feverEducation = educationTopic === 'FEVER';
+    const hba1cEducation = educationTopic === 'HBA1C';
+    if (feverEducation || hba1cEducation) {
+      const summary = feverEducation
+        ? (hindiEducation
+          ? 'बुखार में आराम करें, पानी या दूसरे तरल लेते रहें और तापमान जाँचें।'
+          : 'If you have a fever, rest, drink fluids, and check your temperature.')
+        : (hindiEducation
+          ? 'HbA1c खून की जाँच है। यह पिछले लगभग 2–3 महीनों की औसत शुगर दिखाती है, आज की शुगर नहीं।'
+          : 'HbA1c is a blood test showing average blood sugar over roughly the past 2–3 months, not today’s reading.');
+      const details = feverEducation
+        ? (hindiEducation
+          ? ['बुखार घर की देखभाल के बाद भी ठीक न हो या बढ़े, तो डॉक्टर से बात करें।', 'बुखार कब से है और तापमान कितना है?']
+          : ['If the fever is getting worse or not improving with home care, speak to a clinician.', 'How long have you had a fever, and what is your temperature?'])
+        : (hindiEducation
+          ? ['आपकी रिपोर्ट का मान देखे बिना आपका परिणाम नहीं बता सकता।', 'रिपोर्ट में HbA1c का मान है तो उसे साझा करें; उसके आधार पर डॉक्टर से अर्थ समझें।']
+          : ['I cannot describe your personal result without seeing its verified value.', 'If you have an HbA1c report, share its value and discuss what it means for you with a clinician.']);
+      return { responseType: 'text', content: { summary, [requestLanguage]: summary,
+        sections: [{ bullets: details }], spoken_summary: `${summary} ${details[0]}` },
+        intent: feverEducation ? IntentType.GENERAL_HEALTH_QUERY : IntentType.LAB_RESULT_QUERY,
+        selectedAgent: 'general-health-education', safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
+    }
+
     // Prescription-scoped treatment decisions are resolved locally and
     // deflected before intent classification, RAG, ClinicalContext, or answer
     // generation. Raw prescription questions therefore retain the existing
@@ -2169,6 +2212,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
     let retrievalTrace: KnowledgeRetrievalResult | undefined;
     let facilityResults: Facility[] = [];
     let deterministicFacilityContent: Record<string, any> | null = null;
+    let deterministicSchemeContent: Record<string, any> | null = null;
     let schemeResults: Scheme[] = [];
     let schemeFactsForEvaluation = '';
 
@@ -2459,6 +2503,32 @@ export class AiOrchestratorService implements IAiOrchestrator {
         );
       }
     }
+    // A published, tenant-scoped scheme document is valid evidence even when
+    // the separate structured Scheme table has no matching row.
+    if (intentMeta.intent === IntentType.GOVERNMENT_SCHEME_QUERY
+      && !schemeResults.length && !retrievalTrace?.matchedChunks.length) {
+      const hindi = intentMeta.language.startsWith('hi');
+      const aadhaar = /aadhaar|aadhar|आधार/i.test(inputText);
+      const operation = /operation|surgery|ऑपरेशन|सर्जरी/i.test(inputText);
+      const summary = aadhaar
+        ? (hindi
+          ? 'केवल आधार कार्ड होने की जानकारी से मैं आपकी आयुष्मान योजना की पात्रता तय नहीं कर सकता।'
+          : 'I cannot establish your Ayushman scheme eligibility from Aadhaar possession alone.')
+        : operation
+          ? (hindi
+            ? 'किस सरकारी योजना से ऑपरेशन में मदद मिल सकती है, इसकी पुष्टि यहाँ उपलब्ध स्वीकृत जानकारी से नहीं हो रही।'
+            : 'The approved information available here does not confirm which government scheme could help with your operation.')
+          : (hindi
+            ? 'अभी इस योजना की स्वीकृत जानकारी यहाँ उपलब्ध नहीं है, इसलिए इसके लाभ या पात्रता की पुष्टि नहीं कर सकता।'
+            : 'Approved information for this scheme is not available here, so I cannot confirm its benefits or eligibility.');
+      const next = operation
+        ? (hindi ? 'आप किस शहर में हैं और किस तरह का ऑपरेशन बताया गया है? इन बातों के साथ सरकारी योजना हेल्पडेस्क पर पात्रता जाँचें।'
+          : 'Which city are you in, and what operation was recommended? Check eligibility with an official scheme help desk using those details.')
+        : (hindi ? 'पात्रता और इलाज की सुविधा सरकारी योजना हेल्पडेस्क से जाँचें।'
+          : 'Check eligibility and available care with an official scheme help desk.');
+      deterministicSchemeContent = { summary, [intentMeta.language]: summary,
+        sections: [{ bullets: [next] }], spoken_summary: `${summary} ${next}` };
+    }
 
     let formattedContext = ClinicalAiContextBuilder.formatPromptContext(
       ClinicalAiContextBuilder.buildMinimizedContext(null, intentMeta.language),
@@ -2551,6 +2621,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
     const systemPrompt = `You are VDA Health Assistant. Speak with the calm, practical warmth of an ASHA Didi, a community health guide. You are a digital assistant, not a human ASHA, ANM, nurse, or doctor; never claim to examine, prescribe, accompany, or arrange care yourself.
 VOICE AND CONVERSATION: Address the patient respectfully as "aap" in Hindi. Match their selected language and familiar BP, sugar, parchi, and doctor vocabulary. Answer first, acknowledge worry or confusion without shame, and offer one realistic next step when useful. For ordinary spoken answers, aim for two or three short sentences and about 30 words; keep all required record facts and urgent safety instructions even when longer. Use a simple village analogy only when it clarifies a grounded fact; do not invent physiology. Avoid assumed age or family honorifics. If costs arise, mention public or low-cost options only when verified, and never promise personal scheme eligibility or free treatment. In emergencies, skip greetings and respond calmly and directly.
 STRICT BOUNDARIES & GROUNDING POLICY:
+PRESENTATION: In Hindi, use everyday words and short sentences. Say "इलाज के खर्च में मदद" rather than "वित्तीय सुरक्षा प्रदान करती है" when that meaning is supported. Avoid bureaucratic phrases such as "इसके तहत" and unnecessary disease labels. Do not repeat a greeting, the patient's question, or the same fact in both summary and sections. The summary must answer the question directly and retain any essential warning. Sections are optional and add only new details or a practical next step; use an empty array for a simple answer. Keep links and formal source details in visual fields, not in the spoken summary.
 1. Grounding: You MUST ONLY use clinical facts explicitly present in [AUTHORIZED CLINICAL CONTEXT], [UPLOADED PRESCRIPTION CONTEXT], [CONVERSATION HISTORY], or [AUTHORIZED GENERAL MEDICAL KNOWLEDGE]. You MUST NEVER fabricate clinical records, medications, lab values, or diagnoses.
 2. Patient Identity & Role-Based Access Control (RBAC): The authenticated patient identity is defined in [AUTHENTICATED PATIENT IDENTITY]. All records, prescriptions, conditions, and lab tests belong solely to this authorized patient. Under NO circumstances may you address the user by a different person's name or reveal/attribute these records to another person. If the user claims to be someone else or asks for records of another family member/individual, explicitly inform them that this session only has access to the authenticated patient's records, and instruct them to switch to the appropriate profile in the application.
 3. Missing Information: If the patient's requested health record or information is absent or empty in [AUTHORIZED CLINICAL CONTEXT], explicitly state in the patient's language that the requested information is not available in their available health records (e.g. "मुझे उपलब्ध स्वास्थ्य रिकॉर्ड में इसकी जानकारी नहीं मिली।").
@@ -2633,7 +2704,10 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
         lowerInput,
       );
 
-    if (deterministicFacilityContent) {
+    if (deterministicSchemeContent) {
+      aiResultText = deterministicSchemeContent.summary;
+      contentObj = deterministicSchemeContent;
+    } else if (deterministicFacilityContent) {
       aiResultText = deterministicFacilityContent.summary;
       contentObj = deterministicFacilityContent;
       if (traceContext && this.tracer) {
@@ -2790,6 +2864,10 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
           ...generated,
           patient_text: aiResultText,
           [intentMeta.language]: aiResultText,
+          ...(!isPrescriptionExplanationTurn && !isPrescriptionContextGenerationTurn
+            && !(intentMeta.responseRequirements || []).some((requirement) =>
+              ['GROUNDED_GUIDANCE', 'ALL_RECORD_ITEMS', 'VALUE_AND_UNCERTAINTY', 'CARE_PLAN_ITEMS'].includes(requirement))
+            ? { spoken_summary: generated.summary } : {}),
         };
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -2879,12 +2957,8 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
       if (Object.keys(contentObj).length === 0) {
         contentObj = {
           [intentMeta.language]: finalOutputText,
-          en: finalOutputText,
         };
       } else {
-        if (!contentObj['en']) {
-          contentObj['en'] = finalOutputText;
-        }
         if (!contentObj[intentMeta.language]) {
           contentObj[intentMeta.language] = finalOutputText;
         }

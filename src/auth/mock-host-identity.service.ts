@@ -21,9 +21,11 @@ export class MockHostIdentityService extends HostIdentityContext {
       );
     }
 
-    // Verify token matches configured dev-token
+    // Verify token matches configured dev-token (or role-qualified admin/medical-officer session token)
     const expectedToken = this.configService.devAuthToken || 'dev-token';
-    if (token !== expectedToken) {
+    const isRoleAdmin = token === `${expectedToken}:admin`;
+    const isRoleMedicalOfficer = token === `${expectedToken}:medical-officer`;
+    if (token !== expectedToken && !isRoleAdmin && !isRoleMedicalOfficer) {
       throw new UnauthorizedException('Invalid mock authorization token.');
     }
 
@@ -31,7 +33,11 @@ export class MockHostIdentityService extends HostIdentityContext {
     const tenantId =
       this.configService.devAuthTenantId ||
       '00000000-0000-0000-0000-000000000000';
-    const externalId = this.configService.devAuthExternalId || 'dev-host-user';
+    const externalId = isRoleMedicalOfficer
+      ? 'doctor@vdahealth.org'
+      : isRoleAdmin
+        ? 'admin@vdahealth.org'
+        : this.configService.devAuthExternalId || 'dev-host-user';
     const subjectAbhaRef =
       this.configService.devAuthSubjectAbhaRef || 'dev-subject-abha-ref';
 
@@ -42,7 +48,7 @@ export class MockHostIdentityService extends HostIdentityContext {
       subjectAbhaRef,
       scopes: ['record_read', 'conversation_retention', 'reminder_delivery'],
       authType: 'DEV',
-      workerRole: this.configService.devAuthWorkerRole,
+      workerRole: isRoleMedicalOfficer ? 'CHO' : this.configService.devAuthWorkerRole,
     };
   }
 }

@@ -64,6 +64,14 @@ export class ConversationResponseFormatter {
               ? s.bullets.map((b) => this.safePatientText(b)).filter((b): b is string => Boolean(b)).slice(0, 4)
               : undefined,
           }))
+          .map((section) => ({
+            title: section.title && this.normalizedText(section.title) !== this.normalizedText(summary) ? section.title : undefined,
+            body: section.body && this.normalizedText(section.body) !== this.normalizedText(summary) ? section.body : undefined,
+            bullets: section.bullets?.filter((bullet, index, bullets) =>
+              this.normalizedText(bullet) !== this.normalizedText(summary)
+              && bullets.findIndex((item) => this.normalizedText(item) === this.normalizedText(bullet)) === index),
+          }))
+          .filter((section) => Boolean(section.title || section.body || section.bullets?.length))
       : undefined;
     const cards = Array.isArray(candidate.cards)
       ? candidate.cards
@@ -308,15 +316,13 @@ export class ConversationResponseFormatter {
       formattedContent[options.language || 'en'] = formattedContent['patient_text'];
     }
 
-    // Ensure text explanation key exists in primary language and english
+    // A missing translation remains missing. The client can show the original
+    // language explicitly, rather than presenting Hindi under the English key.
     const hiText = formattedContent['hi'];
     const enText = formattedContent['en'];
-    if (hiText === undefined && typeof enText === 'string') {
-      formattedContent['hi'] = enText;
-    }
-    if (enText === undefined && typeof hiText === 'string') {
-      formattedContent['en'] = hiText;
-    }
+    if (typeof enText === 'string' && /[\u0900-\u097f]/u.test(enText)) delete formattedContent['en'];
+    if (typeof hiText === 'string' && /[\u0900-\u097f]/u.test(hiText) === false
+      && typeof enText === 'string' && hiText === enText) delete formattedContent['hi'];
 
     return {
       response_type: responseType,

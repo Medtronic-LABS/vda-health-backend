@@ -26,6 +26,7 @@ import {
   TextToSpeechProviderError,
 } from './tts/text-to-speech-provider.interface';
 import { SarvamTtsProvider } from './tts/sarvam-tts.provider';
+import { sanitizeForSpeech } from './tts/sanitize-for-speech';
 
 @Injectable()
 export class VoiceService implements STTProvider, TTSProvider {
@@ -71,16 +72,20 @@ export class VoiceService implements STTProvider, TTSProvider {
     if (!text || text.length > 2500) {
       throw new ServiceUnavailableException('Voice service is currently unavailable.');
     }
+    const spokenText = sanitizeForSpeech(text, request.languageCode || 'hi-IN');
+    if (!spokenText || spokenText.length > 2500) {
+      throw new ServiceUnavailableException('Voice service is currently unavailable.');
+    }
     const primaryProvider = this.ttsPrimaryProvider();
     try {
-      const result = await this.ttsProviderFor(primaryProvider).synthesize({ ...request, text });
+      const result = await this.ttsProviderFor(primaryProvider).synthesize({ ...request, text: spokenText });
       return this.toTtsResponse(result, primaryProvider, primaryProvider, false);
     } catch (primaryError) {
       const fallbackProvider = this.config.voiceTtsFallbackProvider;
       const canFallback = this.config.voiceTtsFallbackEnabled && fallbackProvider !== primaryProvider;
       if (!canFallback) throw this.toTtsPublicError(primaryError);
       try {
-        const result = await this.ttsProviderFor(fallbackProvider).synthesize({ ...request, text });
+        const result = await this.ttsProviderFor(fallbackProvider).synthesize({ ...request, text: spokenText });
         return this.toTtsResponse(
           result,
           fallbackProvider,

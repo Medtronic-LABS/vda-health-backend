@@ -63,7 +63,7 @@ describe('ASHA NCD evidence gate', () => {
     expect(prompt).toContain('calm, respectful warmth of an ASHA Didi');
     expect(prompt).toContain('not a human ASHA, ANM, nurse, or doctor');
     expect(prompt).toContain('Do not promise free care, scheme eligibility');
-    expect(prompt).toContain('strictly use no more than 25 spoken words');
+    expect(prompt).toContain('do not impose a spoken-word limit on the visual answer');
     expect(audit.logEvent).toHaveBeenCalledWith(expect.objectContaining({
       details: { citations: [{ documentId: 'doc-a', chunkId: 'chunk-a', version: '1', page: 2, section: 'NCD basics' }] },
     }));
@@ -80,6 +80,47 @@ describe('ASHA NCD evidence gate', () => {
     verification.evaluateTurn.mockResolvedValue({ passed: true, clinicalViolationDetected: false, unsupportedClaims: [] });
     const answer = await service.maybeAnswer('What does an ASHA worker do for NCD patients?', identity, 'corr', 'en');
     expect(answer?.content.summary).toContain('treatment adherence');
+  });
+
+  it('routes a Hindi BP उपाय question and keeps full grounded visual guidance', async () => {
+    const { service, retrieval, verification, ai } = build([
+      { id: 'doc-a', title: 'ASHA NCD', version: '1', source: 'official', chunks: '1', embeddings: '1' },
+    ]);
+    const passage = 'Reduce salt, eat healthy food, stay active, and avoid tobacco to help control blood pressure.';
+    retrieval.retrieve.mockResolvedValue({ matchedChunks: [{ chunkId: 'bp', documentId: 'doc-a',
+      documentVersion: '1', content: passage, metadata: {} }] });
+    ai.healthCheck.mockResolvedValue({ status: 'AVAILABLE' });
+    ai.generate.mockResolvedValueOnce({ json: { query: 'blood pressure lifestyle control' } })
+      .mockResolvedValueOnce({ json: { answer: 'बीपी को संभालने के लिए नमक कम करें। घर के खाने में फल और सब्जियाँ रखें। रोज चलें-फिरें और तंबाकू से बचें।', usedChunkIds: ['bp'] } });
+    verification.evaluateTurn.mockResolvedValue({ passed: true, clinicalViolationDetected: false, unsupportedClaims: [] });
+    const answer = await service.maybeAnswer('मुझे BP कंट्रोल करने के लिए क्या उपाय करने चाहिए?', identity, 'corr', 'hi');
+    expect(answer?.content.summary).toContain('तंबाकू से बचें');
+    expect((answer?.content as Record<string, unknown>)?.spoken_summary).not.toContain('तंबाकू से बचें');
+    expect((answer?.content as Record<string, unknown>)?.en).toBeUndefined();
+    expect(verification.evaluateTurn).toHaveBeenCalledWith(expect.any(String), answer?.content.summary,
+      [passage], 'corr');
+  });
+
+  it('keeps a detailed verified visual answer while speech omits list markers', async () => {
+    const { service, retrieval, verification, ai } = build([
+      { id: 'doc-a', title: 'ASHA NCD', version: '1', source: 'official', chunks: '1', embeddings: '1' },
+    ]);
+    const passage = 'Reduce salt. Eat fruits and vegetables. Stay physically active. Avoid tobacco.';
+    retrieval.retrieve.mockResolvedValue({ matchedChunks: [{ chunkId: 'bp', documentId: 'doc-a',
+      documentVersion: '1', content: passage, metadata: {} }] });
+    ai.healthCheck.mockResolvedValue({ status: 'AVAILABLE' });
+    const longAnswer = `नमस्ते! बीपी के लिए ये कदम अपनाएँ। 1. **नमक कम करें:** ${'खाने में नमक घटाएँ। '.repeat(13)} 2. **फल और सब्जियाँ खाएँ:** ${'घर का सादा खाना चुनें। '.repeat(12)} 3. **रोज चलें।** 4. **तंबाकू से बचें।**`;
+    expect(longAnswer.length).toBeGreaterThan(480);
+    ai.generate.mockResolvedValueOnce({ json: { query: 'BP lifestyle advice' } })
+      .mockResolvedValueOnce({ json: { answer: longAnswer, usedChunkIds: ['bp'] } });
+    verification.evaluateTurn.mockResolvedValue({ passed: true, clinicalViolationDetected: false, unsupportedClaims: [] });
+    const answer = await service.maybeAnswer('BP ko control kaise karein?', identity, 'corr', 'hi');
+    expect(answer?.content.summary).toContain('तंबाकू से बचें');
+    expect(answer?.content.summary).not.toContain('**');
+    expect(answer?.content.summary).toContain('\n• नमक कम करें:');
+    expect((answer?.content as Record<string, unknown>)?.spoken_summary).not.toContain('1.');
+    expect((answer?.content as Record<string, unknown>)?.spoken_summary).toContain('तंबाकू से बचें');
+    expect((answer?.content as Record<string, unknown>)?.spoken_summary).not.toContain('•');
   });
 
   it('prefers the indexed BP lifestyle section over a generic follow-up chunk and omits routine disclaimers', async () => {

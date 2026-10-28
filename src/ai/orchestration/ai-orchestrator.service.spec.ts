@@ -2,7 +2,23 @@ import { Facility } from '../../database/entities/facility.entity';
 import { FacilitySearchResult } from '../../facilities/facility-search.service';
 import { FacilityDirectoryLoader } from '../../facilities/facility-directory.loader';
 import { prioritizeSourceBackedCandidates } from '../../facilities/facility-service-matcher';
-import { AiOrchestratorService } from './ai-orchestrator.service';
+import { AiOrchestratorService, basicEducationTopic } from './ai-orchestrator.service';
+
+describe('narrow basic education routing after clinical safety', () => {
+  it.each([
+    ['मुझे बुखार है, क्या करूँ?', 40, 'FEVER'],
+    ['I have fever, what should I do?', 40, 'FEVER'],
+    ['HbA1c क्या होता है?', 40, 'HBA1C'],
+    ['What does HbA1c mean?', 40, 'HBA1C'],
+    ['HbA1c kya hota hai?', 40, 'HBA1C'],
+    ['मुझे बुखार और सिर दर्द है, क्या करूँ?', 40, null],
+    ['मुझे बुखार है, क्या करूँ?', 12, null],
+    ['मेरी रिपोर्ट में HbA1c 6.2 है, क्या मतलब?', 40, null],
+    ['Can I double my medicine dose?', 40, null],
+  ])('%s routes only to %s', (question, age, expected) => {
+    expect(basicEducationTopic(question as string, age as number)).toBe(expected);
+  });
+});
 
 describe('IPHS-based facility service recommendations', () => {
   const result = (

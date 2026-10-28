@@ -25,7 +25,15 @@ export class KnowledgeQueryNormalizerService {
     const lower = patientQuery.toLowerCase();
     const location = this.extractLocation(lower);
     const effectiveState = location.state || explicitState;
-    const needsNormalization = language === 'hi' || language === 'hi-Latn' || /himcare|himachal/i.test(lower);
+    // These questions can contain exact medicine names, values, units, and
+    // negation. A generic English query would discard those restrictions.
+    if (intent === IntentType.MEDICATION_QUERY || intent === IntentType.LAB_RESULT_QUERY
+      || intent === IntentType.ADHERENCE_QUERY
+      || /\b(?:not|no|without|never|nahi|nahin|nhi|nai)\b|नहीं|नही|मत|\d/u.test(patientQuery)) {
+      return { query: patientQuery, state: effectiveState, district: location.district, normalized: false };
+    }
+    const needsNormalization = intent === IntentType.GOVERNMENT_SCHEME_QUERY
+      || language === 'hi' || language === 'hi-Latn' || /himcare|himachal/i.test(lower);
 
     if (!needsNormalization && !location.state && !location.district) {
       return { query: patientQuery, state: effectiveState, district: location.district, normalized: false };

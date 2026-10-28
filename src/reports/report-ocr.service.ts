@@ -29,7 +29,11 @@ export class ReportOcrService {
   private normalized(text: string): string { return text.trim().replace(/\s+/g, ' '); }
 
   private suspectedReading(line: { text: string }): boolean {
-    return /\b(?:glucose|sugar|hba1c|hb\s*a1c)\b/i.test(line.text) && /\d/.test(line.text);
+    const text = this.normalized(line.text);
+    return text.length <= 160 && /^[\p{L}]/u.test(text)
+      && !/^(?:interpretation|comments?|notes?|patient|age|pid|date|reported|collected|reference)\b/i.test(text)
+      && /\d/.test(text)
+      && /(?:mg\s*\/|g\s*\/|mmol\s*\/|mEq\s*\/|IU\s*\/|U\s*\/|\/\s*(?:uL|µL)|%|\d\s*[-–]\s*\d)/i.test(text);
   }
 
   private strongLine(line: { confidence: number; words: Array<{ text: string; confidence: number }> }): boolean {
@@ -66,14 +70,32 @@ export class ReportOcrService {
       .resize({ width: width * 2 }).sharpen().png().toBuffer(), deadline);
     try {
       await this.bounded(worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE }), deadline);
-      const result = await this.bounded(worker.recognize(crop, {}, { text: true, blocks: true }), deadline);
-      const recognized = (result.data.blocks || []).flatMap((block) => block.paragraphs.flatMap((paragraph) => paragraph.lines))[0];
-      if (!recognized || this.normalized(recognized.text) !== this.normalized(line.text)) return null;
-      if (this.strongLine(recognized)
-        && !recognized.words.some((word) => /[\p{L}\d]/u.test(word.text) && word.confidence < 85)) {
-        return { text: this.normalized(recognized.text), page, confidence: Math.round(recognized.confidence),
-          bbox: line.bbox, rotationDegrees: angle };
+      const recognize = async (input: Buffer) => {
+        const result = await this.bounded(worker.recognize(input, {}, { text: true, blocks: true }), deadline);
+        return (result.data.blocks || []).flatMap((block) => block.paragraphs.flatMap((paragraph) => paragraph.lines))[0];
+      };
+      const first = await recognize(crop);
+      const safe = (candidate: typeof first) => candidate && this.strongLine(candidate)
+        && !candidate.words.some((word) => /[\p{L}\d]/u.test(word.text) && word.confidence < 85);
+      const originalNumbers = this.normalized(line.text).match(/(?<![\p{L}])\d+(?:\.\d+)?(?![\p{L}])/gu) || [];
+      const resultLine = (candidate: NonNullable<typeof first>): OcrLine => ({
+        text: this.normalized(candidate.text), page, confidence: Math.round(candidate.confidence),
+        bbox: line.bbox, rotationDegrees: angle,
+      });
+      if (safe(first) && this.normalized(first.text) === this.normalized(line.text)) return resultLine(first);
+      // A second, visually distinct preprocessing pass must agree on every digit
+      // before a corrected OCR line can become evidence for a measured value.
+      const contrast = await this.bounded(sharp(image).extract({ left, top, width, height })
+        .resize({ width: width * 3 }).greyscale().sharpen().png().toBuffer(), deadline);
+      const second = await recognize(contrast);
+      if (safe(second) && this.normalized(second.text) === this.normalized(line.text)) return resultLine(second);
+      if (safe(first) && safe(second) && this.normalized(first.text) === this.normalized(second.text)
+        && JSON.stringify(originalNumbers) === JSON.stringify(
+          this.normalized(first.text).match(/(?<![\p{L}])\d+(?:\.\d+)?(?![\p{L}])/gu) || [])) {
+        return resultLine(first);
       }
+      const recognized = first || second;
+      if (!recognized || this.normalized(recognized.text) !== this.normalized(line.text)) return null;
       const partial = this.partialTableMeasurement(recognized);
       if (!partial) return null;
       return { text: partial.evidence, page, confidence: Math.round(Math.min(

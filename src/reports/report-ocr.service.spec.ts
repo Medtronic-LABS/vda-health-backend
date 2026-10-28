@@ -1,5 +1,6 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import sharp = require('sharp');
 import { MedicalReportService } from './medical-report.service';
 import { ReportOcrService } from './report-ocr.service';
 
@@ -27,6 +28,29 @@ async function upload(name: string) {
 }
 
 describe('local OCR with synthetic reports', () => {
+  it('keeps clear CBC rows and marks an uncertain platelet row partial in a multi-column PNG', async () => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="700">
+      <rect width="1800" height="700" fill="white"/>
+      <g fill="black" font-family="Arial" font-size="40">
+        <text x="80" y="100">Complete Blood Count</text>
+        <text x="80" y="240">Hemoglobin</text><text x="700" y="240">12.4</text><text x="900" y="240">g/dL</text><text x="1180" y="240">12.0-15.5</text>
+        <text x="80" y="330">WBC Count</text><text x="700" y="330">6800</text><text x="900" y="330">/uL</text><text x="1180" y="330">4000-11000</text>
+        <text x="80" y="420">Platelets</text><text x="700" y="420">250000</text><text x="900" y="420">/uL</text><text x="1180" y="420">150000-450000</text>
+      </g></svg>`;
+    const buffer = await sharp(Buffer.from(svg)).png().toBuffer();
+    const result = await service().upload('synthetic-session', identity,
+      { buffer, originalname: 'synthetic-cbc.png', mimetype: 'image/png' }, true, 'hi', 'synthetic-correlation');
+    expect(result.extractionStatus).toBe('EXTRACTED');
+    expect(result.reportType).toBe('CBC');
+    expect(result.facts.tests).toEqual([
+      expect.objectContaining({ name: 'Hemoglobin', value: '12.4', unit: 'g/dL', referenceRange: '12.0-15.5',
+        source: expect.objectContaining({ page: 1, confidence: expect.any(Number) }) }),
+      expect.objectContaining({ name: 'WBC Count', value: '6800', unit: '/uL', referenceRange: '4000-11000' }),
+    ]);
+    expect(result.readingCompleteness).toBe('POSSIBLY_PARTIAL');
+    expect(result.explanation).toContain('कुछ नतीजे छूट सकते हैं');
+  });
+
   it('accepts only a clearly read glucose table value and omits an uncertain range', () => {
     const ocr = new ReportOcrService();
     const text = 'GLUCOSE, FASTING, 245.00 Very High 70.00 - 100.00 mg/dL';

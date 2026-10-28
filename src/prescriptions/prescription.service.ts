@@ -5,10 +5,26 @@ import { DataSource, Repository } from 'typeorm';
 import { IAiProvider } from '../ai/interfaces/ai-provider.interface';
 import { AuditService } from '../audit/audit.service';
 import { HostIdentity } from '../auth/host-identity.context';
+import { MobileUser } from '../database/entities/mobile-user.entity';
 import { Prescription, PrescriptionVerificationStatus } from '../database/entities/prescription.entity';
+import { SyntheticPatient } from '../database/entities/synthetic-patient.entity';
 import { MultiFormatParserService } from '../knowledge/ingestion/multi-format-parser.service';
 import { PrescriptionDecisionDto, VerifyPrescriptionDto } from './dto/verify-prescription.dto';
 import { PushNotificationsService } from '../notifications/push-notifications.service';
+
+export interface PrescriptionPatientSummary {
+  patientRef: string;
+  patientType: 'MOBILE_USER' | 'SYNTHETIC_PATIENT' | 'PROTOTYPE';
+  patientCode: string;
+  fullName: string;
+  age: number | null;
+  gender: string | null;
+  phone: string | null;
+  district: string | null;
+  state: string | null;
+  preferredLanguage: string | null;
+  abhaNumber: string | null;
+}
 
 @Injectable()
 export class PrescriptionService {
@@ -73,14 +89,115 @@ export class PrescriptionService {
   }
 
   async worklist(tenantId: string, status?: PrescriptionVerificationStatus) {
-    const rows = await this.prescriptions.find({ where: status ? { tenantId, verificationStatus: status } : { tenantId }, order: { createdAt: 'ASC' } });
-    return rows.map((row) => ({ id: row.id, patientRef: row.patientRef, filename: row.filename, sourceMimeType: row.sourceMimeType, extractionStatus: row.extractionStatus, verificationStatus: row.verificationStatus, planRevision: row.planRevision, activePlan: row.activePlan, reviewRequired: row.extractionStatus === 'REVIEW_REQUIRED', createdAt: row.createdAt, updatedAt: row.updatedAt }));
+    const [rows, allTenantRows] = await Promise.all([
+      this.prescriptions.find({ where: status ? { tenantId, verificationStatus: status } : { tenantId }, order: { createdAt: 'DESC' } }),
+      status ? this.prescriptions.find({ where: { tenantId }, order: { createdAt: 'DESC' } }) : Promise.resolve(null),
+    ]);
+    const allRows = allTenantRows || rows;
+    const patientRefs = [...new Set(allRows.map((row) => row.patientRef).filter(Boolean))];
+    const patientMap = await this.resolvePatientMap(tenantId, patientRefs);
+    const statsByPatient = new Map<string, { totalSubmissions: number; pendingCount: number; verifiedCount: number; activePrescriptionId: string | null }>();
+    for (const row of allRows) {
+      const current = statsByPatient.get(row.patientRef) || { totalSubmissions: 0, pendingCount: 0, verifiedCount: 0, activePrescriptionId: null };
+      current.totalSubmissions += 1;
+      if (row.verificationStatus === 'PENDING_VERIFICATION' || row.verificationStatus === 'UNVERIFIED') current.pendingCount += 1;
+      if (row.verificationStatus === 'VERIFIED') current.verifiedCount += 1;
+      if (row.activePlan && row.verificationStatus === 'VERIFIED') current.activePrescriptionId = row.id;
+      statsByPatient.set(row.patientRef, current);
+    }
+
+    return rows.map((row) => {
+      const meds = this.effectiveMedications(row);
+      const invs = this.effectiveInvestigations(row);
+      const patient = patientMap.get(row.patientRef) || this.fallbackPatientSummary(row.patientRef);
+      const patientStats = statsByPatient.get(row.patientRef) || { totalSubmissions: 1, pendingCount: 0, verifiedCount: 0, activePrescriptionId: null };
+      return {
+        id: row.id,
+        prescriptionCode: this.formatPrescriptionCode(row.id),
+        patientRef: row.patientRef,
+        patient,
+        patientStats,
+        prescriberName: row.prescriberName,
+        prescriptionDate: row.prescriptionDate,
+        medicationCount: meds.length,
+        medicationPreview: this.extractMedicationPreview(meds),
+        investigationCount: invs.length,
+        filename: row.filename,
+        sourceMimeType: row.sourceMimeType,
+        extractionStatus: row.extractionStatus,
+        verificationStatus: row.verificationStatus,
+        planRevision: row.planRevision || 1,
+        activePlan: Boolean(row.activePlan),
+        reviewRequired: row.extractionStatus === 'REVIEW_REQUIRED' || row.verificationStatus === 'UNVERIFIED',
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      };
+    });
   }
 
   async workerDetail(tenantId: string, id: string, identity: HostIdentity, correlationId: string) {
     const record = await this.findTenantRecord(tenantId, id);
     await this.auditAction(record, identity, correlationId, 'prescription_verification_opened');
-    return { ...this.patientView(record), prescriptionDate: record.prescriptionDate, prescriberName: record.prescriberName, sourceMimeType: record.sourceMimeType, extractedMedications: record.medications, extractedInvestigations: record.investigations, verifiedMedications: record.verifiedMedications, verifiedInvestigations: record.verifiedInvestigations, verificationNote: record.verificationNote, patientReviewReason: record.patientReviewReason, verifiedBy: record.verifiedBy, verifierRole: record.verifierRole, verifiedAt: record.verifiedAt };
+    const [patientMap, patientRows] = await Promise.all([
+      this.resolvePatientMap(tenantId, [record.patientRef]),
+      typeof this.prescriptions.find === 'function'
+        ? this.prescriptions.find({ where: { tenantId, patientRef: record.patientRef }, order: { createdAt: 'DESC' } })
+        : Promise.resolve([record]),
+    ]);
+    const patient = patientMap.get(record.patientRef) || this.fallbackPatientSummary(record.patientRef);
+    const safeRows = Array.isArray(patientRows) && patientRows.length > 0 ? patientRows : [record];
+    const patientHistory = safeRows.map((item) => {
+      const meds = this.effectiveMedications(item);
+      const invs = this.effectiveInvestigations(item);
+      return {
+        id: item.id,
+        prescriptionCode: this.formatPrescriptionCode(item.id),
+        planRevision: item.planRevision || 1,
+        verificationStatus: item.verificationStatus,
+        extractionStatus: item.extractionStatus,
+        activePlan: Boolean(item.activePlan),
+        reviewRequired: item.extractionStatus === 'REVIEW_REQUIRED' || item.verificationStatus === 'UNVERIFIED',
+        prescriberName: item.prescriberName,
+        prescriptionDate: item.prescriptionDate,
+        medicationCount: meds.length,
+        medicationPreview: this.extractMedicationPreview(meds),
+        investigationCount: invs.length,
+        verifiedBy: item.verifiedBy,
+        verifierRole: item.verifierRole,
+        verifiedAt: item.verifiedAt,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+      };
+    });
+    const normalizedExtractedMeds = this.normalizeMedicationRows(record.medications);
+    const normalizedVerifiedMeds = Array.isArray(record.verifiedMedications) && record.verifiedMedications.length > 0
+      ? this.normalizeMedicationRows(record.verifiedMedications)
+      : null;
+    const normalizedExtractedInvs = this.normalizeInvestigationRows(record.investigations);
+    const normalizedVerifiedInvs = Array.isArray(record.verifiedInvestigations) && record.verifiedInvestigations.length > 0
+      ? this.normalizeInvestigationRows(record.verifiedInvestigations)
+      : null;
+
+    return {
+      ...this.patientView(record),
+      prescriptionCode: this.formatPrescriptionCode(record.id),
+      patientRef: record.patientRef,
+      patient,
+      patientHistory,
+      prescriptionDate: record.prescriptionDate,
+      prescriberName: record.prescriberName,
+      sourceMimeType: record.sourceMimeType,
+      extractedText: record.extractedText || '',
+      extractedMedications: normalizedExtractedMeds,
+      extractedInvestigations: normalizedExtractedInvs,
+      verifiedMedications: normalizedVerifiedMeds,
+      verifiedInvestigations: normalizedVerifiedInvs,
+      verificationNote: record.verificationNote,
+      patientReviewReason: record.patientReviewReason,
+      verifiedBy: record.verifiedBy,
+      verifierRole: record.verifierRole,
+      verifiedAt: record.verifiedAt,
+    };
   }
 
   async source(tenantId: string, id: string, identity: HostIdentity, correlationId: string) {
@@ -194,6 +311,222 @@ export class PrescriptionService {
     };
   }
   private async findTenantRecord(tenantId: string, id: string) { const record = await this.prescriptions.findOne({ where: { id, tenantId } }); if (!record) throw new NotFoundException('PRESCRIPTION_NOT_FOUND'); return record; }
+  private formatPrescriptionCode(id: string): string {
+    return `RX-${String(id || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toUpperCase() || '000000'}`;
+  }
+  private effectiveMedications(row: Partial<Prescription>): Array<Record<string, unknown>> {
+    if (Array.isArray(row.verifiedMedications) && row.verifiedMedications.length > 0) {
+      return this.normalizeMedicationRows(row.verifiedMedications);
+    }
+    return this.normalizeMedicationRows(row.medications);
+  }
+  private effectiveInvestigations(row: Partial<Prescription>): Array<Record<string, unknown>> {
+    if (Array.isArray(row.verifiedInvestigations) && row.verifiedInvestigations.length > 0) {
+      return this.normalizeInvestigationRows(row.verifiedInvestigations);
+    }
+    return this.normalizeInvestigationRows(row.investigations);
+  }
+  private normalizeMedicationRows(rows: unknown): Array<Record<string, unknown>> {
+    if (!Array.isArray(rows)) return [];
+    return rows
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+      .map((item) => {
+        const medicationName = String(
+          item.medicationName || item.rawName || item.name || item.normalizedName || '',
+        ).trim();
+        return {
+          ...item,
+          medicationName: medicationName || (item.medicationName ?? ''),
+          normalizedName: item.normalizedName ?? null,
+          strength: item.strength ?? null,
+          dosage: item.dosage ?? null,
+          dosageForm: item.dosageForm ?? null,
+          route: item.route ?? null,
+          frequency: item.frequency ?? null,
+          timing: item.timing ?? null,
+          duration: item.duration ?? null,
+          instructions: item.instructions ?? null,
+        };
+      });
+  }
+  private normalizeInvestigationRows(rows: unknown): Array<Record<string, unknown>> {
+    if (!Array.isArray(rows)) return [];
+    return rows
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+      .map((item) => {
+        const rawName = String(item.rawName || item.name || item.normalizedName || '').trim();
+        return {
+          ...item,
+          rawName: rawName || (item.rawName ?? ''),
+          normalizedName: item.normalizedName ?? (rawName || null),
+          reason: item.reason ?? null,
+          instructions: item.instructions ?? null,
+        };
+      });
+  }
+  private extractMedicationPreview(meds: Array<Record<string, unknown>>): string[] {
+    return meds
+      .map((item) => {
+        const name = String(item.medicationName || item.rawName || item.name || item.normalizedName || '').trim();
+        const strength = String(item.strength || '').trim();
+        return name ? (strength && !name.toLowerCase().includes(strength.toLowerCase()) ? `${name} ${strength}` : name) : '';
+      })
+      .filter(Boolean)
+      .slice(0, 3);
+  }
+  private fallbackPatientSummary(patientRef: string): PrescriptionPatientSummary {
+    const safeRef = String(patientRef || 'unknown');
+    if (safeRef.startsWith('mobile-user:')) {
+      const id = safeRef.slice('mobile-user:'.length);
+      return {
+        patientRef: safeRef,
+        patientType: 'MOBILE_USER',
+        patientCode: `PT-${id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toUpperCase() || 'MOBILE'}`,
+        fullName: `Mobile Patient (${id.slice(0, 8)})`,
+        age: null,
+        gender: null,
+        phone: null,
+        district: null,
+        state: null,
+        preferredLanguage: null,
+        abhaNumber: null,
+      };
+    }
+    if (safeRef.startsWith('synthetic:')) {
+      const id = safeRef.slice('synthetic:'.length);
+      return {
+        patientRef: safeRef,
+        patientType: 'SYNTHETIC_PATIENT',
+        patientCode: id.toUpperCase(),
+        fullName: `Synthetic Patient (${id})`,
+        age: null,
+        gender: null,
+        phone: null,
+        district: null,
+        state: null,
+        preferredLanguage: null,
+        abhaNumber: null,
+      };
+    }
+    return {
+      patientRef: safeRef,
+      patientType: 'PROTOTYPE',
+      patientCode: `PT-${safeRef.replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toUpperCase() || 'DEMO'}`,
+      fullName: safeRef.replace(/^(local-file:|dev-)/i, '') || 'Registered Patient',
+      age: null,
+      gender: null,
+      phone: null,
+      district: null,
+      state: null,
+      preferredLanguage: null,
+      abhaNumber: null,
+    };
+  }
+  private async resolvePatientMap(tenantId: string, patientRefs: string[]): Promise<Map<string, PrescriptionPatientSummary>> {
+    const map = new Map<string, PrescriptionPatientSummary>();
+    for (const ref of patientRefs) {
+      map.set(ref, this.fallbackPatientSummary(ref));
+    }
+    if (!patientRefs.length || typeof this.dataSource?.getRepository !== 'function') {
+      return map;
+    }
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const mobileIdToRefs = new Map<string, string[]>();
+    const syntheticIdToRefs = new Map<string, string[]>();
+
+    for (const ref of patientRefs) {
+      if (ref.startsWith('mobile-user:')) {
+        const id = ref.slice('mobile-user:'.length).trim();
+        if (uuidRegex.test(id)) {
+          mobileIdToRefs.set(id, [...(mobileIdToRefs.get(id) || []), ref]);
+        }
+      } else if (ref.startsWith('synthetic:')) {
+        const id = ref.slice('synthetic:'.length).trim();
+        if (id) {
+          syntheticIdToRefs.set(id, [...(syntheticIdToRefs.get(id) || []), ref]);
+        }
+      } else if (uuidRegex.test(ref)) {
+        mobileIdToRefs.set(ref, [...(mobileIdToRefs.get(ref) || []), ref]);
+        syntheticIdToRefs.set(ref, [...(syntheticIdToRefs.get(ref) || []), ref]);
+      } else if (ref.trim()) {
+        syntheticIdToRefs.set(ref.trim(), [...(syntheticIdToRefs.get(ref.trim()) || []), ref]);
+      }
+    }
+
+    const mobileIds = [...mobileIdToRefs.keys()];
+    const syntheticIds = [...syntheticIdToRefs.keys()];
+
+    try {
+      if (mobileIds.length > 0) {
+        const mobileRepo = this.dataSource.getRepository(MobileUser);
+        if (typeof mobileRepo?.createQueryBuilder === 'function') {
+          const users = await mobileRepo
+            .createQueryBuilder('u')
+            .addSelect('u.abhaNumber')
+            .where('u.id IN (:...ids)', { ids: mobileIds })
+            .getMany();
+          for (const user of users) {
+            const matchedRefs = mobileIdToRefs.get(user.id) || [`mobile-user:${user.id}`];
+            for (const matchedRef of matchedRefs) {
+              map.set(matchedRef, {
+                patientRef: matchedRef,
+                patientType: 'MOBILE_USER',
+                patientCode: `PT-${user.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toUpperCase()}`,
+                fullName: user.fullName,
+                age: user.age ?? null,
+                gender: user.gender ?? null,
+                phone: user.phone ?? null,
+                district: user.district ?? null,
+                state: user.state ?? null,
+                preferredLanguage: user.preferredLanguage ?? null,
+                abhaNumber: user.abhaNumber ?? null,
+              });
+            }
+          }
+        }
+      }
+      if (syntheticIds.length > 0) {
+        const syntheticRepo = this.dataSource.getRepository(SyntheticPatient);
+        if (typeof syntheticRepo?.createQueryBuilder === 'function') {
+          const syntheticUuids = syntheticIds.filter((id) => uuidRegex.test(id));
+          const qb = syntheticRepo.createQueryBuilder('s');
+          if (syntheticUuids.length > 0) {
+            qb.where('s.syntheticPatientId IN (:...ids) OR s.id IN (:...uuids)', {
+              ids: syntheticIds,
+              uuids: syntheticUuids,
+            });
+          } else {
+            qb.where('s.syntheticPatientId IN (:...ids)', { ids: syntheticIds });
+          }
+          const patients = await qb.getMany();
+          for (const patient of patients) {
+            const matchedRefs = [
+              ...(syntheticIdToRefs.get(patient.syntheticPatientId) || []),
+              ...(syntheticIdToRefs.get(patient.id) || []),
+            ];
+            for (const matchedRef of matchedRefs) {
+              map.set(matchedRef, {
+                patientRef: matchedRef,
+                patientType: 'SYNTHETIC_PATIENT',
+                patientCode: patient.syntheticPatientId,
+                fullName: patient.name,
+                age: patient.age ?? null,
+                gender: patient.gender ?? null,
+                phone: patient.phoneNumber ?? null,
+                district: patient.district ?? null,
+                state: patient.state ?? null,
+                preferredLanguage: patient.language ?? null,
+                abhaNumber: null,
+              });
+            }
+          }
+        }
+      }
+    } catch (err) {
+      this.logger.warn(`Patient detail enrichment fallback used: ${err instanceof Error ? err.message : 'unknown'}`);
+    }
+    return map;
+  }
   private changedFields(record: Prescription) {
     const fields: string[] = [];
     const compare = (prefix: string, extracted: Array<Record<string, unknown>>, verified: Array<Record<string, unknown>>) => {
