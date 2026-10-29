@@ -175,11 +175,18 @@ export class KnowledgeQueryNormalizerService {
       )
     ) {
       if (
-        /(?:apply|application|enrol+l?|registration|register|card\s*(?:creation|ban)|कैसे\s*(?:अप्लाई|आवेदन|बनवाएं|बनेगा)|आवेदन|पंजीकरण|कार्ड\s*(?:बन|बनवा|कैसे))/i.test(
+        /(?:apply|application|enrol+l?|registration|register|card\s*(?:creation|ban)|कैसे\s*(?:अप्लाई|आवेदन|बनवाएं|बनवाएँ|बनेगा)|आवेदन|पंजीकरण|कार्ड\s*(?:बन|बनवा|कैसे))/i.test(
           lower,
         )
       ) {
         return 'AB PM-JAY Beneficiary Identification System BIS eligibility database Ayushman card Common Service Centre CSC PMAM';
+      }
+      if (
+        /\b(?:every\s+hospital|all\s+hospitals?|any\s+hospital|har\s+hospital|sabhi\s+hospital|kisi\s+bhi\s+hospital)\b|हर\s+अस्पताल|सभी\s+अस्पताल|किसी\s+भी\s+अस्पताल/iu.test(
+          lower,
+        )
+      ) {
+        return 'Ayushman Bharat PM-JAY empanelled hospitals public and private hospitals coverage eligibility';
       }
       if (/document|kagaz|दस्तावेज|दस्तावेज़|कागज/.test(lower)) {
         return 'Ayushman Bharat PM-JAY eligibility required documents beneficiary identification';

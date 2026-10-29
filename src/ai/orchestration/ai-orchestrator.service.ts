@@ -1821,16 +1821,20 @@ export class AiOrchestratorService implements IAiOrchestrator {
     }
 
     if (prescriptionContextResolution?.kind === 'MEDICINE_LIST' && !prescriptionContext?.medicines.length) {
-      const message = requestLanguage.startsWith('hi')
+      const hindi = requestLanguage.startsWith('hi') || /[\u0900-\u097f]|\b(?:meri|mera|mere|mujhe|batao|dikhao|dawa|dawai)\b/i.test(inputText);
+      const langKey = hindi ? 'hi' : requestLanguage;
+      const message = hindi
         ? 'अभी आपकी कोई सत्यापित दवा उपलब्ध नहीं है। पर्ची की जाँच बाकी हो तो दवाइयाँ टैब में स्थिति देखें।'
         : 'No verified medicines are available yet. If your prescription is awaiting review, check its status in Medicines.';
-      return { responseType: 'text', content: { summary: message, [requestLanguage]: message }, intent: IntentType.MEDICATION_QUERY, selectedAgent: 'medication-agent', safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
+      return { responseType: 'text', content: { summary: message, [langKey]: message }, intent: IntentType.MEDICATION_QUERY, selectedAgent: 'medication-agent', safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
     }
     if (prescriptionContextResolution?.kind === 'REMINDER_FACT' && !prescriptionContext?.medicines.length) {
-      const message = requestLanguage.startsWith('hi')
+      const hindi = requestLanguage.startsWith('hi') || /[\u0900-\u097f]|\b(?:meri|mera|mere|mujhe|batao|dikhao|dawa|dawai|kab)\b/i.test(inputText);
+      const langKey = hindi ? 'hi' : requestLanguage;
+      const message = hindi
         ? 'अभी कोई सत्यापित दवा या रिमाइंडर समय उपलब्ध नहीं है। दवाइयाँ टैब में पर्ची की स्थिति देखें।'
         : 'No verified medicine or reminder time is available yet. Check the prescription status in Medicines.';
-      return { responseType: 'text', content: { summary: message, [requestLanguage]: message }, intent: IntentType.MEDICATION_QUERY, selectedAgent: 'medication-reminder-service', safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
+      return { responseType: 'text', content: { summary: message, [langKey]: message }, intent: IntentType.MEDICATION_QUERY, selectedAgent: 'medication-reminder-service', safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
     }
 
     // Prescription facts and missed-dose clarification are deterministic facts
@@ -1843,10 +1847,15 @@ export class AiOrchestratorService implements IAiOrchestrator {
         || prescriptionContextResolution.kind === 'REMINDER_FACT'
         || prescriptionContextResolution.kind === 'INVESTIGATION_LIST')
     ) {
+      const effectiveRxLang =
+        requestLanguage.startsWith('hi') ||
+        /[\u0900-\u097f]|\b(?:meri|mera|mere|mujhe|batao|dikhao|dawa|dawai|kab)\b/i.test(inputText)
+          ? 'hi'
+          : requestLanguage;
       const content = this.prescriptionContextDirectContent(
         prescriptionContext,
         prescriptionContextResolution,
-        requestLanguage,
+        effectiveRxLang,
       );
       if (authorizedPatientName && /\b(?:what is my name|what's my name|who am i)\b|मेरा नाम क्या है|मेरी पहचान क्या है/i.test(inputText)) {
         const namePrefix = requestLanguage.startsWith('hi')

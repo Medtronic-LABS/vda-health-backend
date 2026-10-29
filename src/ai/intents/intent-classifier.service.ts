@@ -113,10 +113,16 @@ export class IntentClassifierService implements IIntentClassifier {
 
     // ─── Stage 1 Terminology & Canonical Scheme Pre-Processor ──────────────
     const canonicalScheme = this.terminologyResolver.resolveCanonicalScheme(text);
+    const asksUniversalHospitalCoverage =
+      Boolean(canonicalScheme) &&
+      /\b(?:every\s+hospital|all\s+hospitals?|any\s+hospital|har\s+hospital|sabhi\s+hospital|kisi\s+bhi\s+hospital)\b|हर\s+अस्पताल|सभी\s+अस्पताल|किसी\s+भी\s+अस्पताल/iu.test(
+        text,
+      );
     if (
       canonicalScheme &&
       this.terminologyResolver.isDirectSchemeQuery(text) &&
-      (aiCategory === IntentType.UNKNOWN ||
+      (asksUniversalHospitalCoverage ||
+        aiCategory === IntentType.UNKNOWN ||
         aiCategory === IntentType.CLARIFICATION ||
         aiCategory === IntentType.GENERAL_HEALTH_QUERY ||
         authorityCategory === AuthorityCategory.UNCERTAIN ||

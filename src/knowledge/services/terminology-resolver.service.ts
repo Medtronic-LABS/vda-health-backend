@@ -102,11 +102,18 @@ export class TerminologyResolverService {
       return 'SCHEME_DOCUMENTS';
     }
     if (
-      /\b(?:apply|application|enrol+l?(?:ment)?|register|registration|card\s*(?:creation|ban\w*|kaise)|how\s+to\s+get\s+(?:a\s+)?card|kahan\s+banega)\b|कैसे\s*(?:अप्लाई|आवेदन|बनवाएं|बनेगा)|आवेदन|पंजीकरण|कार्ड\s*(?:बन|बनवा|कैसे)/iu.test(
+      /\b(?:apply|application|enrol+l?(?:ment)?|register|registration|card\s*(?:creation|ban\w*|kaise)|how\s+to\s+get\s+(?:a\s+)?card|kahan\s+banega)\b|कैसे\s*(?:अप्लाई|आवेदन|बनवाएं|बनवाएँ|बनेगा)|आवेदन|पंजीकरण|कार्ड\s*(?:बन|बनवा|कैसे)/iu.test(
         text,
       )
     ) {
       return 'SCHEME_APPLICATION';
+    }
+    if (
+      /\b(?:every\s+hospital|all\s+hospitals?|any\s+hospital|har\s+hospital|sabhi\s+hospital|kisi\s+bhi\s+hospital)\b|हर\s+अस्पताल|सभी\s+अस्पताल|किसी\s+भी\s+अस्पताल/iu.test(
+        text,
+      )
+    ) {
+      return 'SCHEME_BENEFITS';
     }
     if (
       /\b(?:eligible|eligibility|who\s+can\s+get|am\s+i\s+eligible|qualify|patrata|kisko\s+milta|kaun\s+le\s+sakta)\b|पात्र|पात्रता|किसे\s*मिलता|कौन\s*पात्र/iu.test(
@@ -164,3 +171,4 @@ export class TerminologyResolverService {
       .trim();
   }
 }
+

@@ -20,9 +20,12 @@ export class AshaEducationService {
 
   private intent(text: string): { explicit: boolean; educational: boolean; clinical: boolean } {
     const explicit = /\basha\b|\bncd\b|आशा|एनसीडी/i.test(text);
-    const educational = /\b(?:what is|what are|explain|tell me about|why|how|control|manage|preven(?:t|tion)|screening|avoid|benefits?|harms?|diet|precautions?|tips|kya (?:hai|hota|karna|khaye|khana)|kaise|kyun|kyo|bachav|bachne|savdhani|dhyan|zaroori|nuksan|samjha|batao)\b|क्या\s*(?:है|होता|करें|करना|खाएं|खाना)|क्यों|कैसे|बचाव|बचने|सावधानी|ध्यान|ज़रूरी|जरूरी|नुकसान|समझा|बताओ|उपाय|नियंत्रण|नियंत्रित|कंट्रोल/i.test(text);
-    const topic = /\b(?:diabetes|blood pressure|high bp|bp|hypertension|sugar|non.communicable|ncd|asha|exercise|physical activity|tobacco|smoking|screening)\b|मधुमेह|रक्तचाप|शुगर|बीपी|आशा|व्यायाम|कसरत|तंबाकू|तम्बाकू|धूम्रपान|स्क्रीनिंग/i.test(text);
-    const clinical = /\b(?:my|mine|i have|i am|should i|dose|tablet|medicine|medication|treat|diagnos|symptom|result|report|blood sugar level|bp reading|emergency|hospital|scheme|insurance|chest pain|severe pain|suicide|self.harm)\b|मेरी|मेरा|दवा|खुराक|इलाज|लक्षण|रिपोर्ट|अस्पताल|योजना|सीने में दर्द|आत्महत्या/i.test(text);
+    const educational = /\b(?:what is|what are|what should i|explain|tell me about|keep in mind|why|how|control|manage|preven(?:t|tion)|screening|avoid|benefits?|harms?|diet|food|precautions?|tips|kya (?:hai|hota|karna|karein|khaye|khana|dhyan)|kaise|kyun|kyo|bachav|bachne|savdhani|dhyan|zaroori|nuksan|samjha|batao)\b|क्या\s*(?:है|होता|करें|करना|खाएं|खाना|ध्यान)|क्यों|कैसे|बचाव|बचने|सावधानी|ध्यान|ज़रूरी|जरूरी|नुकसान|समझा|बताओ|उपाय|नियंत्रण|नियंत्रित|कंट्रोल/i.test(text);
+    const topic = /\b(?:diabetes|diabetic|blood pressure|high bp|bp|hypertension|sugar|non.communicable|ncd|asha|exercise|physical activity|tobacco|smoking|screening)\b|मधुमेह|डायबिटीज|डायबिटीज़|रक्तचाप|हाइपरटेंशन|शुगर|बीपी|आशा|व्यायाम|कसरत|तंबाकू|तम्बाकू|धूम्रपान|स्क्रीनिंग/i.test(text);
+    const strictClinicalOrPersonal = /\b(?:dose|tablet|medicine|medication|treat|diagnos|symptom|result|report|blood sugar level|bp reading|emergency|hospital|scheme|insurance|chest pain|severe pain|suicide|self.harm)\b|दवा|खुराक|इलाज|लक्षण|रिपोर्ट|अस्पताल|योजना|सीने में दर्द|आत्महत्या/i.test(text);
+    const lifestyleOrDietSelfCare = /\b(?:control|manage|diet|food|eat|khane|peene|nutrition|exercise|physical activity|preven(?:t|tion)|lifestyle|keep in mind|dhyan|savdhani|upay)\b|उपाय|सावधानी|ध्यान|नियंत्रण|कंट्रोल|खान|भोजन|आहार|बचाव/i.test(text);
+    const pronounClinical = !lifestyleOrDietSelfCare && /\b(?:my|mine|i have|i am|should i)\b|मेरी|मेरा/i.test(text);
+    const clinical = strictClinicalOrPersonal || pronounClinical;
     return { explicit, educational: educational && topic, clinical };
   }
 
@@ -67,7 +70,7 @@ export class AshaEducationService {
     // carrying negation, numeric results or named medicines keep the original
     // transformed query, so the retry cannot erase a clinical restriction.
     if (/\d|\b(?:not|no|without|never|nahi|nahin|nhi|nai|mat|dose|medicine|tablet|metformin)\b|नहीं|नही|मत|दवा|खुराक/i.test(text)) return null;
-    if (/\b(?:sugar|diabetes)\b|मधुमेह|शुगर/i.test(text)) {
+    if (/\b(?:sugar|diabetes|diabetic)\b|मधुमेह|डायबिटीज|डायबिटीज़|शुगर/i.test(text)) {
       if (/\b(?:diet|food|eat|khane|peene|nutrition)\b|खान|भोजन|आहार/i.test(text)) return 'diabetes healthy diet nutrition';
       if (/\b(?:prevent|prevention|bachav)\b|बचाव/i.test(text)) return 'diabetes prevention risk reduction';
     }
@@ -160,7 +163,7 @@ export class AshaEducationService {
       if (typeof answer !== 'string' || !answer.trim() || answer.length > 1200 ||
           (hindi && !/[\u0900-\u097f]/u.test(answer)) ||
           !Array.isArray(used) || !used.length || used.some((id: unknown) => !allowedIds.includes(String(id))) ||
-          /\b(?:you have|take (?:your )?(?:medicine|tablet|pill)|stop (?:your )?(?:medicine|medication)|start (?:your )?(?:medicine|medication)|increase (?:your )?dose|decrease (?:your )?dose)\b|आपको बीमारी|दवा लें|खुराक बदल/i.test(answer)) {
+          /(?<!\bif\s|\bwhen\s)\b(?:you have|take (?:your )?(?:medicine|tablet|pill)|stop (?:your )?(?:medicine|medication)|start (?:your )?(?:medicine|medication)|increase (?:your )?dose|decrease (?:your )?dose)\b|आपको बीमारी|दवा लें|खुराक बदल/i.test(answer)) {
         this.logger.warn(`ASHA answer validation rejected: answerPresent=${typeof answer === 'string'} answerLength=${typeof answer === 'string' ? answer.length : 0} usedIds=${Array.isArray(used) ? used.length : 0}`);
         return this.unavailable(hindi);
       }

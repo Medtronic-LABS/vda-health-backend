@@ -11,9 +11,9 @@ export class DevelopmentSafetyGate implements ISafetyGate {
   };
 
   private readonly additionalEmergencyPatterns = [
-    /\b(?:can(?:not| not|'t) breathe|unable to breathe|not breathing|gasping for air|severe breathlessness|breathing very hard|chest (?:pressure|tightness)|crushing chest|chest pain.{0,50}(?:left arm|arm)|(?:left arm|arm).{0,50}chest pain|heavy bleeding|bleeding heavily|blood (?:will not|won't) stop|(?:fainted|passed out).{0,30}(?:now|today|not waking|unresponsive)|unresponsive|not waking up|bleeding (?:won't|will not) stop|face (?:is )?droop(?:ing)?|speech (?:is )?slurred|sudden (?:one.sided )?(?:weakness|paralysis)|slurred speech|poison(?:ed|ing)|swallowed poison|overdos(?:e|ed)|took too many (?:pills|tablets))\b/i,
+    /\b(?:can(?:not| not|'t) breathe|unable to breathe|not breathing|struggling to breathe|hard to breathe|trouble breathing|short(?:ness)? of breath|gasping for air|severe breathlessness|breathing very hard|chest (?:pressure|tightness)|crushing chest|chest pain.{0,50}(?:left arm|arm|breath|breathing)|(?:left arm|arm).{0,50}chest pain|heavy bleeding|bleeding heavily|blood (?:will not|won't) stop|(?:fainted|passed out).{0,30}(?:now|today|not waking|unresponsive)|unresponsive|not waking up|bleeding (?:won't|will not) stop|face (?:is )?droop(?:ing)?|speech (?:is )?slurred|sudden (?:one.sided )?(?:weakness|paralysis)|slurred speech|poison(?:ed|ing)|swallowed poison|overdos(?:e|ed)|took too many (?:pills|tablets))\b/i,
     /(?:साँस|सांस|श्वास).{0,25}(?:नहीं|मुश्किल|दिक्कत|रुक|अटक)|(?:दम घुट|सांस बंद)|(?:सीने|छाती).{0,35}(?:दबाव|जकड़न|तेज दर्द|भयंकर दर्द)|(?:बाएं हाथ|बायें हाथ).{0,30}(?:दर्द|सीने)|(?:बहुत|तेज|ज्यादा).{0,15}(?:खून|रक्त).{0,15}(?:बह|निकल)|(?:लकवा|चेहरा टेढ़ा|बोली लड़खड़ा|एक तरफ कमजोरी|ज़हर|जहर|विष|ओवरडोज|ज्यादा गोलियां|ज्यादा दवाई|बेहोश|मूर्छित)/,
-    /\b(?:saans|sans|saanse?|saas).{0,30}(?:nahi|nahin|ruk|atak|mushkil|dikkat|ghut)|(?:dam ghut|saans band|sans band)|(?:seene|sine|chhati|chati|chest).{0,35}(?:dabav|pressure|tight|tez dard|bahut dard)|(?:bahut|bohot|zyada|jada|tez).{0,20}(?:khoon|khun).{0,20}(?:beh|nikal)|(?:lakwa|chehra tedha|boli ladkhad|zeher|zahar|poison|overdose|zyada goli|behosh)\b/i,
+    /\b(?:saans|sans|saanse?|saas).{0,30}(?:nahi|nahin|ruk|atak|mushkil|dikkat|ghut)|(?:dam ghut|saans band|sans band)|(?:seene|sine|chhati|chati|chest).{0,35}(?:dabav|pressure|tight|tez dard|bahut dard)|(?:seene|sine|chhati)\s+mein?\s+dard.{0,30}(?:saans|sans)|(?:bahut|bohot|zyada|jada|tez).{0,20}(?:khoon|khun).{0,20}(?:beh|nikal)|(?:lakwa|chehra tedha|boli ladkhad|zeher|zahar|poison|overdose|zyada goli|behosh)\b/i,
   ];
 
   private normalizeForSafety(text: string): string {
@@ -48,15 +48,22 @@ export class DevelopmentSafetyGate implements ISafetyGate {
     const normalizedText = this.normalizeForSafety(text || '');
 
     // Override language context based on specific safety pattern matches
+    const hiEmergencyMatch =
+      this.emergencyPatterns.hi.test(normalizedText) ||
+      this.additionalEmergencyPatterns[1].test(normalizedText);
+    const hiLatnEmergencyMatch =
+      this.emergencyPatterns.hiLatn.test(normalizedText) ||
+      this.additionalEmergencyPatterns[2].test(normalizedText);
+
     if (!language) {
       if (
-        this.emergencyPatterns.hi.test(normalizedText) ||
+        hiEmergencyMatch ||
         this.selfHarmPatterns.hi.test(normalizedText) ||
         this.medicationPatterns.hi.test(normalizedText)
       ) {
         inputLang = 'hi';
       } else if (
-        this.emergencyPatterns.hiLatn.test(normalizedText) ||
+        hiLatnEmergencyMatch ||
         this.selfHarmPatterns.hiLatn.test(normalizedText) ||
         this.medicationPatterns.hiLatn.test(normalizedText)
       ) {
@@ -65,19 +72,20 @@ export class DevelopmentSafetyGate implements ISafetyGate {
     } else {
       if (
         (inputLang === 'en' || inputLang === 'hi-Latn') &&
-        (this.emergencyPatterns.hi.test(normalizedText) ||
+        (hiEmergencyMatch ||
           this.selfHarmPatterns.hi.test(normalizedText) ||
           this.medicationPatterns.hi.test(normalizedText))
       ) {
         inputLang = 'hi';
       } else if (
         inputLang === 'en' &&
-        (this.emergencyPatterns.hiLatn.test(normalizedText) ||
+        (hiLatnEmergencyMatch ||
           this.selfHarmPatterns.hiLatn.test(normalizedText) ||
           this.medicationPatterns.hiLatn.test(normalizedText))
       ) {
         const matchesEn =
           this.emergencyPatterns.en.test(normalizedText) ||
+          this.additionalEmergencyPatterns[0].test(normalizedText) ||
           this.selfHarmPatterns.en.test(normalizedText) ||
           this.medicationPatterns.en.test(normalizedText);
         if (!matchesEn) {
