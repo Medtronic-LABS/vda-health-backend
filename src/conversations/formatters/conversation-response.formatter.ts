@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ClinicalContext } from '../../abdm/models/clinical-context.models';
+import { TerminologyResolverService } from '../../knowledge/services/terminology-resolver.service';
 
 export interface FormattedPatientResponse {
   response_type: string;
@@ -11,6 +12,7 @@ export interface FormattedPatientResponse {
 
 export interface PatientResponseContent {
   summary: string;
+  spoken_summary?: string;
   sections?: Array<{ title?: string; body?: string; bullets?: string[] }>;
   cards?: Array<Record<string, unknown>>;
   medications?: Array<{ name?: unknown; medicationName?: unknown }>;
@@ -19,6 +21,7 @@ export interface PatientResponseContent {
 
 @Injectable()
 export class ConversationResponseFormatter {
+  private readonly terminologyResolver = new TerminologyResolverService();
   /** Canonical text for history, TTS, and plain-text patient consumers. */
   patientFacingText(content: PatientResponseContent): string {
     const parts = [content.summary];
@@ -49,9 +52,21 @@ export class ConversationResponseFormatter {
   ): PatientResponseContent | null {
     if (!generated || typeof generated !== 'object') return null;
     const candidate = generated as Record<string, unknown>;
-    const summary = typeof candidate.summary === 'string' ? candidate.summary.trim() : '';
+    const rawSummary = typeof candidate.summary === 'string' ? candidate.summary.trim() : '';
+    const summary = this.terminologyResolver.sanitizeBureaucraticTerms(rawSummary);
     // A normal patient reply must be concise, but the SafetyGate owns emergency output.
     if (!summary || this.wordCount(summary) > 120 || this.containsInternalRetrievalMaterial(summary)) return null;
+
+    const rawSpoken = typeof candidate.spoken_summary === 'string' ? candidate.spoken_summary.trim() : '';
+    const cleanedSpoken = rawSpoken
+      ? this.terminologyResolver.sanitizeBureaucraticTerms(rawSpoken)
+      : undefined;
+    const spoken_summary =
+      cleanedSpoken &&
+      this.wordCount(cleanedSpoken) <= 80 &&
+      !this.containsInternalRetrievalMaterial(cleanedSpoken)
+        ? cleanedSpoken
+        : undefined;
 
     const sections = Array.isArray(candidate.sections)
       ? candidate.sections
@@ -91,7 +106,13 @@ export class ConversationResponseFormatter {
           .filter((a) => Boolean(a.label && a.action))
       : undefined;
 
-    return { summary, sections, cards, actions };
+    return {
+      summary,
+      ...(spoken_summary ? { spoken_summary } : {}),
+      sections,
+      cards,
+      actions,
+    };
   }
 
   /** Enforces semantic response completeness, not question-specific templates. */
@@ -139,7 +160,7 @@ export class ConversationResponseFormatter {
 
   private safePatientText(value: unknown): string | undefined {
     if (typeof value !== 'string') return undefined;
-    const text = value.trim();
+    const text = this.terminologyResolver.sanitizeBureaucraticTerms(value.trim());
     return text && !this.containsInternalRetrievalMaterial(text) ? text : undefined;
   }
 

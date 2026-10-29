@@ -20,4 +20,15 @@ describe('patient response formatting', () => {
     expect(formatted.content.en).toBeUndefined();
     expect(formatted.content.summary).toBe(hindi);
   });
+
+  it('replaces bureaucratic acronyms like EHCP and preserves spoken_summary', () => {
+    const normalized = formatter.normalizeGeneratedContent({
+      summary: 'आप अधिकृत अस्पतालों (EHCP) में इलाज करा सकते हैं।',
+      spoken_summary: 'आप सूचीबद्ध अस्पताल में जानकारी ले सकते हैं।',
+      sections: [{ bullets: ['नज़दीकी EHCP पर PMAM से मिलें।'] }],
+    });
+    expect(normalized?.summary).toBe('आप अधिकृत अस्पतालों में इलाज करा सकते हैं।');
+    expect(normalized?.spoken_summary).toBe('आप सूचीबद्ध अस्पताल में जानकारी ले सकते हैं।');
+    expect(normalized?.sections?.[0]?.bullets?.[0]).toBe('नज़दीकी सूचीबद्ध अस्पताल पर आयुष्मान मित्र से मिलें।');
+  });
 });

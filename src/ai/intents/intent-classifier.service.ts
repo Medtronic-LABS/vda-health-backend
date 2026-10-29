@@ -1,4 +1,4 @@
-import { Injectable, Logger, Inject } from '@nestjs/common';
+import { Injectable, Logger, Inject, Optional } from '@nestjs/common';
 import { IIntentClassifier } from './intent-classifier.interface';
 import {
   AuthorityCategory,
@@ -15,6 +15,7 @@ import { IntentToRecordCategoryMapper } from '../../abdm/mappers/intent-to-recor
 import { HealthRecordCategory } from '../../abdm/interfaces/health-record-service.interface';
 import { AuditService } from '../../audit/audit.service';
 import { SemanticContextPlannerService } from '../context/semantic-context-planner.service';
+import { TerminologyResolverService } from '../../knowledge/services/terminology-resolver.service';
 
 @Injectable()
 export class IntentClassifierService implements IIntentClassifier {
@@ -26,6 +27,8 @@ export class IntentClassifierService implements IIntentClassifier {
     private readonly languageProvider: ILanguageProvider,
     private readonly auditService: AuditService,
     private readonly contextPlanner: SemanticContextPlannerService,
+    @Optional()
+    private readonly terminologyResolver: TerminologyResolverService = new TerminologyResolverService(),
   ) {}
 
   async classifyIntent(
@@ -106,6 +109,42 @@ export class IntentClassifierService implements IIntentClassifier {
       this.logger.warn(
         `AI intent classification failed; returning UNKNOWN: ${errMsg}`,
       );
+    }
+
+    // ─── Stage 1 Terminology & Canonical Scheme Pre-Processor ──────────────
+    const canonicalScheme = this.terminologyResolver.resolveCanonicalScheme(text);
+    if (
+      canonicalScheme &&
+      this.terminologyResolver.isDirectSchemeQuery(text) &&
+      (aiCategory === IntentType.UNKNOWN ||
+        aiCategory === IntentType.CLARIFICATION ||
+        aiCategory === IntentType.GENERAL_HEALTH_QUERY ||
+        authorityCategory === AuthorityCategory.UNCERTAIN ||
+        authorityCategory === AuthorityCategory.OUT_OF_SCOPE)
+    ) {
+      aiCategory = IntentType.GOVERNMENT_SCHEME_QUERY;
+      authorityCategory = AuthorityCategory.SCHEME_ENTITLEMENT;
+      confidence = Math.max(confidence, 0.92);
+      knowledgeRequired = true;
+    }
+
+    if (aiCategory === IntentType.GOVERNMENT_SCHEME_QUERY) {
+      if (!requirements) requirements = {};
+      const resolvedScheme = this.terminologyResolver.normalizeSchemeLookupQuery(
+        requirements.scheme,
+        text,
+      );
+      if (resolvedScheme) {
+        requirements.scheme = resolvedScheme;
+      }
+      schemeInformationType =
+        this.terminologyResolver.resolveSchemeInformationType(
+          text,
+          schemeInformationType,
+          canonicalScheme,
+        );
+      requirements.schemeInformationType = schemeInformationType;
+      knowledgeRequired = true;
     }
 
     const metadata = this.buildMetadata(

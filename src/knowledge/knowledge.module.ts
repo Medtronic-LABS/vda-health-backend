@@ -11,6 +11,7 @@ import { DevelopmentKnowledgeService } from './services/development-knowledge.se
 import { KnowledgeRetrievalService } from './services/knowledge-retrieval.service';
 import { KnowledgeAdminService } from './services/knowledge-admin.service';
 import { KnowledgeQueryNormalizerService } from './services/knowledge-query-normalizer.service';
+import { TerminologyResolverService } from './services/terminology-resolver.service';
 import { AdminKnowledgeController } from './controllers/admin-knowledge.controller';
 import { ConfigurationModule } from '../configuration/configuration.module';
 import { AuditModule } from '../audit/audit.module';
@@ -39,6 +40,7 @@ import { AuthModule } from '../auth/auth.module';
     KnowledgeRetrievalService,
     KnowledgeAdminService,
     KnowledgeQueryNormalizerService,
+    TerminologyResolverService,
   ],
   exports: [
     KnowledgeRetrievalService,
@@ -46,6 +48,7 @@ import { AuthModule } from '../auth/auth.module';
     LocalSemanticEmbeddingProvider,
     DevelopmentKnowledgeService,
     KnowledgeQueryNormalizerService,
+    TerminologyResolverService,
     MultiFormatParserService,
   ],
 })

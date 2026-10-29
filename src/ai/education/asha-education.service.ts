@@ -20,7 +20,7 @@ export class AshaEducationService {
 
   private intent(text: string): { explicit: boolean; educational: boolean; clinical: boolean } {
     const explicit = /\basha\b|\bncd\b|आशा|एनसीडी/i.test(text);
-    const educational = /\b(?:what is|what are|explain|tell me about|why|how|control|manage|preven(?:t|tion)|screening|avoid|benefits?|harms?|kya (?:hai|hota|karna)|kaise|kyun|kyo|bachav|savdhani|dhyan|zaroori|nuksan|samjha|batao)\b|क्या\s*(?:है|होता|करें)|क्यों|कैसे|बचाव|सावधानी|ध्यान|ज़रूरी|जरूरी|नुकसान|समझा|बताओ|उपाय|नियंत्रण|कंट्रोल/i.test(text);
+    const educational = /\b(?:what is|what are|explain|tell me about|why|how|control|manage|preven(?:t|tion)|screening|avoid|benefits?|harms?|diet|precautions?|tips|kya (?:hai|hota|karna|khaye|khana)|kaise|kyun|kyo|bachav|bachne|savdhani|dhyan|zaroori|nuksan|samjha|batao)\b|क्या\s*(?:है|होता|करें|करना|खाएं|खाना)|क्यों|कैसे|बचाव|बचने|सावधानी|ध्यान|ज़रूरी|जरूरी|नुकसान|समझा|बताओ|उपाय|नियंत्रण|नियंत्रित|कंट्रोल/i.test(text);
     const topic = /\b(?:diabetes|blood pressure|high bp|bp|hypertension|sugar|non.communicable|ncd|asha|exercise|physical activity|tobacco|smoking|screening)\b|मधुमेह|रक्तचाप|शुगर|बीपी|आशा|व्यायाम|कसरत|तंबाकू|तम्बाकू|धूम्रपान|स्क्रीनिंग/i.test(text);
     const clinical = /\b(?:my|mine|i have|i am|should i|dose|tablet|medicine|medication|treat|diagnos|symptom|result|report|blood sugar level|bp reading|emergency|hospital|scheme|insurance|chest pain|severe pain|suicide|self.harm)\b|मेरी|मेरा|दवा|खुराक|इलाज|लक्षण|रिपोर्ट|अस्पताल|योजना|सीने में दर्द|आत्महत्या/i.test(text);
     return { explicit, educational: educational && topic, clinical };

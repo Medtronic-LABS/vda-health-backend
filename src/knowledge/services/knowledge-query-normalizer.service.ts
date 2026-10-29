@@ -25,12 +25,26 @@ export class KnowledgeQueryNormalizerService {
     const lower = patientQuery.toLowerCase();
     const location = this.extractLocation(lower);
     const effectiveState = location.state || explicitState;
-    // These questions can contain exact medicine names, values, units, and
+    // These clinical questions can contain exact medicine names, values, units, and
     // negation. A generic English query would discard those restrictions.
-    if (intent === IntentType.MEDICATION_QUERY || intent === IntentType.LAB_RESULT_QUERY
-      || intent === IntentType.ADHERENCE_QUERY
-      || /\b(?:not|no|without|never|nahi|nahin|nhi|nai)\b|नहीं|नही|मत|\d/u.test(patientQuery)) {
-      return { query: patientQuery, state: effectiveState, district: location.district, normalized: false };
+    // Scheme and facility navigation queries MUST still normalize to English so
+    // Hindi/Hinglish questions with numbers ("5 लाख") or "नहीं" match governed chunks.
+    if (
+      intent === IntentType.MEDICATION_QUERY ||
+      intent === IntentType.LAB_RESULT_QUERY ||
+      intent === IntentType.ADHERENCE_QUERY ||
+      (intent !== IntentType.GOVERNMENT_SCHEME_QUERY &&
+        intent !== IntentType.FACILITY_QUERY &&
+        /\b(?:not|no|without|never|nahi|nahin|nhi|nai)\b|नहीं|नही|मत|\d/u.test(
+          patientQuery,
+        ))
+    ) {
+      return {
+        query: patientQuery,
+        state: effectiveState,
+        district: location.district,
+        normalized: false,
+      };
     }
     const needsNormalization = intent === IntentType.GOVERNMENT_SCHEME_QUERY
       || language === 'hi' || language === 'hi-Latn' || /himcare|himachal/i.test(lower);
@@ -54,9 +68,14 @@ export class KnowledgeQueryNormalizerService {
       [IntentType.REFERRAL_QUERY]: 'clinical referral pathway hospital referral',
     };
 
-    const pmjayApplication = intent === IntentType.GOVERNMENT_SCHEME_QUERY
-      && /(?:ayushman|pm-jay|pmjay|आयुष्मान)/.test(lower)
-      && /(?:apply|application|enrol+l?|registration|register|card\s*(?:creation|ban)|कैसे\s*(?:अप्लाई|आवेदन)|आवेदन|पंजीकरण|कार्ड\s*(?:बन|बनवा))/i.test(lower);
+    const pmjayPattern =
+      /(?:ayushman|aayushman|ab[\s-]*pm[\s-]*jay|abpmj(?:ay)?|pm[\s-]*jay|jan\s*arogya|golden\s*card|आयुष्मान|पीएम[\s-]*जेएवाई|पीएमजेएवाई|जन\s*आरोग्य|गोल्डन\s*कार्ड|एबीपीएमजे)/i;
+    const pmjayApplication =
+      intent === IntentType.GOVERNMENT_SCHEME_QUERY &&
+      pmjayPattern.test(lower) &&
+      /(?:apply|application|enrol+l?|registration|register|card\s*(?:creation|ban)|कैसे\s*(?:अप्लाई|आवेदन|बनवाएं|बनेगा)|आवेदन|पंजीकरण|कार्ड\s*(?:बन|बनवा|कैसे))/i.test(
+        lower,
+      );
 
     return {
       query: byIntent[intent] || patientQuery,
@@ -136,24 +155,36 @@ export class KnowledgeQueryNormalizerService {
    * searchable by the configured local embedding model.
    */
   private normalizeSchemeQuery(lower: string, state?: string): string {
-    if (/himcare|हिमकेयर/.test(lower)) {
-      if (/document|दस्तावेज/.test(lower)) {
+    if (/himcare|हिमकेयर|हिम\s*केयर/.test(lower)) {
+      if (/document|kagaz|दस्तावेज|दस्तावेज़|कागज/.test(lower)) {
         return 'HIMCARE required documents BPL certificate MNREGA job card disability certificate employment category certificate';
       }
-      if (/eligible|eligibility|पात्र/.test(lower)) {
+      if (/eligible|eligibility|patrata|पात्र/.test(lower)) {
         return 'HIMCARE eligibility criteria required documents official verification';
       }
       return 'HIMCARE benefits coverage eligibility enrollment';
     }
 
-    if (/ayushman|pm-jay|pmjay|आयुष्मान/.test(lower)) {
-      if (/(?:apply|application|enrol+l?|registration|register|card\s*(?:creation|ban)|कैसे\s*(?:अप्लाई|आवेदन)|आवेदन|पंजीकरण|कार्ड\s*(?:बन|बनवा))/i.test(lower)) {
+    if (/\b(?:pmbjp|jan\s*aushadhi|janaushadhi)\b|जन\s*औषधि|पीएमबीजेपी/i.test(lower)) {
+      return 'Pradhan Mantri Bhartiya Janaushadhi Pariyojana PMBJP generic medicines Jan Aushadhi Kendra benefits';
+    }
+
+    if (
+      /(?:ayushman|aayushman|ab[\s-]*pm[\s-]*jay|abpmj(?:ay)?|pm[\s-]*jay|jan\s*arogya|golden\s*card|आयुष्मान|पीएम[\s-]*जेएवाई|पीएमजेएवाई|जन\s*आरोग्य|गोल्डन\s*कार्ड|एबीपीएमजे)/i.test(
+        lower,
+      )
+    ) {
+      if (
+        /(?:apply|application|enrol+l?|registration|register|card\s*(?:creation|ban)|कैसे\s*(?:अप्लाई|आवेदन|बनवाएं|बनेगा)|आवेदन|पंजीकरण|कार्ड\s*(?:बन|बनवा|कैसे))/i.test(
+          lower,
+        )
+      ) {
         return 'AB PM-JAY Beneficiary Identification System BIS eligibility database Ayushman card Common Service Centre CSC PMAM';
       }
-      if (/document|दस्तावेज/.test(lower)) {
+      if (/document|kagaz|दस्तावेज|दस्तावेज़|कागज/.test(lower)) {
         return 'Ayushman Bharat PM-JAY eligibility required documents beneficiary identification';
       }
-      if (/eligible|eligibility|पात्र/.test(lower)) {
+      if (/eligible|eligibility|patrata|पात्र/.test(lower)) {
         return 'Ayushman Bharat PM-JAY eligibility criteria required documents official verification';
       }
       return 'Ayushman Bharat PM-JAY benefits coverage cashless hospitalization';

@@ -22,4 +22,15 @@ describe('sanitizeForSpeech', () => {
     const spoken = sanitizeForSpeech('Metformin (500 mg) रात में लें। Metformin (500 mg) रात में लें। डॉक्टर से पूछें।', 'hi-IN');
     expect(spoken).toBe('Metformin (500 mg) रात में लें। डॉक्टर से पूछें।');
   });
+
+  it('strips bracketed English glosses and bureaucratic acronyms like (EHCP) and (AB PM-JAY)', () => {
+    const spoken = sanitizeForSpeech(
+      'आयुष्मान भारत (AB PM-JAY) में अधिकृत अस्पतालों (EHCP) और पात्रता (Eligibility) की जाँच करें। EHCP पर जाएँ।',
+      'hi-IN',
+    );
+    expect(spoken).not.toContain('EHCP');
+    expect(spoken).not.toContain('AB PM-JAY');
+    expect(spoken).not.toContain('Eligibility');
+    expect(spoken).toContain('सूचीबद्ध अस्पताल');
+  });
 });

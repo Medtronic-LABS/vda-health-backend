@@ -9,9 +9,22 @@ describe('shared retrieval query normalization', () => {
       normalizer.normalize('Ayushman Bharat kya hai?', 'hi-Latn', IntentType.GOVERNMENT_SCHEME_QUERY),
       normalizer.normalize('आयुष्मान भारत क्या है?', 'hi', IntentType.GOVERNMENT_SCHEME_QUERY),
       normalizer.normalize('What is Ayushman Bharat?', 'en', IntentType.GOVERNMENT_SCHEME_QUERY),
+      normalizer.normalize('What is ABPMJ?', 'en', IntentType.GOVERNMENT_SCHEME_QUERY),
+      normalizer.normalize('क्या आयुष्मान में 5 लाख तक का इलाज मुफ्त है?', 'hi', IntentType.GOVERNMENT_SCHEME_QUERY),
     ];
     expect(new Set(queries.map(({ query }) => query)).size).toBe(1);
     expect(queries.every(({ normalized }) => normalized)).toBe(true);
+  });
+
+  it('normalizes Hindi scheme application questions even when they contain negation ("नहीं")', () => {
+    const res = normalizer.normalize(
+      'मेरे पास आयुष्मान कार्ड नहीं है तो कैसे बनवाएं?',
+      'hi',
+      IntentType.GOVERNMENT_SCHEME_QUERY,
+    );
+    expect(res.normalized).toBe(true);
+    expect(res.query).toContain('AB PM-JAY');
+    expect(res.category).toBe('pmjay_operations');
   });
 
   it('does not erase medicine names, report values, negation, or emergency wording', () => {
