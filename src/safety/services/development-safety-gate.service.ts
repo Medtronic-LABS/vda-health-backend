@@ -130,13 +130,13 @@ export class DevelopmentSafetyGate implements ISafetyGate {
       this.emergencyPatterns.hiLatn.test(normalizedText)
     ) {
       let patientSafeMessage =
-        'If you are experiencing a medical emergency, please contact local emergency services or visit the nearest emergency room immediately.';
+        'If you are feeling very unwell, experiencing severe chest pain, or having difficulty breathing, please immediately call emergency services (112 or 108) or go to the nearest hospital right away.';
       if (inputLang === 'hi') {
         patientSafeMessage =
-          'यदि आप एक चिकित्सा आपात स्थिति का अनुभव कर रहे हैं, तो कृपया तुरंत स्थानीय आपातकालीन सेवाओं से संपर्क करें या निकटतम आपातकालीन कक्ष में जाएं।';
+          'यदि आपकी तबीयत ज्यादा खराब लग रही है या सीने में तेज दर्द और सांस लेने में तकलीफ है, तो कृपया तुरंत आपातकालीन नंबर (112 या 108) पर संपर्क करें या बिना किसी देरी के नजदीकी अस्पताल जाएं।';
       } else if (inputLang === 'hi-Latn') {
         patientSafeMessage =
-          'Yadi aap medical emergency face kar rahe hain, toh please turant emergency services ko contact karein ya nearest emergency room jayein.';
+          'Yadi aapki tabiyat zyada kharab lag rahi hai ya seene mein tej dard aur saans lene mein takleef hai, toh kripya turant emergency number (112 ya 108) par contact karein ya bina kisi deri ke nazdeeki hospital jayein.';
       }
 
       return {

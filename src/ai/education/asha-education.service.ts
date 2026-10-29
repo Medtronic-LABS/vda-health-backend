@@ -184,24 +184,14 @@ export class AshaEducationService {
         .replace(/(?:^|\s)[1-9][.)]\s+/gu, '\n• ')
         .replace(/^\s*[-•]\s*/gmu, '• ');
       const lines = summary.split(/\n+/u).map((line) => line.trim()).filter(Boolean);
-      const bullets = lines.filter((line) => line.startsWith('• '));
-      const bpControl = /\b(?:bp|blood pressure|hypertension|control)\b|बीपी|रक्तचाप|कंट्रोल|नियंत्रण/u.test(text)
-        && /\b(?:control|manage)\b|कंट्रोल|नियंत्रण|उपाय/u.test(text);
-      const bpSpeechLines = bpControl ? [
-        bullets.find((line) => /नमक|salt/u.test(line)),
-        bullets.find((line) => /फल|सब्ज|खान-पान|fruit|vegetable|diet/u.test(line)),
-        bullets.find((line) => /तंबाकू|tobacco/u.test(line)),
-        bullets.find((line) => /व्यायाम|सक्रिय|activity|exercise/u.test(line)),
-      ].filter((line): line is string => Boolean(line)) : [];
-      const spoken = bpSpeechLines.length >= 3
-        ? `${bpSpeechLines.map((line) => line.slice(2).split(/[.!?।॥]/u)[0].trim()).join('। ')}।`
-        : bullets.length
-        ? [lines.find((line) => !line.startsWith('• ')), ...bullets.slice(0, 2).map((line) => line.slice(2))]
-          .filter(Boolean).join(' ')
-        : (summary.match(/[^.!?।॥]+[.!?।॥]?/gu)?.map((part) => part.trim()).filter(Boolean) || [summary])
-          .slice(0, 2).join(' ');
+      // Construct spoken_summary that conveys all visual points in natural spoken language
+      // without bullet symbols, so patients can read and listen at the same time without discrepancy.
+      const spoken = lines
+        .map((line) => line.replace(/^•\s*/, '').trim())
+        .filter(Boolean)
+        .join(hindi ? ' ' : ' ');
       return { responseType: 'text', content: { summary, [hindi ? 'hi' : 'en']: summary,
-        ...(spoken.length < summary.length ? { spoken_summary: spoken } : {}) }, intent: 'ASHA_EDUCATION',
+        ...(spoken ? { spoken_summary: spoken } : {}) }, intent: 'ASHA_EDUCATION',
         selectedAgent: 'asha-education', safetyStatus: 'SAFE' };
     } catch { return this.unavailable(hindi); }
   }

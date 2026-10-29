@@ -88,6 +88,11 @@ const IPHS_SERVICE_SEARCH_TERMS: Array<{
   evidenceTerms: string[];
 }> = [
   {
+    service: /^(?:ultrasound|usg|sonography)$/i,
+    query: 'IPHS 2022 Ultrasound USG sonography diagnostic facility Community Health Centre District Hospital',
+    evidenceTerms: ['Ultrasound', 'USG', 'sonography'],
+  },
+  {
     service: /^X-ray$/i,
     query: 'IPHS 2022 X-ray radiography diagnostic facility',
     evidenceTerms: ['X-ray', 'X ray', 'Xray', 'radiography'],
@@ -369,21 +374,28 @@ export class AiOrchestratorService implements IAiOrchestrator {
     resolution: Extract<PrescriptionContextResolution, { kind: 'MEDICINE_LIST' | 'MEDICINE_FACT' | 'REMINDER_FACT' | 'INVESTIGATION_LIST' }>,
     language: string,
   ): Record<string, unknown> {
-    const hindi = language.startsWith('hi');
+    const isHinglish = language === 'hi-Latn' || language === 'hinglish';
+    const hindi = language.startsWith('hi') && !isHinglish;
     if (resolution.kind === 'MEDICINE_LIST') {
       const bullets = context.medicines.map((medicine) =>
-        this.patientPrescriptionMedicineLine(medicine, hindi));
+        this.patientPrescriptionMedicineLine(medicine, hindi, isHinglish));
       const summary = hindi
         ? 'आपकी अभी सेव की हुई पर्ची में ये दवाइयाँ लिखी हैं:'
-        : 'Your currently saved prescription lists these medicines:';
+        : isHinglish
+          ? 'Aapki abhi save ki gayi parchi mein ye dawaiyan likhi hain:'
+          : 'Your currently saved prescription lists these medicines:';
       const closing = hindi
-        ? 'अगर आप चाहें, तो मैं आपकी दवाइयों के समय के बारे में भी बता सकता हूँ।'
-        : 'If you want, I can also tell you about the recorded medicine timings.';
+        ? 'अगर आप चाहें, तो मैं आपकी दवाइयों के सही समय पर आपको याद दिला सकती हूँ।'
+        : isHinglish
+          ? 'Agar aap chahein, toh main aapki dawaiyon ke sahi samay par aapko yaad dila sakti hoon.'
+          : 'If you would like, I can remind you when it is time to take your medicines.';
+      const spoken_summary = `${summary} ${bullets.join('. ')}. ${closing}`;
       return {
         summary,
         [language]: summary,
+        spoken_summary,
         sections: [
-          { title: hindi ? 'पर्ची की दवाइयाँ' : 'Prescription medicines', bullets },
+          { title: hindi ? 'पर्ची की दवाइयाँ' : isHinglish ? 'Parchi ki dawaiyan' : 'Prescription medicines', bullets },
           { body: closing },
         ],
       };
@@ -391,9 +403,9 @@ export class AiOrchestratorService implements IAiOrchestrator {
     if (resolution.kind === 'INVESTIGATION_LIST') {
       const bullets = context.investigations.map((item) => item.name);
       const summary = bullets.length
-        ? (hindi ? 'आपकी सेव की हुई पर्ची में ये जांचें लिखी हैं:' : 'Your saved prescription lists these tests:')
-        : (hindi ? 'आपकी सेव की हुई पर्ची में कोई जांच नहीं लिखी है।' : 'No tests are listed in your saved prescription.');
-      return { summary, [language]: summary, ...(bullets.length ? { sections: [{ title: hindi ? 'जांचें' : 'Tests', bullets }] } : {}) };
+        ? (hindi ? 'आपकी सेव की हुई पर्ची में ये जांचें लिखी हैं:' : isHinglish ? 'Aapki save ki gayi parchi mein ye jaanchein likhi hain:' : 'Your saved prescription lists these tests:')
+        : (hindi ? 'आपकी सेव की हुई पर्ची में कोई जांच नहीं लिखी है।' : isHinglish ? 'Aapki save ki gayi parchi mein koi jaanch nahi likhi hai.' : 'No tests are listed in your saved prescription.');
+      return { summary, [language]: summary, ...(bullets.length ? { sections: [{ title: hindi ? 'जांचें' : isHinglish ? 'Jaanchein' : 'Tests', bullets }] } : {}) };
     }
     if (resolution.kind === 'MEDICINE_FACT') {
       const medicine = resolution.medicine;
@@ -455,12 +467,13 @@ export class AiOrchestratorService implements IAiOrchestrator {
   private patientPrescriptionMedicineLine(
     medicine: SanitizedPrescriptionMedicine,
     hindi: boolean,
+    hinglish = false,
   ): string {
     const strength = this.patientPrescriptionStrength(medicine.strength);
     const name = [medicine.name, strength].filter(Boolean).join(' ');
     const details = [
-      this.patientPrescriptionFrequency(medicine.frequency, hindi),
-      this.patientPrescriptionTiming(medicine.timingInstruction, hindi),
+      this.patientPrescriptionFrequency(medicine.frequency, hindi, hinglish),
+      this.patientPrescriptionTiming(medicine.timingInstruction, hindi, hinglish),
       medicine.administrationInstruction,
     ].filter((value): value is string => Boolean(value));
     return details.length ? `${name} — ${[...new Set(details)].join(' • ')}` : name;
@@ -473,28 +486,28 @@ export class AiOrchestratorService implements IAiOrchestrator {
     return /^\d+(?:\.\d+)?$/.test(normalized) ? undefined : normalized;
   }
 
-  private patientPrescriptionFrequency(value: string | undefined, hindi: boolean): string | undefined {
+  private patientPrescriptionFrequency(value: string | undefined, hindi: boolean, hinglish = false): string | undefined {
     if (!value?.trim()) return undefined;
     const normalized = value.trim().toLowerCase().replace(/[._-]+/g, ' ').replace(/\s+/g, ' ');
     if (/^(?:od|daily|once daily|once a day|1 time daily)$/.test(normalized)) {
-      return hindi ? 'दिन में 1 बार' : 'once daily';
+      return hindi ? 'दिन में 1 बार' : hinglish ? 'din mein 1 baar' : 'once daily';
     }
     if (/^(?:bd|bid|twice daily|twice a day|2 times daily)$/.test(normalized)) {
-      return hindi ? 'दिन में 2 बार' : 'twice daily';
+      return hindi ? 'दिन में 2 बार' : hinglish ? 'din mein 2 baar' : 'twice daily';
     }
     if (/^(?:tds|tid|thrice daily|three times daily|3 times daily)$/.test(normalized)) {
-      return hindi ? 'दिन में 3 बार' : 'three times daily';
+      return hindi ? 'दिन में 3 बार' : hinglish ? 'din mein 3 baar' : 'three times daily';
     }
     return value.trim();
   }
 
-  private patientPrescriptionTiming(value: string | undefined, hindi: boolean): string | undefined {
+  private patientPrescriptionTiming(value: string | undefined, hindi: boolean, hinglish = false): string | undefined {
     if (!value?.trim()) return undefined;
     const normalized = value.trim().toLowerCase();
-    if (/^(?:morning|सुबह)$/.test(normalized)) return hindi ? 'सुबह' : 'morning';
-    if (/^(?:afternoon|दोपहर)$/.test(normalized)) return hindi ? 'दोपहर' : 'afternoon';
-    if (/^(?:evening|शाम)$/.test(normalized)) return hindi ? 'शाम' : 'evening';
-    if (/^(?:night|bedtime|रात)$/.test(normalized)) return hindi ? 'रात' : 'night';
+    if (/^(?:morning|सुबह)$/.test(normalized)) return hindi ? 'सुबह' : hinglish ? 'subah' : 'morning';
+    if (/^(?:afternoon|दोपहर)$/.test(normalized)) return hindi ? 'दोपहर' : hinglish ? 'dopahar' : 'afternoon';
+    if (/^(?:evening|शाम)$/.test(normalized)) return hindi ? 'शाम' : hinglish ? 'shaam' : 'evening';
+    if (/^(?:night|bedtime|रात)$/.test(normalized)) return hindi ? 'रात' : hinglish ? 'raat' : 'night';
     return value.trim();
   }
 
@@ -1802,39 +1815,197 @@ export class AiOrchestratorService implements IAiOrchestrator {
         safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
     }
 
+    // Multi-prescription verification and update pipeline
+    let allPatientPrescriptions: Prescription[] = [];
+    if (this.prescriptions && authorizedPatientRef) {
+      try {
+        allPatientPrescriptions = await this.prescriptions.find({
+          where: { tenantId: identity.tenantId, patientRef: authorizedPatientRef },
+          order: { createdAt: 'DESC' },
+        });
+      } catch (err) {
+        this.logger.warn(`Failed to query patient prescriptions: ${err}`);
+      }
+    }
+    const latestPrescriptionRecord = allPatientPrescriptions[0];
+    const previousVerifiedPrescription = allPatientPrescriptions.find(
+      (p, index) => index > 0 && p.verificationStatus === 'VERIFIED',
+    );
+    const hasMultipleWithNewPending =
+      Boolean(previousVerifiedPrescription) &&
+      Boolean(latestPrescriptionRecord) &&
+      (latestPrescriptionRecord.verificationStatus === 'PENDING_VERIFICATION' ||
+        latestPrescriptionRecord.verificationStatus === 'UNVERIFIED' ||
+        latestPrescriptionRecord.verificationStatus === 'SUBMITTED');
+    const isFirstTimePending =
+      !previousVerifiedPrescription &&
+      Boolean(latestPrescriptionRecord) &&
+      (latestPrescriptionRecord.verificationStatus === 'PENDING_VERIFICATION' ||
+        latestPrescriptionRecord.verificationStatus === 'UNVERIFIED' ||
+        latestPrescriptionRecord.verificationStatus === 'SUBMITTED');
+
+    const isHinglishPrescription =
+      !/[\u0900-\u097f]/.test(inputText) &&
+      (requestLanguage === 'hi-Latn' ||
+        requestLanguage === 'hinglish' ||
+        /\b(?:meri|mera|mere|mujhe|batao|dikhao|dawa|dawai|dawayio|parchi|chal|rahi|hai|kripya|kaunsi|kaun|kab|upload)\b/i.test(
+          inputText,
+        ));
+    const isHindiPrescription =
+      (requestLanguage.startsWith('hi') || /[\u0900-\u097f]/.test(inputText)) &&
+      !isHinglishPrescription;
+    const effectiveRxLanguage = isHindiPrescription
+      ? 'hi'
+      : isHinglishPrescription
+        ? 'hi-Latn'
+        : requestLanguage;
+
     if (prescriptionContextResolution?.kind === 'PRESCRIPTION_STATUS') {
-      const latest = await this.prescriptions?.findOne({
-        where: { tenantId: identity.tenantId, patientRef: authorizedPatientRef },
-        order: { createdAt: 'DESC' },
-      });
-      const hindi = requestLanguage.startsWith('hi');
-      const message = !latest
-        ? (hindi ? 'अभी आपकी कोई पर्ची अपलोड नहीं हुई है।' : 'You have not uploaded a prescription yet.')
-        : latest.verificationStatus === 'VERIFIED'
-          ? (hindi ? 'आपकी पर्ची की जाँच हो गई है। दवाइयाँ टैब में इसे देखें।' : 'Your prescription has been reviewed. Check it in Medicines.')
-          : latest.verificationStatus === 'REJECTED'
-            ? (hindi ? 'आपकी पर्ची मंज़ूर नहीं हुई। दवाइयाँ टैब में कारण देखें।' : 'Your prescription was not approved. Check the reason in Medicines.')
-            : latest.verificationStatus === 'NEEDS_RESUBMISSION'
-              ? (hindi ? 'आपकी पर्ची के लिए साफ़ फोटो चाहिए। दवाइयाँ टैब देखें।' : 'A clearer prescription is needed. Check Medicines.')
-              : (hindi ? 'आपकी पर्ची की जाँच अभी बाकी है।' : 'Your prescription is still awaiting review.');
-      return { responseType: 'text', content: { summary: message, [requestLanguage]: message }, intent: IntentType.PRESCRIPTION_QUERY, selectedAgent: 'prescription-status', safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
+      const message = !latestPrescriptionRecord
+        ? (isHindiPrescription
+          ? 'अभी आपकी कोई पर्ची अपलोड नहीं हुई है।'
+          : isHinglishPrescription
+            ? 'Abhi aapki koi parchi upload nahi hui hai.'
+            : 'You have not uploaded a prescription yet.')
+        : hasMultipleWithNewPending
+          ? (isHindiPrescription
+            ? 'आपके द्वारा हाल ही में अपलोड की गई नई पर्ची पहले से अलग है। नई दवाइयों को जोड़ने या बदलने के लिए CHO (कम्युनिटी हेल्थ ऑफिसर) द्वारा समीक्षा की जा रही है। जब तक नई पर्ची मंज़ूर नहीं हो जाती, कृपया डॉक्टर द्वारा पहले से बताई गई मान्य दवाइयाँ ही लें।'
+            : isHinglishPrescription
+              ? 'Aapke dwara haal hi mein upload ki gayi nayi parchi pehle se alag hai. Nayi dawaiyon ko jodne ya badalne ke liye CHO (Community Health Officer) dwara review kiya ja raha hai. Jab tak nayi parchi approve nahi ho jaati, kripya doctor dwara pehle se batayi gayi maanya dawaiyan hi lein.'
+              : 'The new prescription you recently uploaded is different from your previously approved one. It is currently being reviewed by the CHO (Community Health Officer) before new medicines can be updated. Until the new prescription is approved, please continue taking your previously prescribed and verified medicines.')
+          : isFirstTimePending
+            ? (isHindiPrescription
+              ? 'अभी आपकी पर्ची की CHO (कम्युनिटी हेल्थ ऑफिसर) द्वारा पुष्टि होना बाकी है। पर्ची मंज़ूर होने के बाद ही आपकी दवाइयाँ यहाँ उपलब्ध होंगी।'
+              : isHinglishPrescription
+                ? 'Abhi aapki parchi ki CHO (Community Health Officer) dwara pushti hona baaki hai. Parchi approve hone ke baad hi aapki dawaiyan yahan available hongi.'
+                : 'Your prescription is currently awaiting verification by the CHO (Community Health Officer). Your medicines will appear here once it has been approved.')
+            : latestPrescriptionRecord.verificationStatus === 'VERIFIED'
+              ? (isHindiPrescription
+                ? 'आपकी पर्ची की जाँच पूरी हो गई है और दवाइयाँ सत्यापित हैं।'
+                : isHinglishPrescription
+                  ? 'Aapki parchi verify ho chuki hai aur dawaiyan save hain.'
+                  : 'Your prescription has been verified and your medicines are ready.')
+              : latestPrescriptionRecord.verificationStatus === 'REJECTED'
+                ? (isHindiPrescription
+                  ? 'आपकी पर्ची मंज़ूर नहीं हुई है। कृपया स्वास्थ्य केंद्र या CHO से संपर्क करें या डॉक्टर की पर्ची दोबारा अपलोड करें।'
+                  : isHinglishPrescription
+                    ? 'Aapki parchi approve nahi hui hai. Kripya health centre ya CHO se contact karein ya doctor ki parchi dobara upload karein.'
+                    : 'Your prescription was not approved. Please consult your health centre / CHO or upload your doctor’s prescription again.')
+                : latestPrescriptionRecord.verificationStatus === 'NEEDS_RESUBMISSION'
+                  ? (isHindiPrescription
+                    ? 'आपकी पर्ची की फोटो साफ़ नहीं आई है। कृपया डॉक्टर की पर्ची की स्पष्ट फोटो दोबारा अपलोड करें।'
+                    : isHinglishPrescription
+                      ? 'Aapki parchi ki photo saaf nahi aayi hai. Kripya doctor ki parchi ki clear photo dobara upload karein.'
+                      : 'A clearer photo of your doctor’s prescription is needed. Please take a clear picture and re-upload it.')
+                  : (isHindiPrescription
+                    ? 'आपकी पर्ची की जाँच अभी बाकी है।'
+                    : isHinglishPrescription
+                      ? 'Aapki parchi ki jaanch abhi baaki hai.'
+                      : 'Your prescription is still awaiting review.');
+      return {
+        responseType: 'text',
+        content: { summary: message, [requestLanguage]: message, spoken_summary: message },
+        intent: IntentType.PRESCRIPTION_QUERY,
+        selectedAgent: 'prescription-status',
+        safetyStatus: 'SAFE',
+        latencyMs: Date.now() - startTime,
+      };
     }
 
-    if (prescriptionContextResolution?.kind === 'MEDICINE_LIST' && !prescriptionContext?.medicines.length) {
-      const hindi = requestLanguage.startsWith('hi') || /[\u0900-\u097f]|\b(?:meri|mera|mere|mujhe|batao|dikhao|dawa|dawai)\b/i.test(inputText);
-      const langKey = hindi ? 'hi' : requestLanguage;
-      const message = hindi
-        ? 'अभी आपकी कोई सत्यापित दवा उपलब्ध नहीं है। पर्ची की जाँच बाकी हो तो दवाइयाँ टैब में स्थिति देखें।'
-        : 'No verified medicines are available yet. If your prescription is awaiting review, check its status in Medicines.';
-      return { responseType: 'text', content: { summary: message, [langKey]: message }, intent: IntentType.MEDICATION_QUERY, selectedAgent: 'medication-agent', safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
+    if (prescriptionContextResolution?.kind === 'MEDICINE_LIST') {
+      if (hasMultipleWithNewPending) {
+        const verifiedMedicationsSource =
+          prescriptionContext?.medicines?.length
+            ? prescriptionContext.medicines
+            : (previousVerifiedPrescription?.verifiedMedications || []).map((m) => ({
+                name: m.name,
+                strength: m.strength,
+                frequency: m.frequency,
+                timingInstruction: m.timingInstruction,
+                administrationInstruction: m.administrationInstruction,
+              }));
+        const bullets = verifiedMedicationsSource.map((med) =>
+          this.patientPrescriptionMedicineLine(med, isHindiPrescription, isHinglishPrescription),
+        );
+        const summary = isHindiPrescription
+          ? 'आपके द्वारा हाल ही में अपलोड की गई नई पर्ची पहले से अलग है। नई दवाइयों को जोड़ने या बदलने के लिए CHO (कम्युनिटी हेल्थ ऑफिसर) द्वारा समीक्षा की जा रही है। जब तक नई पर्ची मंज़ूर नहीं हो जाती, कृपया डॉक्टर द्वारा पहले से बताई गई मान्य दवाइयाँ ही लें:'
+          : isHinglishPrescription
+            ? 'Aapke dwara haal hi mein upload ki gayi nayi parchi pehle se alag hai. Nayi dawaiyon ko jodne ya badalne ke liye CHO (Community Health Officer) dwara review kiya ja raha hai. Jab tak nayi parchi approve nahi ho jaati, kripya doctor dwara pehle se batayi gayi maanya dawaiyan hi lein:'
+            : 'The new prescription you recently uploaded is different from your previously approved one. It is currently being reviewed by the CHO (Community Health Officer) before new medicines can be updated. Until the new prescription is approved, please continue taking your previously prescribed and verified medicines:';
+        const closing = isHindiPrescription
+          ? 'अगर आप चाहें, तो मैं आपकी दवाइयों के सही समय पर आपको याद दिला सकती हूँ।'
+          : isHinglishPrescription
+            ? 'Agar aap chahein, toh main aapki dawaiyon ke sahi samay par aapko yaad dila sakti hoon.'
+            : 'If you would like, I can remind you when it is time to take your medicines.';
+        const spoken_summary = `${summary} ${bullets.join('. ')}. ${closing}`;
+        return {
+          responseType: 'text',
+          content: {
+            summary,
+            [effectiveRxLanguage]: summary,
+            spoken_summary,
+            sections: [
+              {
+                title: isHindiPrescription
+                  ? 'पहले से मान्य दवाइयाँ'
+                  : isHinglishPrescription
+                    ? 'Pehle se maanya dawaiyan'
+                    : 'Previously verified medicines',
+                bullets,
+              },
+              { body: closing },
+            ],
+          },
+          intent: IntentType.MEDICATION_QUERY,
+          selectedAgent: 'medication-agent',
+          safetyStatus: 'SAFE',
+          latencyMs: Date.now() - startTime,
+        };
+      }
+
+      if (!prescriptionContext?.medicines.length) {
+        const message = isFirstTimePending
+          ? (isHindiPrescription
+            ? 'अभी आपकी पर्ची की CHO (कम्युनिटी हेल्थ ऑफिसर) द्वारा पुष्टि होना बाकी है। पर्ची मंज़ूर होने के बाद ही आपकी दवाइयाँ यहाँ उपलब्ध होंगी।'
+            : isHinglishPrescription
+              ? 'Abhi aapki parchi ki CHO (Community Health Officer) dwara pushti hona baaki hai. Parchi approve hone ke baad hi aapki dawaiyan yahan available hongi.'
+              : 'Your prescription is currently awaiting verification by the CHO (Community Health Officer). Your medicines will appear here once it has been approved.')
+          : (isHindiPrescription
+            ? 'अभी आपकी कोई सत्यापित दवा उपलब्ध नहीं है।'
+            : isHinglishPrescription
+              ? 'Abhi aapki koi verified dawa uplabdh nahi hai.'
+              : 'No verified medicines are available yet.');
+        return {
+          responseType: 'text',
+          content: { summary: message, [effectiveRxLanguage]: message, spoken_summary: message },
+          intent: IntentType.MEDICATION_QUERY,
+          selectedAgent: 'medication-agent',
+          safetyStatus: 'SAFE',
+          latencyMs: Date.now() - startTime,
+        };
+      }
     }
+
     if (prescriptionContextResolution?.kind === 'REMINDER_FACT' && !prescriptionContext?.medicines.length) {
-      const hindi = requestLanguage.startsWith('hi') || /[\u0900-\u097f]|\b(?:meri|mera|mere|mujhe|batao|dikhao|dawa|dawai|kab)\b/i.test(inputText);
-      const langKey = hindi ? 'hi' : requestLanguage;
-      const message = hindi
-        ? 'अभी कोई सत्यापित दवा या रिमाइंडर समय उपलब्ध नहीं है। दवाइयाँ टैब में पर्ची की स्थिति देखें।'
-        : 'No verified medicine or reminder time is available yet. Check the prescription status in Medicines.';
-      return { responseType: 'text', content: { summary: message, [langKey]: message }, intent: IntentType.MEDICATION_QUERY, selectedAgent: 'medication-reminder-service', safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
+      const message = isFirstTimePending
+        ? (isHindiPrescription
+          ? 'अभी आपकी पर्ची की CHO (कम्युनिटी हेल्थ ऑफिसर) द्वारा पुष्टि होना बाकी है। पर्ची मंज़ूर होने के बाद रिमाइंडर सेट किए जा सकेंगे।'
+          : isHinglishPrescription
+            ? 'Abhi aapki parchi ki CHO (Community Health Officer) dwara pushti hona baaki hai. Parchi approve hone ke baad reminder set kiye ja sakenge.'
+            : 'Your prescription is currently awaiting verification by the CHO (Community Health Officer). Reminders can be set after it has been approved.')
+        : (isHindiPrescription
+          ? 'अभी कोई सत्यापित दवा या रिमाइंडर समय उपलब्ध नहीं है।'
+          : isHinglishPrescription
+            ? 'Abhi koi verified dawa ya reminder time uplabdh nahi hai.'
+            : 'No verified medicine or reminder time is available yet.');
+      return {
+        responseType: 'text',
+        content: { summary: message, [effectiveRxLanguage]: message, spoken_summary: message },
+        intent: IntentType.MEDICATION_QUERY,
+        selectedAgent: 'medication-reminder-service',
+        safetyStatus: 'SAFE',
+        latencyMs: Date.now() - startTime,
+      };
     }
 
     // Prescription facts and missed-dose clarification are deterministic facts

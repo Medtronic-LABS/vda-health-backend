@@ -63,7 +63,7 @@ export class ConversationResponseFormatter {
       : undefined;
     const spoken_summary =
       cleanedSpoken &&
-      this.wordCount(cleanedSpoken) <= 80 &&
+      this.wordCount(cleanedSpoken) <= 130 &&
       !this.containsInternalRetrievalMaterial(cleanedSpoken)
         ? cleanedSpoken
         : undefined;
