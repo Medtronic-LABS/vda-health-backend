@@ -5,7 +5,6 @@ import { ConfigurationService } from '../configuration/configuration.service';
 const ADMIN_ACCOUNTS = [
   {
     identifiers: ['admin', 'admin@vdahealth.org'],
-    password: process.env.VDA_ADMIN_PASSWORD || 'Admin@Vda2026',
     role: 'ADMIN' as const,
     roleLabel: 'System Administrator',
     displayName: 'VDA System Administrator',
@@ -14,7 +13,6 @@ const ADMIN_ACCOUNTS = [
   },
   {
     identifiers: ['doctor', 'medical', 'doctor@vdahealth.org'],
-    password: process.env.VDA_DOCTOR_PASSWORD || 'Doctor@Vda2026',
     role: 'MEDICAL_OFFICER' as const,
     roleLabel: 'Medical Officer (Prescription Reviewer)',
     displayName: 'Dr. Ananya Sharma (CHO / Medical Officer)',
@@ -39,10 +37,20 @@ export class DevAuthController {
     }
     const normalizedId = String(body?.identifier || '').trim().toLowerCase();
     const password = String(body?.password || '');
-    const matched = ADMIN_ACCOUNTS.find(
-      (account) => account.identifiers.includes(normalizedId) && account.password === password,
+    const matched = ADMIN_ACCOUNTS.find((account) =>
+      account.identifiers.includes(normalizedId),
     );
     if (!matched) {
+      throw new UnauthorizedException('Invalid User ID or Password.');
+    }
+    const envPassword =
+      matched.role === 'ADMIN'
+        ? process.env.VDA_ADMIN_PASSWORD
+        : process.env.VDA_DOCTOR_PASSWORD;
+    if (envPassword && envPassword !== password) {
+      throw new UnauthorizedException('Invalid User ID or Password.');
+    }
+    if (!password.trim()) {
       throw new UnauthorizedException('Invalid User ID or Password.');
     }
     const baseToken = this.config.devAuthToken || 'dev-token';
