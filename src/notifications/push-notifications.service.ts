@@ -118,7 +118,7 @@ export class PushNotificationsService implements OnModuleInit, OnModuleDestroy {
       await getMessaging(this.firebaseApp!).send({
         token: device.token,
         notification: {
-          title: hindi ? 'VDA Health से सूचना' : 'VDA Health update',
+          title: hindi ? 'सेहत साथी से सूचना' : 'Sehat Saathi update',
           body: hindi ? 'आपके लिए नई सूचना है। ऐप खोलकर देखें।' : 'You have a new update. Open the app to view it.',
         },
         data: { type: 'PRESCRIPTION_REVIEW', prescriptionId: delivery.prescriptionId, eventId: delivery.id },

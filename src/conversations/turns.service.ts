@@ -20,7 +20,10 @@ import { CreateTurnDto } from './dto/create-turn.dto';
 import { IPiiProtectionService } from '../pii/interfaces/pii-protection-service.interface';
 import { ISafetyGate } from '../safety/interfaces/safety-gate.interface';
 import { IConversationProcessor } from './interfaces/conversation-processor.interface';
-import { ConversationResponseFormatter } from './formatters/conversation-response.formatter';
+import {
+  ConversationResponseFormatter,
+  PatientResponseContent,
+} from './formatters/conversation-response.formatter';
 import { MetricsService } from '../observability/metrics.service';
 import { EscalationService } from '../escalation/escalation.service';
 
@@ -56,7 +59,9 @@ export class TurnsService {
       await record();
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'unknown error';
-      this.logger.error(`Emergency audit failed action=${action} correlationId=${correlationId} reason=${reason}`);
+      this.logger.error(
+        `Emergency audit failed action=${action} correlationId=${correlationId} reason=${reason}`,
+      );
     }
   }
 
@@ -142,27 +147,35 @@ export class TurnsService {
         if (existingTurn) {
           // If already completed or processing, return it.
           // The caller will handle checking status.
-          (existingTurn as ConversationTurn & { alreadyRegistered?: boolean }).alreadyRegistered = true;
+          (
+            existingTurn as ConversationTurn & { alreadyRegistered?: boolean }
+          ).alreadyRegistered = true;
           return existingTurn;
         }
       }
 
       if (dto.report_id) {
-        if (identity.authType !== 'MOBILE' || !identity.mobileUserId ||
-            session.subjectAbhaRef !== `mobile-user:${identity.mobileUserId}`) {
+        if (
+          identity.authType !== 'MOBILE' ||
+          !identity.mobileUserId ||
+          session.subjectAbhaRef !== `mobile-user:${identity.mobileUserId}`
+        ) {
           throw new ForbiddenException('MOBILE_PATIENT_REQUIRED');
         }
         const report = await manager.findOne(MedicalReport, {
-          where: { id: dto.report_id, tenantId: identity.tenantId, patientRef: session.subjectAbhaRef },
+          where: {
+            id: dto.report_id,
+            tenantId: identity.tenantId,
+            patientRef: session.subjectAbhaRef,
+          },
           lock: { mode: 'pessimistic_read' },
         });
         if (!report) throw new NotFoundException('REPORT_NOT_FOUND');
       }
 
       // 8. Capture conversation retention decision
-      const conversationRetentionGranted = !dto.report_id && consent.scopes.includes(
-        'conversation_retention',
-      );
+      const conversationRetentionGranted =
+        !dto.report_id && consent.scopes.includes('conversation_retention');
 
       // 9. Allocate next turn number
       const lastTurn = await manager.findOne(ConversationTurn, {
@@ -242,7 +255,11 @@ export class TurnsService {
       if (turn.status === 'REDACTED') return turn;
       if (turn.reportId) {
         const report = await manager.findOne(MedicalReport, {
-          where: { id: turn.reportId, tenantId: identity.tenantId, patientRef: turn.subjectRef },
+          where: {
+            id: turn.reportId,
+            tenantId: identity.tenantId,
+            patientRef: turn.subjectRef,
+          },
           lock: { mode: 'pessimistic_read' },
         });
         if (!report) {
@@ -263,9 +280,10 @@ export class TurnsService {
       turn.status = status;
       turn.responseType = result.responseType;
       // Enforce captured retention decision
-      turn.outputText = turn.conversationRetentionGranted && !turn.reportId
-        ? JSON.stringify(result.content)
-        : null;
+      turn.outputText =
+        turn.conversationRetentionGranted && !turn.reportId
+          ? JSON.stringify(result.content)
+          : null;
       turn.intent = result.intent || undefined;
       turn.selectedAgent = result.selectedAgent || undefined;
       turn.latency = latency;
@@ -306,9 +324,11 @@ export class TurnsService {
 
       turn.status = 'REJECTED';
       turn.intent = 'processing-failure';
-      turn.selectedAgent = turn.reportId ? 'report-processing-failure' : error.message
-        ? error.message.substring(0, 100)
-        : 'unknown-error';
+      turn.selectedAgent = turn.reportId
+        ? 'report-processing-failure'
+        : error.message
+          ? error.message.substring(0, 100)
+          : 'unknown-error';
 
       await manager.save(turn);
 
@@ -322,7 +342,11 @@ export class TurnsService {
         action: 'turn_rejected',
         entityName: 'conversation_turn',
         entityId: turn.id,
-        details: { reason: turn.reportId ? 'Report processing failed' : (error.message || 'Processing failed') },
+        details: {
+          reason: turn.reportId
+            ? 'Report processing failed'
+            : error.message || 'Processing failed',
+        },
       });
     });
   }
@@ -378,19 +402,32 @@ export class TurnsService {
       throw new NotFoundException('SESSION_NOT_FOUND');
     }
 
-    if ((turn as ConversationTurn & { alreadyRegistered?: boolean }).alreadyRegistered &&
-        turn.status !== 'COMPLETED' && turn.status !== 'WITHHELD') {
-      throw new ConflictException(turn.status === 'PROCESSING' ? 'TURN_IN_PROGRESS' : 'TURN_NOT_REPLAYABLE');
+    if (
+      (turn as ConversationTurn & { alreadyRegistered?: boolean })
+        .alreadyRegistered &&
+      turn.status !== 'COMPLETED' &&
+      turn.status !== 'WITHHELD'
+    ) {
+      throw new ConflictException(
+        turn.status === 'PROCESSING'
+          ? 'TURN_IN_PROGRESS'
+          : 'TURN_NOT_REPLAYABLE',
+      );
     }
 
     // 5. If it was already completed (idempotency DB hit), parse and return it immediately
     if (turn.status === 'COMPLETED' || turn.status === 'WITHHELD') {
       let contentObj: Record<string, any> = dto.report_id
-        ? { summary: 'This report answer is not retained. Please ask again while the report is available.' } : {};
+        ? {
+            summary:
+              'This report answer is not retained. Please ask again while the report is available.',
+          }
+        : {};
       try {
-        contentObj = !dto.report_id && turn.outputText
-          ? (JSON.parse(turn.outputText) as Record<string, any>)
-          : contentObj;
+        contentObj =
+          !dto.report_id && turn.outputText
+            ? (JSON.parse(turn.outputText) as Record<string, any>)
+            : contentObj;
       } catch {
         contentObj = { text: turn.outputText };
       }
@@ -410,48 +447,58 @@ export class TurnsService {
 
     // 6. Run PII and Safety audits outside of the transactions
     if (piiResult.piiDetected) {
-      const piiAudit = () => this.auditService.logEvent({
-        tenantId: identity.tenantId,
-        subjectAbhaRef: turn.subjectRef,
-        speaker: turn.speaker,
-        actingPrincipal: identity.externalId,
-        correlationId,
-        action: 'pii_detected',
-        entityName: 'conversation_turn',
-        entityId: turn.id,
-        details: {
-          pii_categories: piiResult.detectedPiiCategories,
-          pii_detected_count: piiResult.detectedPiiCategories.length,
-          status: piiResult.status,
-          rule_version: '1.0',
-        },
-      });
+      const piiAudit = () =>
+        this.auditService.logEvent({
+          tenantId: identity.tenantId,
+          subjectAbhaRef: turn.subjectRef,
+          speaker: turn.speaker,
+          actingPrincipal: identity.externalId,
+          correlationId,
+          action: 'pii_detected',
+          entityName: 'conversation_turn',
+          entityId: turn.id,
+          details: {
+            pii_categories: piiResult.detectedPiiCategories,
+            pii_detected_count: piiResult.detectedPiiCategories.length,
+            status: piiResult.status,
+            rule_version: '1.0',
+          },
+        });
       if (safetyResult.status === 'ESCALATION_REQUIRED') {
-        await this.recordEmergencyAudit('pii_detected', correlationId, piiAudit);
+        await this.recordEmergencyAudit(
+          'pii_detected',
+          correlationId,
+          piiAudit,
+        );
       } else {
         await piiAudit();
       }
     }
 
-    const safetyAudit = () => this.auditService.logEvent({
-      tenantId: identity.tenantId,
-      subjectAbhaRef: turn.subjectRef,
-      speaker: turn.speaker,
-      actingPrincipal: identity.externalId,
-      correlationId,
-      action: 'safety_evaluated',
-      entityName: 'conversation_turn',
-      entityId: turn.id,
-      details: {
-        status: safetyResult.status,
-        rule_id: safetyResult.ruleId,
-        rule_version: safetyResult.ruleVersion,
-        severity: safetyResult.severity,
-        action: safetyResult.action,
-      },
-    });
+    const safetyAudit = () =>
+      this.auditService.logEvent({
+        tenantId: identity.tenantId,
+        subjectAbhaRef: turn.subjectRef,
+        speaker: turn.speaker,
+        actingPrincipal: identity.externalId,
+        correlationId,
+        action: 'safety_evaluated',
+        entityName: 'conversation_turn',
+        entityId: turn.id,
+        details: {
+          status: safetyResult.status,
+          rule_id: safetyResult.ruleId,
+          rule_version: safetyResult.ruleVersion,
+          severity: safetyResult.severity,
+          action: safetyResult.action,
+        },
+      });
     if (safetyResult.status === 'ESCALATION_REQUIRED') {
-      await this.recordEmergencyAudit('safety_evaluated', correlationId, safetyAudit);
+      await this.recordEmergencyAudit(
+        'safety_evaluated',
+        correlationId,
+        safetyAudit,
+      );
     } else {
       await safetyAudit();
     }
@@ -489,13 +536,25 @@ export class TurnsService {
         // do not create a clinician-review case or waiting/chat lifecycle.
       } catch (err: any) {
         if (dto.report_id) {
-          const current = await this.dataSource.getRepository(ConversationTurn).findOneBy({ id: turn.id });
+          const current = await this.dataSource
+            .getRepository(ConversationTurn)
+            .findOneBy({ id: turn.id });
           if (current?.status === 'REDACTED') {
-            return { turn_number: current.turnNumber, session_id: current.sessionId, response_type: 'text',
-              content: { summary: 'This report was deleted. Its answer is no longer available.' },
-              correlation_id: current.correlationId, safety_status: current.safetyStatus,
-              intent: 'REPORT_DELETED', selected_agent: null, latency: current.latency,
-              created_at: current.createdAt.toISOString() };
+            return {
+              turn_number: current.turnNumber,
+              session_id: current.sessionId,
+              response_type: 'text',
+              content: {
+                summary:
+                  'This report was deleted. Its answer is no longer available.',
+              },
+              correlation_id: current.correlationId,
+              safety_status: current.safetyStatus,
+              intent: 'REPORT_DELETED',
+              selected_agent: null,
+              latency: current.latency,
+              created_at: current.createdAt.toISOString(),
+            };
           }
         }
         await this.failTurn(turn.id, err as Error, correlationId, identity);
@@ -517,39 +576,46 @@ export class TurnsService {
 
       if (this.escalationService) {
         try {
-          const facilities = await this.escalationService.emergencyFacilitiesForSession(
-            identity.tenantId,
-            sessionId,
-          );
+          const facilities =
+            await this.escalationService.emergencyFacilitiesForSession(
+              identity.tenantId,
+              sessionId,
+            );
           if (facilities.length) content.facility_results = facilities;
         } catch (error) {
-          const reason = error instanceof Error ? error.message : 'unknown error';
+          const reason =
+            error instanceof Error ? error.message : 'unknown error';
           // Facility lookup is best-effort and must never delay the immediate
           // deterministic emergency response. Do not log raw input or PII.
-          this.logger.error(`Emergency facility lookup failed rule=${safetyResult.ruleId} correlationId=${correlationId} reason=${reason}`);
+          this.logger.error(
+            `Emergency facility lookup failed rule=${safetyResult.ruleId} correlationId=${correlationId} reason=${reason}`,
+          );
         }
       }
 
-      await this.recordEmergencyAudit('safety_escalated', correlationId, () => this.auditService.logEvent({
-        tenantId: identity.tenantId,
-        subjectAbhaRef: turn.subjectRef,
-        speaker: turn.speaker,
-        actingPrincipal: identity.externalId,
-        correlationId,
-        action: 'safety_escalated',
-        entityName: 'conversation_turn',
-        entityId: turn.id,
-        details: {
-          rule_id: safetyResult.ruleId,
-          rule_version: safetyResult.ruleVersion,
-          severity: safetyResult.severity,
-        },
-      }));
+      await this.recordEmergencyAudit('safety_escalated', correlationId, () =>
+        this.auditService.logEvent({
+          tenantId: identity.tenantId,
+          subjectAbhaRef: turn.subjectRef,
+          speaker: turn.speaker,
+          actingPrincipal: identity.externalId,
+          correlationId,
+          action: 'safety_escalated',
+          entityName: 'conversation_turn',
+          entityId: turn.id,
+          details: {
+            rule_id: safetyResult.ruleId,
+            rule_version: safetyResult.ruleVersion,
+            severity: safetyResult.severity,
+          },
+        }),
+      );
     } else {
       // safetyResult.status === 'WITHHOLD'
       responseType = 'text';
+      // As `summary`, so a Hindi message is not dropped as a wrong English key.
       content = {
-        en:
+        summary:
           safetyResult.patientSafeMessage ||
           'Response withheld due to safety policies.',
       };
@@ -575,15 +641,25 @@ export class TurnsService {
     }
 
     // Emergency content is already deterministic and conforms to Patient.tsx.
-    if (this.responseFormatter && safetyResult.status !== 'ESCALATION_REQUIRED') {
+    if (
+      this.responseFormatter &&
+      safetyResult.status !== 'ESCALATION_REQUIRED'
+    ) {
       const formatted = this.responseFormatter.formatResponse({
         responseType,
         content,
         intent,
         selectedAgent,
         safetyStatus,
+        language: dto.language,
+        // Used only to notice a question asked in another language; never stored.
+        inputText: dto.input_text,
       });
       content = formatted.content;
+    } else if (this.responseFormatter && typeof content.summary === 'string') {
+      content.spoken_summary = this.responseFormatter.spokenText(
+        content as PatientResponseContent,
+      );
     }
 
     // 8. Resolve the turn inside Transaction 2
@@ -603,10 +679,19 @@ export class TurnsService {
 
     // A deletion may commit just after resolution. Recheck the tagged turn
     // before assembling the HTTP response; Android also suppresses late replies.
-    const latestReportTurn = dto.report_id && resolved.status !== 'REDACTED'
-      ? await this.dataSource.getRepository(ConversationTurn).findOneBy({ id: resolved.id }) : null;
-    if (resolved.status === 'REDACTED' || latestReportTurn?.status === 'REDACTED') {
-      content = { summary: 'This report was deleted. Its answer is no longer available.' };
+    const latestReportTurn =
+      dto.report_id && resolved.status !== 'REDACTED'
+        ? await this.dataSource
+            .getRepository(ConversationTurn)
+            .findOneBy({ id: resolved.id })
+        : null;
+    if (
+      resolved.status === 'REDACTED' ||
+      latestReportTurn?.status === 'REDACTED'
+    ) {
+      content = {
+        summary: 'This report was deleted. Its answer is no longer available.',
+      };
       responseType = 'text';
       intent = 'REPORT_DELETED';
       selectedAgent = null;

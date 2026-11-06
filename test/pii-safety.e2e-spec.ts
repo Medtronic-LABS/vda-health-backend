@@ -90,12 +90,16 @@ const mockAuditRepository = {
 
 const mockEscalationRepository = {
   create: jest.fn().mockImplementation((value) => value),
-  save: jest.fn().mockImplementation((value) => Promise.resolve({ id: crypto.randomUUID(), ...value })),
+  save: jest
+    .fn()
+    .mockImplementation((value) =>
+      Promise.resolve({ id: crypto.randomUUID(), ...value }),
+    ),
 };
 
 jest.mock('@nestjs/typeorm', () => {
   const original = jest.requireActual('@nestjs/typeorm');
-   
+
   const { DataSource } = require('typeorm');
   class MockTypeOrmModule {
     static forRoot = jest.fn().mockImplementation(() => {
@@ -103,7 +107,9 @@ jest.mock('@nestjs/typeorm', () => {
         query: jest.fn().mockResolvedValue([]),
         entityMetadatas: [],
       };
-      const token = original.getDataSourceToken ? original.getDataSourceToken() : 'default_DataSource';
+      const token = original.getDataSourceToken
+        ? original.getDataSourceToken()
+        : 'default_DataSource';
       return {
         global: true,
         module: MockTypeOrmModule,
@@ -125,7 +131,9 @@ jest.mock('@nestjs/typeorm', () => {
         query: jest.fn().mockResolvedValue([]),
         entityMetadatas: [],
       };
-      const token = original.getDataSourceToken ? original.getDataSourceToken() : 'default_DataSource';
+      const token = original.getDataSourceToken
+        ? original.getDataSourceToken()
+        : 'default_DataSource';
       return {
         global: true,
         module: MockTypeOrmModule,
@@ -143,7 +151,7 @@ jest.mock('@nestjs/typeorm', () => {
       };
     });
     static forFeature = jest.fn().mockImplementation((entities) => {
-        const providers = (entities || []).map((entity: any) => ({
+      const providers = (entities || []).map((entity: any) => ({
         provide: original.getRepositoryToken(entity),
         // The suite overrides its owned repositories below. Optional modules
         // use this inert local double so their real code remains unchanged.
@@ -162,7 +170,7 @@ jest.mock('@nestjs/typeorm', () => {
       };
     });
   }
-   
+
   return {
     ...original,
     TypeOrmModule: MockTypeOrmModule,
@@ -176,10 +184,12 @@ describe('PII Protection & Safety Gate (E2E)', () => {
     get: jest.fn().mockImplementation((key: string) => {
       return Promise.resolve(redisStore[key] || null);
     }),
-    set: jest.fn().mockImplementation((key: string, val: string, _ttl: number) => {
-      redisStore[key] = val;
-      return Promise.resolve();
-    }),
+    set: jest
+      .fn()
+      .mockImplementation((key: string, val: string, _ttl: number) => {
+        redisStore[key] = val;
+        return Promise.resolve();
+      }),
     acquireLock: jest
       .fn()
       .mockImplementation((key: string, ownerToken: string, _ttl: number) => {
@@ -232,20 +242,28 @@ describe('PII Protection & Safety Gate (E2E)', () => {
               const sessionId = options?.where?.sessionId;
               const idempotencyKey = options?.where?.idempotencyKey;
               if (entity === Session) {
-                return Promise.resolve(mockSessionDb.find((s) => s.id === id) || null);
+                return Promise.resolve(
+                  mockSessionDb.find((s) => s.id === id) || null,
+                );
               }
               if (entity === ConsentArtifact) {
-                return Promise.resolve(mockConsentDb.find((c) => c.id === id) || null);
+                return Promise.resolve(
+                  mockConsentDb.find((c) => c.id === id) || null,
+                );
               }
               if (entity === ConversationTurn) {
                 if (idempotencyKey) {
                   return Promise.resolve(
                     mockTurnDb.find(
-                      (t) => t.sessionId === sessionId && t.idempotencyKey === idempotencyKey,
+                      (t) =>
+                        t.sessionId === sessionId &&
+                        t.idempotencyKey === idempotencyKey,
                     ) || null,
                   );
                 }
-                return Promise.resolve(mockTurnDb.find((t) => t.id === id) || null);
+                return Promise.resolve(
+                  mockTurnDb.find((t) => t.id === id) || null,
+                );
               }
               return Promise.resolve(null);
             }),
@@ -343,7 +361,9 @@ describe('PII Protection & Safety Gate (E2E)', () => {
       expect(res.body.content.en).toBeDefined();
       expect(mockTurnDb.length).toBe(1);
       expect(mockTurnDb[0].inputText).toContain('मेरा नाम [NAME_REDACTED] है');
-      expect(mockTurnDb[0].inputText).toContain('मेरा फ़ोन नंबर [PHONE_REDACTED] है');
+      expect(mockTurnDb[0].inputText).toContain(
+        'मेरा फ़ोन नंबर [PHONE_REDACTED] है',
+      );
     });
 
     it('2. should sanitize Hinglish PII input correctly', async () => {
@@ -352,11 +372,17 @@ describe('PII Protection & Safety Gate (E2E)', () => {
         .post(`/sessions/${session.id}/turns`)
         .set(getAuthHeader())
         .set('Idempotency-Key', 'pii-key-2')
-        .send({ input_text: 'mera naam Rahul hai and my phone number is 9876543210' })
+        .send({
+          input_text: 'mera naam Rahul hai and my phone number is 9876543210',
+        })
         .expect(HttpStatus.CREATED);
 
-      expect(mockTurnDb[0].inputText).toContain('mera naam [NAME_REDACTED] hai');
-      expect(mockTurnDb[0].inputText).toContain('phone number is [PHONE_REDACTED]');
+      expect(mockTurnDb[0].inputText).toContain(
+        'mera naam [NAME_REDACTED] hai',
+      );
+      expect(mockTurnDb[0].inputText).toContain(
+        'phone number is [PHONE_REDACTED]',
+      );
     });
 
     it('3. should sanitize English PII input correctly', async () => {
@@ -365,11 +391,15 @@ describe('PII Protection & Safety Gate (E2E)', () => {
         .post(`/sessions/${session.id}/turns`)
         .set(getAuthHeader())
         .set('Idempotency-Key', 'pii-key-3')
-        .send({ input_text: 'My name is Rahul and my phone number is +91 9876543210' })
+        .send({
+          input_text: 'My name is Rahul and my phone number is +91 9876543210',
+        })
         .expect(HttpStatus.CREATED);
 
       expect(mockTurnDb[0].inputText).toContain('My name is [NAME_REDACTED]');
-      expect(mockTurnDb[0].inputText).toContain('phone number is [PHONE_REDACTED]');
+      expect(mockTurnDb[0].inputText).toContain(
+        'phone number is [PHONE_REDACTED]',
+      );
     });
 
     it('4. should sanitize ABHA number and ABHA address correctly', async () => {
@@ -378,11 +408,18 @@ describe('PII Protection & Safety Gate (E2E)', () => {
         .post(`/sessions/${session.id}/turns`)
         .set(getAuthHeader())
         .set('Idempotency-Key', 'pii-key-4')
-        .send({ input_text: 'My ABHA number is 12-3456-7890-1234 and address is pat@sbx' })
+        .send({
+          input_text:
+            'My ABHA number is 12-3456-7890-1234 and address is pat@sbx',
+        })
         .expect(HttpStatus.CREATED);
 
-      expect(mockTurnDb[0].inputText).toContain('ABHA number is [ABHA_NUMBER_REDACTED]');
-      expect(mockTurnDb[0].inputText).toContain('address is [ABHA_ADDRESS_REDACTED]');
+      expect(mockTurnDb[0].inputText).toContain(
+        'ABHA number is [ABHA_NUMBER_REDACTED]',
+      );
+      expect(mockTurnDb[0].inputText).toContain(
+        'address is [ABHA_ADDRESS_REDACTED]',
+      );
     });
 
     it('5. should sanitize Indian phone numbers in standard formats', async () => {
@@ -463,7 +500,10 @@ describe('PII Protection & Safety Gate (E2E)', () => {
         .post(`/sessions/${session.id}/turns`)
         .set(getAuthHeader())
         .set('Idempotency-Key', 'pii-key-11')
-        .send({ input_text: 'My name is Rahul, email is test@test.com and phone is 9876543210' })
+        .send({
+          input_text:
+            'My name is Rahul, email is test@test.com and phone is 9876543210',
+        })
         .expect(HttpStatus.CREATED);
 
       const piiAudit = mockAuditDb.find((a) => a.action === 'pii_detected');
@@ -531,7 +571,7 @@ describe('PII Protection & Safety Gate (E2E)', () => {
         .expect(HttpStatus.CREATED);
 
       expect(res.body.response_type).toBe('escalation');
-      expect(res.body.content.reason).toContain('यदि आप एक चिकित्सा आपात स्थिति');
+      expect(res.body.content.reason).toContain('108 या 112 पर फ़ोन करें');
       expect(mockTurnDb[0].safetyStatus).toBe('ESCALATED_BY_RULE');
     });
 
@@ -545,7 +585,7 @@ describe('PII Protection & Safety Gate (E2E)', () => {
         .expect(HttpStatus.CREATED);
 
       expect(res.body.response_type).toBe('escalation');
-      expect(res.body.content.reason).toContain('Yadi aap medical emergency face kar rahe hain');
+      expect(res.body.content.reason).toContain('108 या 112 पर फ़ोन करें');
       expect(mockTurnDb[0].safetyStatus).toBe('ESCALATED_BY_RULE');
     });
 
@@ -559,7 +599,7 @@ describe('PII Protection & Safety Gate (E2E)', () => {
         .expect(HttpStatus.CREATED);
 
       expect(res.body.response_type).toBe('escalation');
-      expect(res.body.content.reason).toContain('If you are experiencing a medical emergency');
+      expect(res.body.content.reason).toContain('call 108 or 112 now');
       expect(mockTurnDb[0].safetyStatus).toBe('ESCALATED_BY_RULE');
     });
 
@@ -573,7 +613,7 @@ describe('PII Protection & Safety Gate (E2E)', () => {
         .expect(HttpStatus.CREATED);
 
       expect(res.body.response_type).toBe('escalation');
-      expect(res.body.content.reason).toContain('यदि आप आत्म-नुकसान या आत्महत्या');
+      expect(res.body.content.reason).toContain('आप अकेले नहीं हैं');
       expect(mockTurnDb[0].safetyStatus).toBe('ESCALATED_BY_RULE');
     });
 
@@ -587,7 +627,8 @@ describe('PII Protection & Safety Gate (E2E)', () => {
         .expect(HttpStatus.CREATED);
 
       expect(res.body.response_type).toBe('escalation');
-      expect(res.body.content.reason).toContain('Yadi aap self-harm ya suicide ke thoughts');
+      // Hinglish is answered in Devanagari Hindi.
+      expect(res.body.content.reason).toContain('आप अकेले नहीं हैं');
       expect(mockTurnDb[0].safetyStatus).toBe('ESCALATED_BY_RULE');
     });
 
@@ -601,7 +642,9 @@ describe('PII Protection & Safety Gate (E2E)', () => {
         .expect(HttpStatus.CREATED);
 
       expect(res.body.response_type).toBe('escalation');
-      expect(res.body.content.reason).toContain('thoughts of self-harm or suicide');
+      expect(res.body.content.reason).toContain(
+        'thoughts of self-harm or suicide',
+      );
       expect(mockTurnDb[0].safetyStatus).toBe('ESCALATED_BY_RULE');
     });
 
@@ -628,7 +671,9 @@ describe('PII Protection & Safety Gate (E2E)', () => {
         .expect(HttpStatus.CREATED);
 
       expect(res.body.response_type).toBe('text');
-      expect(res.body.content.en).toContain('Unsafe medication request detect hua hai');
+      // Hinglish is answered in Devanagari Hindi, under summary so it is never blank.
+      expect(res.body.content.summary).toContain('सिर्फ़ डॉक्टर');
+      expect(res.body.content.spoken_summary).toContain('सिर्फ़ डॉक्टर');
       expect(mockTurnDb[0].safetyStatus).toBe('WITHHELD_QUALITY');
       expect(mockTurnDb[0].status).toBe('WITHHELD');
     });
@@ -651,7 +696,9 @@ describe('PII Protection & Safety Gate (E2E)', () => {
         .post(`/sessions/${session.id}/turns`)
         .set(getAuthHeader())
         .set('Idempotency-Key', 'safe-key-25')
-        .send({ input_text: 'severe chest pain after I stop dose of medication' })
+        .send({
+          input_text: 'severe chest pain after I stop dose of medication',
+        })
         .expect(HttpStatus.CREATED);
 
       // EMERGENCY wins (ESCALATION_REQUIRED) over MEDICATION (WITHHOLD)
@@ -668,7 +715,9 @@ describe('PII Protection & Safety Gate (E2E)', () => {
         .send({ input_text: 'severe chest pain' })
         .expect(HttpStatus.CREATED);
 
-      const safetyAudit = mockAuditDb.find((a) => a.action === 'safety_escalated');
+      const safetyAudit = mockAuditDb.find(
+        (a) => a.action === 'safety_escalated',
+      );
       expect(safetyAudit).toBeDefined();
       expect(safetyAudit?.details?.rule_id).toBe('EMERGENCY_01');
       expect(safetyAudit?.details?.rule_version).toBe('1.0');
@@ -683,7 +732,7 @@ describe('PII Protection & Safety Gate (E2E)', () => {
         .send({ input_text: 'सीने में बहुत तेज दर्द' })
         .expect(HttpStatus.CREATED);
 
-      expect(res.body.content.reason).toContain('यदि आप एक चिकित्सा आपात स्थिति');
+      expect(res.body.content.reason).toContain('108 या 112 पर फ़ोन करें');
     });
 
     it('28. should return patient-safe English message when English is input', async () => {
@@ -695,7 +744,7 @@ describe('PII Protection & Safety Gate (E2E)', () => {
         .send({ input_text: 'severe chest pain' })
         .expect(HttpStatus.CREATED);
 
-      expect(res.body.content.reason).toContain('If you are experiencing a medical emergency');
+      expect(res.body.content.reason).toContain('call 108 or 112 now');
     });
 
     // ==========================================
@@ -711,7 +760,9 @@ describe('PII Protection & Safety Gate (E2E)', () => {
         .expect(HttpStatus.CREATED);
 
       expect(res.body.response_type).toBe('text');
-      expect(res.body.content.en).toContain('Conversation processing is available');
+      expect(res.body.content.en).toContain(
+        'Conversation processing is available',
+      );
       expect(mockTurnDb[0].status).toBe('COMPLETED');
     });
 
@@ -791,7 +842,8 @@ describe('PII Protection & Safety Gate (E2E)', () => {
         .expect(HttpStatus.CREATED);
 
       // Replay identical request (using mock Redis cache simulated hits)
-      redisStore[`idempotency:session:${session.id}:int-key-35`] = JSON.stringify(res1.body);
+      redisStore[`idempotency:session:${session.id}:int-key-35`] =
+        JSON.stringify(res1.body);
 
       const res2 = await request(app.getHttpServer())
         .post(`/sessions/${session.id}/turns`)

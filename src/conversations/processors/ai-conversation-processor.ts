@@ -4,6 +4,11 @@ import { IAiOrchestrator } from '../../ai/orchestration/ai-orchestrator.interfac
 import { HostIdentity } from '../../auth/host-identity.context';
 import { MedicalReportService } from '../../reports/medical-report.service';
 import { AshaEducationService } from '../../ai/education/asha-education.service';
+import {
+  approvedAnswerTopic,
+  bmiAnswer,
+} from '../../ai/orchestration/approved-answers';
+import { explicitlyRequestedLanguage } from '../formatters/conversation-response.formatter';
 
 @Injectable()
 export class AiConversationProcessor implements IConversationProcessor {
@@ -37,11 +42,28 @@ export class AiConversationProcessor implements IConversationProcessor {
     this.logger.log(`[AiProcessor] Processing turn for sessionId=${sessionId}`);
 
     if (reportId) {
-      return this.reports.answerQuestion(sessionId, reportId, identity, inputText);
+      return this.reports.answerQuestion(
+        sessionId,
+        reportId,
+        identity,
+        inputText,
+      );
     }
 
-    const education = await this.ashaEducation.maybeAnswer(inputText, identity, correlationId, selectedLanguage);
-    if (education) return education;
+    // Clinically approved fixed answers come from the orchestrator, after its
+    // safety and identity gates, so generated education does not replace them.
+    if (!approvedAnswerTopic(inputText) && !bmiAnswer(inputText)) {
+      // A language the patient explicitly asks for overrides the profile.
+      const educationLanguage =
+        explicitlyRequestedLanguage(inputText) ?? selectedLanguage;
+      const education = await this.ashaEducation.maybeAnswer(
+        inputText,
+        identity,
+        correlationId,
+        educationLanguage,
+      );
+      if (education) return education;
+    }
 
     const result = await this.aiOrchestrator.orchestrateTurn({
       sessionId,

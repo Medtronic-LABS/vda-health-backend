@@ -52,7 +52,9 @@ describe('AiOrchestratorService — Patient Identity & RBAC Guard', () => {
     };
     mockLanguageProvider = {
       detectLanguage: jest.fn().mockResolvedValue('hi'),
-      normalizeIndianText: jest.fn().mockImplementation((text) => Promise.resolve(text)),
+      normalizeIndianText: jest
+        .fn()
+        .mockImplementation((text) => Promise.resolve(text)),
     };
     mockIntentClassifier = {
       classifyIntent: jest.fn().mockResolvedValue({
@@ -64,7 +66,10 @@ describe('AiOrchestratorService — Patient Identity & RBAC Guard', () => {
       }),
     };
     mockAgentRouter = {
-      selectAgent: jest.fn().mockReturnValue({ agentId: 'medication-agent', name: 'Medication Agent' }),
+      selectAgent: jest.fn().mockReturnValue({
+        agentId: 'medication-agent',
+        name: 'Medication Agent',
+      }),
       route: jest.fn().mockReturnValue('record-agent'),
     };
     mockClinicalContextService = {
@@ -95,7 +100,9 @@ describe('AiOrchestratorService — Patient Identity & RBAC Guard', () => {
       getPatientByReference: jest.fn().mockResolvedValue(mockPatientRecord),
       getPatient: jest.fn().mockResolvedValue(mockPatientRecord),
       getPatients: jest.fn().mockResolvedValue([mockPatientRecord]),
-      getClinicalContext: jest.fn().mockResolvedValue(mockPatientRecord.clinicalProfile),
+      getClinicalContext: jest
+        .fn()
+        .mockResolvedValue(mockPatientRecord.clinicalProfile),
     };
 
     orchestrator = new AiOrchestratorService(
@@ -106,7 +113,10 @@ describe('AiOrchestratorService — Patient Identity & RBAC Guard', () => {
       mockClinicalContextService,
       mockSafetyGate,
       mockAuditService,
-      { get: jest.fn().mockResolvedValue(null), currentVerifiedForPatient: jest.fn().mockResolvedValue(null) } as any, // prescriptionSessionContext
+      {
+        get: jest.fn().mockResolvedValue(null),
+        currentVerifiedForPatient: jest.fn().mockResolvedValue(null),
+      } as any, // prescriptionSessionContext
       undefined, // historyService
       new ConversationResponseFormatter(), // responseFormatter
       undefined, // knowledgeRetrievalService
@@ -128,27 +138,48 @@ describe('AiOrchestratorService — Patient Identity & RBAC Guard', () => {
       (orchestrator as any).detectIdentityMismatch(input, authorizedName);
 
     it('returns isMismatch=false when no identity assertion is in the query', () => {
-      expect(detect('मेरी दवाइयाँ बताओ', 'Vijay Chauhan').isMismatch).toBe(false);
-      expect(detect('What is my blood sugar?', 'Vijay Chauhan').isMismatch).toBe(false);
-      expect(detect('कल डॉक्टर के पास जाना है', 'Vijay Chauhan').isMismatch).toBe(false);
+      expect(detect('मेरी दवाइयाँ बताओ', 'Vijay Chauhan').isMismatch).toBe(
+        false,
+      );
+      expect(
+        detect('What is my blood sugar?', 'Vijay Chauhan').isMismatch,
+      ).toBe(false);
+      expect(
+        detect('कल डॉक्टर के पास जाना है', 'Vijay Chauhan').isMismatch,
+      ).toBe(false);
     });
 
     it('returns isMismatch=false when user asserts their own authorized name', () => {
-      expect(detect('Main Vijay hoon, meri dawai batao', 'Vijay Chauhan').isMismatch).toBe(false);
-      expect(detect('Main Vijay Chauhan hoon', 'Vijay Chauhan').isMismatch).toBe(false);
-      expect(detect('Mera naam Vijay hai', 'Vijay Chauhan').isMismatch).toBe(false);
+      expect(
+        detect('Main Vijay hoon, meri dawai batao', 'Vijay Chauhan').isMismatch,
+      ).toBe(false);
+      expect(
+        detect('Main Vijay Chauhan hoon', 'Vijay Chauhan').isMismatch,
+      ).toBe(false);
+      expect(detect('Mera naam Vijay hai', 'Vijay Chauhan').isMismatch).toBe(
+        false,
+      );
       expect(detect('I am Vijay', 'Vijay Chauhan').isMismatch).toBe(false);
-      expect(detect('I am Vijay Chauhan, check my lab report', 'Vijay Chauhan').isMismatch).toBe(false);
+      expect(
+        detect('I am Vijay Chauhan, check my lab report', 'Vijay Chauhan')
+          .isMismatch,
+      ).toBe(false);
       expect(detect('Call me Vijay', 'Vijay Chauhan').isMismatch).toBe(false);
     });
 
     it('returns isMismatch=false for non-name state/symptom declarations', () => {
       expect(detect('Main theek hoon', 'Vijay Chauhan').isMismatch).toBe(false);
       expect(detect('Main bimar hoon', 'Vijay Chauhan').isMismatch).toBe(false);
-      expect(detect('I am feeling sick today', 'Vijay Chauhan').isMismatch).toBe(false);
-      expect(detect('I am diabetic, can I eat sweets?', 'Vijay Chauhan').isMismatch).toBe(false);
+      expect(
+        detect('I am feeling sick today', 'Vijay Chauhan').isMismatch,
+      ).toBe(false);
+      expect(
+        detect('I am diabetic, can I eat sweets?', 'Vijay Chauhan').isMismatch,
+      ).toBe(false);
       expect(detect('I am pregnant', 'Vijay Chauhan').isMismatch).toBe(false);
-      expect(detect('I am having chest pain', 'Vijay Chauhan').isMismatch).toBe(false);
+      expect(detect('I am having chest pain', 'Vijay Chauhan').isMismatch).toBe(
+        false,
+      );
       expect(detect('I am ok now', 'Vijay Chauhan').isMismatch).toBe(false);
     });
 
@@ -164,7 +195,10 @@ describe('AiOrchestratorService — Patient Identity & RBAC Guard', () => {
     });
 
     it('returns isMismatch=true when user asserts a different identity in English', () => {
-      const res = detect('I am Sunita, what are my prescriptions?', 'Vijay Chauhan');
+      const res = detect(
+        'I am Sunita, what are my prescriptions?',
+        'Vijay Chauhan',
+      );
       expect(res.isMismatch).toBe(true);
       expect(res.claimedName).toBe('Sunita');
 
@@ -189,7 +223,11 @@ describe('AiOrchestratorService — Patient Identity & RBAC Guard', () => {
       ['मैं पारस नहीं डेनिस हूँ', 'डेनिस'],
     ])('uses the asserted new name in %s', (input, expected) => {
       const result = detect(input, 'Paras');
-      expect(result).toEqual({ isMismatch: true, claimedName: expected, authorizedName: 'Paras' });
+      expect(result).toEqual({
+        isMismatch: true,
+        claimedName: expected,
+        authorizedName: 'Paras',
+      });
     });
 
     it.each([
@@ -197,9 +235,12 @@ describe('AiOrchestratorService — Patient Identity & RBAC Guard', () => {
       'My doctor Denis said I need an X-ray',
       'I ak having chest pain',
       'Main Paras nhi theek hu',
-    ])('does not treat an ordinary health statement as an identity claim: %s', (input) => {
-      expect(detect(input, 'Paras').isMismatch).toBe(false);
-    });
+    ])(
+      'does not treat an ordinary health statement as an identity claim: %s',
+      (input) => {
+        expect(detect(input, 'Paras').isMismatch).toBe(false);
+      },
+    );
   });
 
   describe('orchestrateTurn with RBAC enforcement', () => {
@@ -266,25 +307,46 @@ describe('AiOrchestratorService — Patient Identity & RBAC Guard', () => {
 
     it('answers an English STT correction with the authenticated profile name', async () => {
       const result = await orchestrator.orchestrateTurn({
-        sessionId: 'session-001', inputText: 'I ak not Vijay but Denis',
-        correlationId: 'corr-rbac-stt-en', identity: mockIdentity,
-        vdaConsentArtifactId: 'consent-001', language: 'en',
+        sessionId: 'session-001',
+        inputText: 'I ak not Vijay but Denis',
+        correlationId: 'corr-rbac-stt-en',
+        identity: mockIdentity,
+        vdaConsentArtifactId: 'consent-001',
+        language: 'en',
       });
       expect(result.safetyStatus).toBe('IDENTITY_ACCESS_RESTRICTED');
-      expect(result.content.summary).toBe("You're currently using Vijay Chauhan's profile. To access Denis's health information, please switch to Denis's verified profile.");
+      expect(result.content.summary).toBe(
+        "You're currently using Vijay Chauhan's profile. To access Denis's health information, please switch to Denis's profile in the app.",
+      );
       expect(mockIntentClassifier.classifyIntent).not.toHaveBeenCalled();
     });
 
-    it('answers a Hinglish correction in Hindi before generic fallback', async () => {
-      const result = await orchestrator.orchestrateTurn({
-        sessionId: 'session-001', inputText: 'Main Vijay nhi Rahul hu',
-        correlationId: 'corr-rbac-stt-hi', identity: mockIdentity,
-        vdaConsentArtifactId: 'consent-001', language: 'en',
-      });
-      expect(result.safetyStatus).toBe('IDENTITY_ACCESS_RESTRICTED');
-      expect(result.content.summary).toBe('अभी Vijay Chauhan की प्रोफ़ाइल खुली है। Rahul की जानकारी देखने के लिए उनकी सत्यापित प्रोफ़ाइल में जाएँ।');
-      expect(mockIntentClassifier.classifyIntent).not.toHaveBeenCalled();
-    });
+    // Replies follow the profile language; the formatter offers a switch.
+    it.each([
+      [
+        'en',
+        "You're currently using Vijay Chauhan's profile. To access Rahul's health information, please switch to Rahul's profile in the app.",
+      ],
+      [
+        'hi',
+        'अभी Vijay Chauhan की प्रोफ़ाइल खुली है। Rahul की जानकारी देखने के लिए ऐप में उनकी प्रोफ़ाइल चुनें।',
+      ],
+    ])(
+      'answers a Hinglish correction in the %s profile language before generic fallback',
+      async (language, expected) => {
+        const result = await orchestrator.orchestrateTurn({
+          sessionId: 'session-001',
+          inputText: 'Main Vijay nhi Rahul hu',
+          correlationId: 'corr-rbac-stt-hi',
+          identity: mockIdentity,
+          vdaConsentArtifactId: 'consent-001',
+          language,
+        });
+        expect(result.safetyStatus).toBe('IDENTITY_ACCESS_RESTRICTED');
+        expect(result.content.summary).toBe(expected);
+        expect(mockIntentClassifier.classifyIntent).not.toHaveBeenCalled();
+      },
+    );
 
     it('allows normal turn when identity matches authorized profile', async () => {
       const result = await orchestrator.orchestrateTurn({
@@ -312,6 +374,23 @@ describe('AiOrchestratorService — Patient Identity & RBAC Guard', () => {
 
       expect(result.safetyStatus).not.toBe('IDENTITY_ACCESS_RESTRICTED');
       expect(mockIntentClassifier.classifyIntent).toHaveBeenCalled();
+    });
+
+    // Hinglish "mein" (in) + "hai" (is) is not "I am": a live demo question.
+    it.each([
+      'Kya Ayushman card se har hospital mein ilaaj hota hai?',
+      'Hospital mein operation hota hai kya?',
+      'Mein BP ki dawai kab leta hai?',
+    ])('does not read %s as an identity claim', async (inputText) => {
+      const result = await orchestrator.orchestrateTurn({
+        sessionId: 'session-001',
+        inputText,
+        correlationId: 'corr-rbac-mein',
+        identity: mockIdentity,
+        vdaConsentArtifactId: 'consent-001',
+        language: 'hi',
+      });
+      expect(result.safetyStatus).not.toBe('IDENTITY_ACCESS_RESTRICTED');
     });
 
     it('prioritizes Emergency triage over RBAC check', async () => {

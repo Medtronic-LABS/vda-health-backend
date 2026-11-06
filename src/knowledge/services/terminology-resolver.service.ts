@@ -154,17 +154,17 @@ export class TerminologyResolverService {
     return text
       .replace(
         /\bEmpanelled\s+Health\s+Care\s+Providers?\s*\(\s*EHCPs?\s*\)/giu,
-        isHindi ? 'सूचीबद्ध अस्पताल' : 'empanelled hospitals',
+        isHindi ? 'योजना से जुड़े अस्पताल' : 'approved hospitals',
       )
       .replace(/\s*\(\s*EHCPs?\s*\)/giu, '')
       .replace(
         /\bEHCPs?\b/gu,
-        isHindi ? 'सूचीबद्ध अस्पताल' : 'empanelled hospitals',
+        isHindi ? 'योजना से जुड़े अस्पताल' : 'approved hospitals',
       )
       .replace(/\s*\(\s*BIS\s*\)/gu, '')
       .replace(
         /\bPMAMs?\b/gu,
-        isHindi ? 'आयुष्मान मित्र' : 'Ayushman Mitra',
+        isHindi ? 'आरोग्य मित्र' : 'Arogya Mitra',
       )
       .replace(/\s+([,.!?।॥;:])/gu, '$1')
       .replace(/ {2,}/gu, ' ')

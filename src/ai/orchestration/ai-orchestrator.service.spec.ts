@@ -2,7 +2,89 @@ import { Facility } from '../../database/entities/facility.entity';
 import { FacilitySearchResult } from '../../facilities/facility-search.service';
 import { FacilityDirectoryLoader } from '../../facilities/facility-directory.loader';
 import { prioritizeSourceBackedCandidates } from '../../facilities/facility-service-matcher';
-import { AiOrchestratorService, basicEducationTopic } from './ai-orchestrator.service';
+import { ConversationResponseFormatter } from '../../conversations/formatters/conversation-response.formatter';
+import {
+  AiOrchestratorService,
+  AYUSHMAN_ONLINE_PORTAL,
+  clinicalQuestionKind,
+  basicEducationTopic,
+} from './ai-orchestrator.service';
+
+describe('Ayushman card application answers give both routes', () => {
+  const service = Object.create(
+    AiOrchestratorService.prototype,
+  ) as AiOrchestratorService;
+  const routes = (
+    content: Record<string, unknown>,
+    hindi: boolean,
+    replaceUnverified: boolean,
+  ): Record<string, any> =>
+    (service as any).withBothCardApplicationRoutes(
+      content,
+      hindi,
+      replaceUnverified,
+    );
+  const formatter = new ConversationResponseFormatter();
+
+  it('gives the 70+ Vay Vandana card the Aadhaar-only steps and the video', () => {
+    const content = (service as any).withBothCardApplicationRoutes(
+      { summary: 'आधार और राशन कार्ड साथ ले जाएँ।' },
+      true,
+      false,
+      true,
+    );
+    const text = JSON.stringify(content);
+    expect(text).toContain('सिर्फ़ आधार कार्ड');
+    expect(text).not.toContain('राशन');
+    expect(text).toContain(AYUSHMAN_ONLINE_PORTAL);
+    expect(text).toContain('youtube.com/watch?v=IHiHf-A7UT0');
+  });
+
+  it('adds the online route after the generated centre steps', () => {
+    const content = routes(
+      {
+        summary: 'आधार और राशन कार्ड लेकर जन सेवा केंद्र जाएँ।',
+        sections: [{ bullets: ['आयुष्मान मित्र से मिलें।'] }],
+      },
+      true,
+      false,
+    );
+    expect(content.summary).toBe(
+      'आधार और राशन कार्ड लेकर जन सेवा केंद्र जाएँ।',
+    );
+    expect(content.sections).toHaveLength(2);
+    expect(content.sections[1].body).toContain(AYUSHMAN_ONLINE_PORTAL);
+    // Replies pass through twice; the online route is added once.
+    expect(routes(content, true, false).sections).toHaveLength(2);
+  });
+
+  it('replaces an unverified answer with the approved centre and online steps', () => {
+    const content = routes(
+      { summary: 'Sorry, I do not have reliable information on this yet.' },
+      false,
+      true,
+    );
+    expect(content.summary).toBe(
+      'You can get your Ayushman card at a centre or online.',
+    );
+    expect(content.sections[0].bullets).toHaveLength(3);
+    expect(content.sections[1].body).toContain(AYUSHMAN_ONLINE_PORTAL);
+  });
+
+  it('shows the link on screen but never reads it aloud', () => {
+    const formatted = formatter.formatResponse({
+      responseType: 'text',
+      intent: 'GOVERNMENT_SCHEME_QUERY',
+      selectedAgent: 'scheme-agent',
+      safetyStatus: 'SAFE',
+      content: routes({ summary: 'x' }, true, true),
+      language: 'hi',
+    }).content;
+    expect(formatted.patient_text).toContain(AYUSHMAN_ONLINE_PORTAL);
+    expect(formatted.spoken_summary).toContain('आयुष्मान ऐप');
+    expect(formatted.spoken_summary).not.toMatch(/https?:|nha\.gov/u);
+  });
+});
 
 describe('narrow basic education routing after clinical safety', () => {
   it.each([
@@ -16,7 +98,9 @@ describe('narrow basic education routing after clinical safety', () => {
     ['मेरी रिपोर्ट में HbA1c 6.2 है, क्या मतलब?', 40, null],
     ['Can I double my medicine dose?', 40, null],
   ])('%s routes only to %s', (question, age, expected) => {
-    expect(basicEducationTopic(question as string, age as number)).toBe(expected);
+    expect(basicEducationTopic(question as string, age as number)).toBe(
+      expected,
+    );
   });
 });
 
@@ -51,7 +135,10 @@ describe('IPHS-based facility service recommendations', () => {
     travelTimeMinutes: null,
   });
 
-  const format = (results: FacilitySearchResult[], matchedSourceValues: string[]) => {
+  const format = (
+    results: FacilitySearchResult[],
+    matchedSourceValues: string[],
+  ) => {
     const service = Object.create(
       AiOrchestratorService.prototype,
     ) as AiOrchestratorService;
@@ -72,17 +159,46 @@ describe('IPHS-based facility service recommendations', () => {
     );
   };
 
+  it('labels location-only fallback facilities without claiming a service level', () => {
+    const service = Object.create(AiOrchestratorService.prototype) as any;
+    const content = service.facilityContent(
+      [result('CHC Kheri Kalan', null)],
+      { state: 'Haryana', district: 'Faridabad' },
+      'en',
+      undefined,
+      false,
+      {
+        requestedService: 'X-ray scan',
+        appropriateIphsLevels: [],
+        lowCostPreference: false,
+        matchedSourceValues: [],
+        iphsSources: [],
+        iphsEvidenceStatus: 'VERIFIED',
+      },
+    );
+    expect(content.facility_results).toHaveLength(1);
+    expect(content.summary).toContain('I do not know if they offer X-ray scan');
+    expect(content.summary).not.toContain('IPHS');
+    expect(content.cards[0].subtitle).toContain('Near your area');
+  });
+
   it('keeps IPHS-only candidates and clearly says individual availability is unverified', () => {
     const content = format([result('CHC Kheri Kalan', null)], []);
 
-    expect(content.facility_results.map((facility: any) => facility.name)).toEqual([
-      'CHC Kheri Kalan',
-    ]);
-    expect(content.summary).toContain('IPHS मानकों');
-    expect(content.summary).toContain('अभी उपलब्धता की पुष्टि नहीं');
+    expect(
+      content.facility_results.map((facility: any) => facility.name),
+    ).toEqual(['CHC Kheri Kalan']);
+    // Approved wording; named availability is never claimed.
+    expect(content.summary).toContain('सरकारी मानकों के अनुसार');
+    expect(content.summary).toContain('पुष्टि कर लें');
+    expect(content.summary).not.toContain('IPHS');
     expect(content.summary).not.toContain('HbA1c उपलब्ध है');
-    expect(content.facility_results[0].iphsServices.status).toBe('NOT_VERIFIED');
-    expect(content.cards[0].subtitle).toContain('उपयुक्त केंद्र स्तर');
+    expect(content.facility_results[0].iphsServices.status).toBe(
+      'NOT_VERIFIED',
+    );
+    expect(content.cards[0].subtitle).toContain('HbA1c के लिए सही स्तर');
+    expect(content.cards[0].subtitle).toContain('सरकारी अस्पताल');
+    expect(content.cards[0].value).toBe('Faridabad, Haryana');
   });
 
   it('ranks source-listed services first while retaining the other IPHS-level facilities', () => {
@@ -93,24 +209,18 @@ describe('IPHS-based facility service recommendations', () => {
     const ranked = prioritizeSourceBackedCandidates(candidates, ['HbA1c']);
     const content = format(ranked, ['HbA1c']);
 
-    expect(content.facility_results.map((facility: any) => facility.name)).toEqual([
-      'Source-listed CHC',
-      'IPHS-only CHC',
-    ]);
-    expect(content.summary).toContain('source records');
-    expect(content.summary).toContain('IPHS मानकों');
-    expect(content.summary).toContain('अभी की उपलब्धता की पुष्टि नहीं');
+    expect(
+      content.facility_results.map((facility: any) => facility.name),
+    ).toEqual(['Source-listed CHC', 'IPHS-only CHC']);
+    expect(content.summary).toContain('रिकॉर्ड में HbA1c लिखा है');
+    expect(content.summary).toContain('सरकारी मानकों के अनुसार');
+    expect(content.summary).toContain('यह पक्का नहीं है');
     expect(content.serviceAvailability).toBe('NOT_VERIFIED');
   });
-
 });
 
 describe('IPHS service-specific retrieval', () => {
-  const chunk = (
-    title: string,
-    content: string,
-    chunkId: string,
-  ) => ({
+  const chunk = (title: string, content: string, chunkId: string) => ({
     chunkId,
     documentId: chunkId,
     documentVersion: '2022',
@@ -157,7 +267,11 @@ describe('IPHS service-specific retrieval', () => {
     };
 
     const resolved = await service.resolveIphsLevelsForService(
-      'pilot-tenant', 'ECG', 'hi', 'HARYANA', 'focused-check',
+      'pilot-tenant',
+      'ECG',
+      'hi',
+      'HARYANA',
+      'focused-check',
     );
 
     expect(service.knowledgeRetrievalService.retrieve).toHaveBeenCalledWith(
@@ -185,7 +299,11 @@ describe('IPHS service-specific retrieval', () => {
     service.knowledgeRetrievalService = {
       retrieve: jest.fn().mockResolvedValue({
         matchedChunks: [
-          chunk('IPHS 2022 - SDH DH Guidelines', 'General standards.', 'generic'),
+          chunk(
+            'IPHS 2022 - SDH DH Guidelines',
+            'General standards.',
+            'generic',
+          ),
           chunk('NCD Guidelines 2023', 'ECG equipment', 'ncd'),
         ],
         sources: [],
@@ -199,7 +317,11 @@ describe('IPHS service-specific retrieval', () => {
     service.aiProvider = { generate: jest.fn() };
 
     const resolved = await service.resolveIphsLevelsForService(
-      'pilot-tenant', 'ECG', 'hi', 'HARYANA', 'focused-check',
+      'pilot-tenant',
+      'ECG',
+      'hi',
+      'HARYANA',
+      'focused-check',
     );
 
     expect(resolved).toEqual({
@@ -212,27 +334,54 @@ describe('IPHS service-specific retrieval', () => {
 
   it('passes low-similarity exact MRI evidence to the resolver without assigning a level itself', async () => {
     const service = Object.create(AiOrchestratorService.prototype) as any;
-    const generic = chunk('IPHS 2022 - SDH DH Guidelines', 'General standards.', 'generic');
-    const mri = { ...chunk('IPHS 2022 - SDH DH Guidelines',
-      'Magnetic Resonance Imaging (MRI) - D D D', 'mri'), relevanceScore: 0.22 };
+    const generic = chunk(
+      'IPHS 2022 - SDH DH Guidelines',
+      'General standards.',
+      'generic',
+    );
+    const mri = {
+      ...chunk(
+        'IPHS 2022 - SDH DH Guidelines',
+        'Magnetic Resonance Imaging (MRI) - D D D',
+        'mri',
+      ),
+      relevanceScore: 0.22,
+    };
     service.knowledgeRetrievalService = {
       retrieve: jest.fn().mockResolvedValue({
         matchedChunks: [generic],
-        sources: [{ title: generic.title, source: generic.source, version: '2022' }],
-        formattedKnowledgePrompt: '', retrievedCount: 1,
-        intent: 'FACILITY_SERVICE_LEVEL', providerType: 'postgres_pgvector', latencyMs: 1,
+        sources: [
+          { title: generic.title, source: generic.source, version: '2022' },
+        ],
+        formattedKnowledgePrompt: '',
+        retrievedCount: 1,
+        intent: 'FACILITY_SERVICE_LEVEL',
+        providerType: 'postgres_pgvector',
+        latencyMs: 1,
       }),
       retrieveIphsServiceChunks: jest.fn().mockResolvedValue([mri]),
     };
-    service.aiProvider = { generate: jest.fn().mockResolvedValue({
-      json: { evidenceStatus: 'VERIFIED', levels: ['SDH'] },
-    }) };
+    service.aiProvider = {
+      generate: jest.fn().mockResolvedValue({
+        json: { evidenceStatus: 'VERIFIED', levels: ['SDH'] },
+      }),
+    };
 
     const resolved = await service.resolveIphsLevelsForService(
-      'pilot-tenant', 'MRI', 'hi', 'Haryana', 'focused-check',
+      'pilot-tenant',
+      'MRI',
+      'hi',
+      'Haryana',
+      'focused-check',
     );
-    expect(service.knowledgeRetrievalService.retrieveIphsServiceChunks)
-      .toHaveBeenCalledWith(['Magnetic Resonance Imaging', 'MRI'], 'pilot-tenant', 'Haryana', 6);
+    expect(
+      service.knowledgeRetrievalService.retrieveIphsServiceChunks,
+    ).toHaveBeenCalledWith(
+      ['Magnetic Resonance Imaging', 'MRI'],
+      'pilot-tenant',
+      'Haryana',
+      6,
+    );
     const [prompt] = service.aiProvider.generate.mock.calls[0];
     expect(prompt).toContain(mri.content);
     expect(prompt).not.toContain(generic.content);
@@ -244,17 +393,35 @@ describe('IPHS service-specific retrieval', () => {
     const service = Object.create(AiOrchestratorService.prototype) as any;
     service.knowledgeRetrievalService = {
       retrieve: jest.fn().mockResolvedValue({
-        matchedChunks: [chunk('IPHS 2022 - SDH DH Guidelines', 'General standards.', 'generic')],
-        sources: [], formattedKnowledgePrompt: '', retrievedCount: 1,
-        intent: 'FACILITY_SERVICE_LEVEL', providerType: 'postgres_pgvector', latencyMs: 1,
+        matchedChunks: [
+          chunk(
+            'IPHS 2022 - SDH DH Guidelines',
+            'General standards.',
+            'generic',
+          ),
+        ],
+        sources: [],
+        formattedKnowledgePrompt: '',
+        retrievedCount: 1,
+        intent: 'FACILITY_SERVICE_LEVEL',
+        providerType: 'postgres_pgvector',
+        latencyMs: 1,
       }),
       retrieveIphsServiceChunks: jest.fn().mockResolvedValue([]),
     };
     service.aiProvider = { generate: jest.fn() };
     const resolved = await service.resolveIphsLevelsForService(
-      'pilot-tenant', 'quantum nanorobot imaging', 'hi', 'Haryana', 'focused-check',
+      'pilot-tenant',
+      'quantum nanorobot imaging',
+      'hi',
+      'Haryana',
+      'focused-check',
     );
-    expect(resolved).toEqual({ levels: [], sources: [], evidenceStatus: 'NOT_VERIFIED' });
+    expect(resolved).toEqual({
+      levels: [],
+      sources: [],
+      evidenceStatus: 'NOT_VERIFIED',
+    });
     expect(service.aiProvider.generate).not.toHaveBeenCalled();
   });
 
@@ -262,52 +429,118 @@ describe('IPHS service-specific retrieval', () => {
     const service = Object.create(AiOrchestratorService.prototype) as any;
     service.knowledgeRetrievalService = {
       retrieve: jest.fn().mockResolvedValue({
-        matchedChunks: [], sources: [], formattedKnowledgePrompt: '', retrievedCount: 0,
-        intent: 'FACILITY_SERVICE_LEVEL', providerType: 'postgres_pgvector', latencyMs: 1,
+        matchedChunks: [],
+        sources: [],
+        formattedKnowledgePrompt: '',
+        retrievedCount: 0,
+        intent: 'FACILITY_SERVICE_LEVEL',
+        providerType: 'postgres_pgvector',
+        latencyMs: 1,
       }),
       retrieveIphsServiceChunks: jest.fn().mockResolvedValue([]),
     };
     service.aiProvider = { generate: jest.fn() };
     const resolved = await service.resolveIphsLevelsForService(
-      'pilot-tenant', 'X-ray', 'hi', 'Haryana', 'focused-check',
+      'pilot-tenant',
+      'X-ray',
+      'hi',
+      'Haryana',
+      'focused-check',
     );
-    expect(resolved).toEqual({ levels: [], sources: [], evidenceStatus: 'NOT_VERIFIED' });
+    expect(resolved).toEqual({
+      levels: [],
+      sources: [],
+      evidenceStatus: 'NOT_VERIFIED',
+    });
     expect(service.aiProvider.generate).not.toHaveBeenCalled();
-    const content = service.facilityContent([], { district: 'Faridabad' }, 'hi',
-      undefined, false, {
-        requestedService: 'X-ray', appropriateIphsLevels: resolved.levels,
-        lowCostPreference: false, matchedSourceValues: [], iphsSources: [],
+    const content = service.facilityContent(
+      [],
+      { district: 'Faridabad' },
+      'hi',
+      undefined,
+      false,
+      {
+        requestedService: 'X-ray',
+        appropriateIphsLevels: resolved.levels,
+        lowCostPreference: false,
+        matchedSourceValues: [],
+        iphsSources: [],
         iphsEvidenceStatus: resolved.evidenceStatus,
-      });
+      },
+    );
     expect(content.cards).toEqual([]);
     expect(content.facility_results).toEqual([]);
-    expect(content.summary).toContain('सेवा की पुष्टि नहीं हो सकी');
+    expect(content.summary).toContain('X-ray की जानकारी नहीं मिली');
   });
 
   it('uses the explicit CHC diagnostic-services X-ray table and keeps named availability unverified', async () => {
     const service = Object.create(AiOrchestratorService.prototype) as any;
-    const incidental = chunk('IPHS 2022 - CHC Guidelines', 'An x-Ray view box should be provided.', 'incidental');
-    const table = chunk('IPHS 2022 - CHC Guidelines', 'Diagnostic Services\nUSG D E E\nDigital x-Ray E E E E E\nSupport Services', 'table');
+    const incidental = chunk(
+      'IPHS 2022 - CHC Guidelines',
+      'An x-Ray view box should be provided.',
+      'incidental',
+    );
+    const table = chunk(
+      'IPHS 2022 - CHC Guidelines',
+      'Diagnostic Services\nUSG D E E\nDigital x-Ray E E E E E\nSupport Services',
+      'table',
+    );
     service.knowledgeRetrievalService = {
-      retrieve: jest.fn().mockResolvedValue({ matchedChunks: [incidental], sources: [], formattedKnowledgePrompt: '', retrievedCount: 1, intent: 'FACILITY_SERVICE_LEVEL', providerType: 'postgres_pgvector', latencyMs: 1 }),
+      retrieve: jest.fn().mockResolvedValue({
+        matchedChunks: [incidental],
+        sources: [],
+        formattedKnowledgePrompt: '',
+        retrievedCount: 1,
+        intent: 'FACILITY_SERVICE_LEVEL',
+        providerType: 'postgres_pgvector',
+        latencyMs: 1,
+      }),
       retrieveIphsServiceChunks: jest.fn().mockResolvedValue([table]),
     };
     service.aiProvider = { generate: jest.fn() };
-    const resolved = await service.resolveIphsLevelsForService('pilot-tenant', 'X-ray', 'en', 'HARYANA', 'focused-check');
+    const resolved = await service.resolveIphsLevelsForService(
+      'pilot-tenant',
+      'X-ray',
+      'en',
+      'HARYANA',
+      'focused-check',
+    );
     expect(resolved.evidenceStatus).toBe('VERIFIED');
     expect(resolved.levels).toEqual(['CHC']);
     expect(service.aiProvider.generate).not.toHaveBeenCalled();
-    expect(service.knowledgeRetrievalService.retrieveIphsServiceChunks).toHaveBeenCalledWith(
-      expect.arrayContaining(['X-ray', 'Xray']), 'pilot-tenant', 'HARYANA', 6,
+    expect(
+      service.knowledgeRetrievalService.retrieveIphsServiceChunks,
+    ).toHaveBeenCalledWith(
+      expect.arrayContaining(['X-ray', 'Xray']),
+      'pilot-tenant',
+      'HARYANA',
+      6,
     );
-    const candidates = new FacilityDirectoryLoader().find({ state: 'HARYANA', district: 'FARIDABAD', iphsLevels: resolved.levels });
+    const candidates = new FacilityDirectoryLoader().find({
+      state: 'HARYANA',
+      district: 'FARIDABAD',
+      iphsLevels: resolved.levels,
+    });
     expect(candidates.length).toBeGreaterThan(0);
     expect(candidates.every((item) => item.iphsLevel === 'CHC')).toBe(true);
-    const content = service.facilityContent(service.directoryFacilityResults(candidates), { district: 'Faridabad' }, 'en', undefined, false, {
-      requestedService: 'X-ray', appropriateIphsLevels: resolved.levels, lowCostPreference: false,
-      matchedSourceValues: [], iphsSources: resolved.sources, iphsEvidenceStatus: resolved.evidenceStatus,
-    });
-    expect(content.summary).toContain('Current X-ray availability');
+    const content = service.facilityContent(
+      service.directoryFacilityResults(candidates),
+      { district: 'Faridabad' },
+      'en',
+      undefined,
+      false,
+      {
+        requestedService: 'X-ray',
+        appropriateIphsLevels: resolved.levels,
+        lowCostPreference: false,
+        matchedSourceValues: [],
+        iphsSources: resolved.sources,
+        iphsEvidenceStatus: resolved.evidenceStatus,
+      },
+    );
+    expect(content.summary).toContain(
+      'may offer X-ray. Please confirm X-ray is available before you go.',
+    );
     expect(content.summary).not.toContain('confirmed');
   });
 
@@ -315,23 +548,47 @@ describe('IPHS service-specific retrieval', () => {
     const service = Object.create(AiOrchestratorService.prototype) as any;
     service.knowledgeRetrievalService = {
       retrieve: jest.fn().mockResolvedValue({
-        matchedChunks: [], sources: [], formattedKnowledgePrompt: '', retrievedCount: 0,
-        intent: 'FACILITY_SERVICE_LEVEL', providerType: 'postgres_pgvector_error', latencyMs: 1,
+        matchedChunks: [],
+        sources: [],
+        formattedKnowledgePrompt: '',
+        retrievedCount: 0,
+        intent: 'FACILITY_SERVICE_LEVEL',
+        providerType: 'postgres_pgvector_error',
+        latencyMs: 1,
       }),
       retrieveIphsServiceChunks: jest.fn(),
     };
     service.aiProvider = { generate: jest.fn() };
     const resolved = await service.resolveIphsLevelsForService(
-      'pilot-tenant', 'HbA1c', 'hi', 'Haryana', 'focused-check',
+      'pilot-tenant',
+      'HbA1c',
+      'hi',
+      'Haryana',
+      'focused-check',
     );
-    expect(resolved).toEqual({ levels: [], sources: [], evidenceStatus: 'UNAVAILABLE' });
-    expect(service.knowledgeRetrievalService.retrieveIphsServiceChunks).not.toHaveBeenCalled();
-    const content = service.facilityContent([], { district: 'Faridabad' }, 'hi',
-      undefined, false, {
-        requestedService: 'HbA1c', appropriateIphsLevels: resolved.levels,
-        lowCostPreference: false, matchedSourceValues: [], iphsSources: [],
+    expect(resolved).toEqual({
+      levels: [],
+      sources: [],
+      evidenceStatus: 'UNAVAILABLE',
+    });
+    expect(
+      service.knowledgeRetrievalService.retrieveIphsServiceChunks,
+    ).not.toHaveBeenCalled();
+    const content = service.facilityContent(
+      [],
+      { district: 'Faridabad' },
+      'hi',
+      undefined,
+      false,
+      {
+        requestedService: 'HbA1c',
+        appropriateIphsLevels: resolved.levels,
+        lowCostPreference: false,
+        matchedSourceValues: [],
+        iphsSources: [],
         iphsEvidenceStatus: resolved.evidenceStatus,
-      });
+      },
+    );
     expect(content.cards).toEqual([]);
     expect(content.summary).toContain('दोबारा कोशिश करें');
     expect(content.summary).not.toContain('establish नहीं हो सका');
@@ -339,23 +596,39 @@ describe('IPHS service-specific retrieval', () => {
 
   it('does not recommend facilities when the level resolver fails', async () => {
     const service = Object.create(AiOrchestratorService.prototype) as any;
-    const xray = chunk('IPHS 2022 - CHC Guidelines',
-      'Imaging services such as x-Ray are listed for CHC.', 'xray');
+    const xray = chunk(
+      'IPHS 2022 - CHC Guidelines',
+      'Imaging services such as x-Ray are listed for CHC.',
+      'xray',
+    );
     service.logger = { warn: jest.fn() };
     service.knowledgeRetrievalService = {
       retrieve: jest.fn().mockResolvedValue({
         matchedChunks: [xray],
         sources: [{ title: xray.title, source: xray.source, version: '2022' }],
-        formattedKnowledgePrompt: '', retrievedCount: 1,
-        intent: 'FACILITY_SERVICE_LEVEL', providerType: 'postgres_pgvector', latencyMs: 1,
+        formattedKnowledgePrompt: '',
+        retrievedCount: 1,
+        intent: 'FACILITY_SERVICE_LEVEL',
+        providerType: 'postgres_pgvector',
+        latencyMs: 1,
       }),
       retrieveIphsServiceChunks: jest.fn().mockResolvedValue([]),
     };
-    service.aiProvider = { generate: jest.fn().mockRejectedValue(new Error('provider unavailable')) };
+    service.aiProvider = {
+      generate: jest.fn().mockRejectedValue(new Error('provider unavailable')),
+    };
     const resolved = await service.resolveIphsLevelsForService(
-      'pilot-tenant', 'X-ray', 'hi', 'Haryana', 'focused-check',
+      'pilot-tenant',
+      'X-ray',
+      'hi',
+      'Haryana',
+      'focused-check',
     );
-    expect(resolved).toEqual({ levels: [], sources: [], evidenceStatus: 'UNAVAILABLE' });
+    expect(resolved).toEqual({
+      levels: [],
+      sources: [],
+      evidenceStatus: 'UNAVAILABLE',
+    });
   });
 });
 
@@ -367,20 +640,36 @@ describe('patient prescription question routing', () => {
     investigations: [{ name: 'HbA1c' }],
   };
 
-  it.each(['My medicine', 'My medicines', 'Meri dawai batao', 'मेरी दवाइयां दिखाओ', 'आज की दवाइयाँ कौन सी हैं?'])(
-    'routes %s to the verified medicine list', (question) => {
-      expect(service.resolvePrescriptionContextQuestion(context, question, 'hi').kind).toBe('MEDICINE_LIST');
-    },
-  );
+  it.each([
+    'My medicine',
+    'My medicines',
+    'Meri dawai batao',
+    'मेरी दवाइयां दिखाओ',
+    'आज की दवाइयाँ कौन सी हैं?',
+  ])('routes %s to the verified medicine list', (question) => {
+    expect(
+      service.resolvePrescriptionContextQuestion(context, question, 'hi').kind,
+    ).toBe('MEDICINE_LIST');
+  });
 
   it.each(['My medication schedule', 'Dawa kab leni hai', 'मेरी दवा का समय'])(
-    'routes %s to saved reminder times', (question) => {
-      expect(service.resolvePrescriptionContextQuestion(context, question, 'hi').kind).toBe('REMINDER_FACT');
+    'routes %s to saved reminder times',
+    (question) => {
+      expect(
+        service.resolvePrescriptionContextQuestion(context, question, 'hi')
+          .kind,
+      ).toBe('REMINDER_FACT');
     },
   );
 
   it('keeps dose changes in the clinical safety path', () => {
-    expect(service.resolvePrescriptionContextQuestion(context, 'Should I stop my medicine?', 'en').kind).toBe('CLINICAL_MEDICATION_DECISION');
+    expect(
+      service.resolvePrescriptionContextQuestion(
+        context,
+        'Should I stop my medicine?',
+        'en',
+      ).kind,
+    ).toBe('CLINICAL_MEDICATION_DECISION');
   });
 
   it.each([
@@ -390,14 +679,25 @@ describe('patient prescription question routing', () => {
     ['Maine galti se medicine taken mark kar di.', 'ADHERENCE_STATUS'],
     ['Meri BP ki medicine khatam ho gayi hai, kya karun?', 'REFILL_SUPPORT'],
     ['Meri sari medicines band kar do.', 'CLINICAL_MEDICATION_DECISION'],
-    ['Kya main Metformin 500 mg ki jagah 1000 mg le sakta hoon?', 'CLINICAL_MEDICATION_DECISION'],
+    [
+      'Kya main Metformin 500 mg ki jagah 1000 mg le sakta hoon?',
+      'CLINICAL_MEDICATION_DECISION',
+    ],
     ['What medicines am I taking and when?', 'REMINDER_FACT'],
   ])('keeps %s out of unrelated prescription lists', (question, kind) => {
-    expect(service.resolvePrescriptionContextQuestion(context, question, 'hi')?.kind).toBe(kind);
+    expect(
+      service.resolvePrescriptionContextQuestion(context, question, 'hi')?.kind,
+    ).toBe(kind);
   });
 
   it('does not show unrelated reminders for an unknown named medicine', () => {
-    expect(service.resolvePrescriptionContextQuestion(context, 'Mujhe Metformin kab leni hai?', 'hi')).toBeNull();
+    expect(
+      service.resolvePrescriptionContextQuestion(
+        context,
+        'Mujhe Metformin kab leni hai?',
+        'hi',
+      ),
+    ).toBeNull();
   });
 
   it.each([
@@ -407,44 +707,215 @@ describe('patient prescription question routing', () => {
     ['टेलमा नहीं, Ozomet VG 2 कब लेना है?', 'Ozomet VG 2'],
     ['Ozomet VG 2 timing', 'Ozomet VG 2'],
   ])('matches a unique verified medicine in %s', (question, expected) => {
-    const verified = { ...context, medicines: [{ name: 'Telma 40', frequency: 'daily' },
-      { name: 'Ozomet VG 2', frequency: 'twice daily' }] };
-    const result = service.resolvePrescriptionContextQuestion(verified, question, 'hi');
+    const verified = {
+      ...context,
+      medicines: [
+        { name: 'Telma 40', frequency: 'daily' },
+        { name: 'Ozomet VG 2', frequency: 'twice daily' },
+      ],
+    };
+    const result = service.resolvePrescriptionContextQuestion(
+      verified,
+      question,
+      'hi',
+    );
     expect(result.kind).toBe('MEDICINE_FACT');
     expect(result.medicine.name).toBe(expected);
   });
 
   it('does not select a different strength or an ambiguous brand', () => {
-    const verified = { ...context, medicines: [{ name: 'Telma 40' }, { name: 'Telma 80' }] };
-    expect(service.resolvePrescriptionContextQuestion(verified, 'Telma kab leni hai?', 'hi').kind).toBe('MEDICINE_LIST');
-    expect(service.resolvePrescriptionContextQuestion(verified, 'Telma 20 kab leni hai?', 'hi')).toBeNull();
+    const verified = {
+      ...context,
+      medicines: [{ name: 'Telma 40' }, { name: 'Telma 80' }],
+    };
+    expect(
+      service.resolvePrescriptionContextQuestion(
+        verified,
+        'Telma kab leni hai?',
+        'hi',
+      ).kind,
+    ).toBe('MEDICINE_LIST');
+    expect(
+      service.resolvePrescriptionContextQuestion(
+        verified,
+        'Telma 20 kab leni hai?',
+        'hi',
+      ),
+    ).toBeNull();
   });
 
   it('keeps frequency, prescribed timing, and phone reminders distinct', () => {
-    const verified = { ...context, medicines: [{ name: 'Telma 40', frequency: 'once daily', timingInstruction: undefined }],
-      reminders: [{ medicineName: 'Telma 40', reminderTimes: ['08:00'] }] };
-    const resolution = service.resolvePrescriptionContextQuestion(verified, 'Telma kab leni hai?', 'hi');
-    const answer = service.prescriptionContextDirectContent(verified, resolution, 'hi');
-    expect(answer.sections[0].bullets).toEqual(expect.arrayContaining([
-      expect.stringContaining('दिन में 1 बार'),
-      expect.stringContaining('पर्ची में लिखा समय: दर्ज नहीं'),
-      expect.stringContaining('फ़ोन पर सेव रिमाइंडर'),
-    ]));
+    const verified = {
+      ...context,
+      medicines: [
+        {
+          name: 'Telma 40',
+          frequency: 'once daily',
+          timingInstruction: undefined,
+        },
+      ],
+      reminders: [{ medicineName: 'Telma 40', reminderTimes: ['08:00'] }],
+    };
+    const resolution = service.resolvePrescriptionContextQuestion(
+      verified,
+      'Telma kab leni hai?',
+      'hi',
+    );
+    const answer = service.prescriptionContextDirectContent(
+      verified,
+      resolution,
+      'hi',
+    );
+    expect(answer.sections[0].bullets).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('दिन में 1 बार'),
+        expect.stringContaining('पर्ची में लिखा समय: दर्ज नहीं'),
+        expect.stringContaining('फ़ोन पर सेव रिमाइंडर'),
+      ]),
+    );
   });
 
   it('recognizes prescription status without a cached medicine context', () => {
-    expect(service.resolvePrescriptionContextQuestion(null, 'मेरी पर्ची की जाँच हुई क्या?', 'hi').kind).toBe('PRESCRIPTION_STATUS');
+    expect(
+      service.resolvePrescriptionContextQuestion(
+        null,
+        'मेरी पर्ची की जाँच हुई क्या?',
+        'hi',
+      ).kind,
+    ).toBe('PRESCRIPTION_STATUS');
+  });
+
+  // Questions asked in the live pilot (Oct 2026), in all three input forms.
+  it.each([
+    ['मेरी आज की मेडिसिन क्या है?', 'MEDICINE_LIST'],
+    ['Aaj ki meri medicine kya hai?', 'MEDICINE_LIST'],
+    ["What is today's medicine?", 'MEDICINE_LIST'],
+    ['आज कौन सी मेडिसिन पेंडिंग है?', 'ADHERENCE_STATUS'],
+    ['Which medicine is pending today?', 'ADHERENCE_STATUS'],
+    ['मेरी बीपी की मेडिसिन खत्म हो गई है, अब क्या करूँ?', 'REFILL_SUPPORT'],
+    ['My BP medicine is finished, what should I do?', 'REFILL_SUPPORT'],
+    ['मेरी सारी मेडिसिन बंद कर दो।', 'CLINICAL_MEDICATION_DECISION'],
+    ['Stop all my medicines.', 'CLINICAL_MEDICATION_DECISION'],
+    ['मेरी कल की दवाई मिस हुई थी, क्या करूँ?', 'CLINICAL_MEDICATION_DECISION'],
+    [
+      'Meri kal ki dawai miss ho gayi, kya karu?',
+      'CLINICAL_MEDICATION_DECISION',
+    ],
+    [
+      'I missed my medicine yesterday, what should I do?',
+      'CLINICAL_MEDICATION_DECISION',
+    ],
+    ['Meri dawai ka samay kya hai', 'REMINDER_FACT'],
+    ['मेरी दवाइयों का समय', 'REMINDER_FACT'],
+  ])('routes pilot question %s to %s', (question, kind) => {
+    expect(
+      service.resolvePrescriptionContextQuestion(context, question, 'hi')?.kind,
+    ).toBe(kind);
+  });
+
+  describe('medicine names across scripts and spellings', () => {
+    const verified = {
+      ...context,
+      medicines: [
+        { name: 'Telma 40', frequency: 'daily' },
+        { name: 'Ozomet VG 2', frequency: 'twice daily' },
+        { name: 'Metformin 500' },
+      ],
+    };
+
+    it.each([
+      ['मुझे टेलमा फोर्टी कब लेनी है?', 'Telma 40'],
+      ['टेलमा कब लेनी है?', 'Telma 40'],
+      ['ओज़ोमेट कब लेना है?', 'Ozomet VG 2'],
+      ['Mujhe metformon kab leni hai?', 'Metformin 500'],
+      ['मेटफॉर्मिन कब लेनी है?', 'Metformin 500'],
+      ['मेटफॉर्मिन पाँच सौ कब लेनी है?', 'Metformin 500'],
+    ])('matches %s to %s', (question, expected) => {
+      const result = service.resolvePrescriptionContextQuestion(
+        verified,
+        question,
+        'hi',
+      );
+      expect(result.kind).toBe('MEDICINE_FACT');
+      expect(result.medicine.name).toBe(expected);
+    });
+
+    it('never selects a different strength said in words', () => {
+      expect(
+        service.resolvePrescriptionContextQuestion(
+          verified,
+          'टेलमा ट्वेंटी कब लेनी है?',
+          'hi',
+        ),
+      ).toBeNull();
+      expect(
+        service.resolvePrescriptionContextQuestion(
+          verified,
+          'टेलमा बीस कब लेनी है?',
+          'hi',
+        ),
+      ).toBeNull();
+    });
+
+    it('does not guess a misheard name', () => {
+      expect(
+        service.resolvePrescriptionContextQuestion(
+          verified,
+          'मुझे टेल मार्क कब लेनी है?',
+          'hi',
+        ),
+      ).toBeNull();
+    });
+
+    it('lists the saved medicines when a named medicine is not found', () => {
+      const hi = service.unmatchedPrescriptionContent(verified, 'hi');
+      expect(hi.summary).toContain('पर्ची');
+      expect(hi.sections[0].bullets).toEqual(
+        expect.arrayContaining([expect.stringContaining('Telma 40')]),
+      );
+      const en = service.unmatchedPrescriptionContent(verified, 'en');
+      expect(en.sections[0].bullets).toHaveLength(3);
+      expect(
+        service.unmatchedPrescriptionContent(null, 'hi').sections,
+      ).toBeUndefined();
+    });
   });
 });
 
 describe('facility location precedence', () => {
   it('uses the latest patient profile before an older conversation location', async () => {
     const service = Object.create(AiOrchestratorService.prototype) as any;
-    service.knowledgeQueryNormalizer = { normalize: jest.fn().mockReturnValue({}) };
-    service.sessions = { findOne: jest.fn().mockResolvedValue({ tenantId: 'tenant', subjectAbhaRef: 'patient' }) };
-    service.patientData = { getPatientByReference: jest.fn().mockResolvedValue({ state: 'HARYANA', district: 'FARIDABAD' }) };
+    service.knowledgeQueryNormalizer = {
+      normalize: jest.fn().mockReturnValue({}),
+    };
+    service.sessions = {
+      findOne: jest
+        .fn()
+        .mockResolvedValue({ tenantId: 'tenant', subjectAbhaRef: 'patient' }),
+    };
+    service.patientData = {
+      getPatientByReference: jest
+        .fn()
+        .mockResolvedValue({ state: 'HARYANA', district: 'FARIDABAD' }),
+    };
     service.conversationTurns = { find: jest.fn() };
-    expect(await service.facilityLocation('session', 'X-ray near me', 'en')).toEqual({ state: 'HARYANA', district: 'FARIDABAD' });
+    expect(
+      await service.facilityLocation('session', 'X-ray near me', 'en'),
+    ).toEqual({ state: 'HARYANA', district: 'FARIDABAD' });
     expect(service.conversationTurns.find).not.toHaveBeenCalled();
+  });
+});
+
+describe('clinical questions get a reply that fits them', () => {
+  it.each([
+    ['Mujhe dawai ki ek dose miss ho gayi', 'DOSE'],
+    ['I am having side effects of medicines, what should I do?', 'SIDE_EFFECT'],
+    ['Dawai se side effect ho raha hai', 'SIDE_EFFECT'],
+    ['My BP is very high despite taking medicines', 'STILL_HIGH'],
+    ['दवा लेने के बाद भी शुगर ज़्यादा है', 'STILL_HIGH'],
+    ['Meri dawai khatam ho rahi hai', 'MEDICINE'],
+    ['टीबी का इलाज क्या है?', 'GENERAL'],
+  ])('%s -> %s', (question, kind) => {
+    expect(clinicalQuestionKind(question)).toBe(kind);
   });
 });

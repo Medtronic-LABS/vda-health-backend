@@ -64,7 +64,7 @@ describe('DevelopmentSafetyGate', () => {
       expect(result.severity).toBe('HIGH');
       expect(result.action).toBe('ESCALATE');
       expect(result.language).toBe('en');
-      expect(result.patientSafeMessage).toContain('emergency');
+      expect(result.patientSafeMessage).toContain('108');
     });
   });
 
@@ -77,13 +77,16 @@ describe('DevelopmentSafetyGate', () => {
       'बेहोश हो गया',
     ];
 
-    it.each(hindiEmergencyPhrases)('should ESCALATE for "%s"', async (phrase) => {
-      const result = await gate.evaluateSafety(phrase, correlationId, 'hi');
-      expect(result.status).toBe('ESCALATION_REQUIRED');
-      expect(result.ruleId).toBe('EMERGENCY_01');
-      expect(result.language).toBe('hi');
-      expect(result.patientSafeMessage).toBeTruthy();
-    });
+    it.each(hindiEmergencyPhrases)(
+      'should ESCALATE for "%s"',
+      async (phrase) => {
+        const result = await gate.evaluateSafety(phrase, correlationId, 'hi');
+        expect(result.status).toBe('ESCALATION_REQUIRED');
+        expect(result.ruleId).toBe('EMERGENCY_01');
+        expect(result.language).toBe('hi');
+        expect(result.patientSafeMessage).toBeTruthy();
+      },
+    );
   });
 
   describe('EMERGENCY detection (Hinglish)', () => {
@@ -96,50 +99,75 @@ describe('DevelopmentSafetyGate', () => {
       'stroke ke lakshan dikh rahe hain',
     ];
 
-    it.each(hinglishEmergencyPhrases)('should ESCALATE for "%s"', async (phrase) => {
-      const result = await gate.evaluateSafety(phrase, correlationId);
-      expect(result.status).toBe('ESCALATION_REQUIRED');
-      expect(result.ruleId).toBe('EMERGENCY_01');
-    });
+    it.each(hinglishEmergencyPhrases)(
+      'should ESCALATE for "%s"',
+      async (phrase) => {
+        const result = await gate.evaluateSafety(phrase, correlationId);
+        expect(result.status).toBe('ESCALATION_REQUIRED');
+        expect(result.ruleId).toBe('EMERGENCY_01');
+      },
+    );
   });
 
   // ─── SELF_HARM detection ──────────────────────────────
   describe('SELF_HARM detection', () => {
     it('should ESCALATE for "I want to kill myself" (English)', async () => {
-      const result = await gate.evaluateSafety('I want to kill myself', correlationId, 'en');
+      const result = await gate.evaluateSafety(
+        'I want to kill myself',
+        correlationId,
+        'en',
+      );
       expect(result.status).toBe('ESCALATION_REQUIRED');
       expect(result.ruleId).toBe('SELF_HARM_01');
       expect(result.severity).toBe('HIGH');
-      expect(result.patientSafeMessage).toContain('self-harm');
+      expect(result.patientSafeMessage).toContain('14416');
     });
 
     it('should ESCALATE for "suicide" (English)', async () => {
-      const result = await gate.evaluateSafety('I am thinking about suicide', correlationId, 'en');
+      const result = await gate.evaluateSafety(
+        'I am thinking about suicide',
+        correlationId,
+        'en',
+      );
       expect(result.status).toBe('ESCALATION_REQUIRED');
       expect(result.ruleId).toBe('SELF_HARM_01');
     });
 
     it('should ESCALATE for "आत्महत्या" (Hindi)', async () => {
-      const result = await gate.evaluateSafety('मैं आत्महत्या करना चाहता हूँ', correlationId, 'hi');
+      const result = await gate.evaluateSafety(
+        'मैं आत्महत्या करना चाहता हूँ',
+        correlationId,
+        'hi',
+      );
       expect(result.status).toBe('ESCALATION_REQUIRED');
       expect(result.ruleId).toBe('SELF_HARM_01');
       expect(result.language).toBe('hi');
     });
 
     it('should ESCALATE for "khud ko marna" (Hinglish)', async () => {
-      const result = await gate.evaluateSafety('main khud ko marna chahta hoon', correlationId);
+      const result = await gate.evaluateSafety(
+        'main khud ko marna chahta hoon',
+        correlationId,
+      );
       expect(result.status).toBe('ESCALATION_REQUIRED');
       expect(result.ruleId).toBe('SELF_HARM_01');
     });
 
     it('should ESCALATE for "end my life" (English)', async () => {
-      const result = await gate.evaluateSafety('I want to end my life', correlationId, 'en');
+      const result = await gate.evaluateSafety(
+        'I want to end my life',
+        correlationId,
+        'en',
+      );
       expect(result.status).toBe('ESCALATION_REQUIRED');
       expect(result.ruleId).toBe('SELF_HARM_01');
     });
 
     it('should ESCALATE for "jaan de dunga" (Hinglish)', async () => {
-      const result = await gate.evaluateSafety('main jaan de dunga', correlationId);
+      const result = await gate.evaluateSafety(
+        'main jaan de dunga',
+        correlationId,
+      );
       expect(result.status).toBe('ESCALATION_REQUIRED');
       expect(result.ruleId).toBe('SELF_HARM_01');
     });
@@ -156,23 +184,33 @@ describe('DevelopmentSafetyGate', () => {
       { text: 'Should I adjust my dosage?', lang: 'en' },
     ];
 
-    it.each(medicationPhrases)('should WITHHOLD for "$text" ($lang)', async ({ text, lang }) => {
-      const result = await gate.evaluateSafety(text, correlationId, lang);
-      expect(result.status).toBe('WITHHOLD');
-      expect(result.ruleId).toBe('MEDICATION_01');
-      expect(result.severity).toBe('MEDIUM');
-      expect(result.action).toBe('WITHHOLD');
-    });
+    it.each(medicationPhrases)(
+      'should WITHHOLD for "$text" ($lang)',
+      async ({ text, lang }) => {
+        const result = await gate.evaluateSafety(text, correlationId, lang);
+        expect(result.status).toBe('WITHHOLD');
+        expect(result.ruleId).toBe('MEDICATION_01');
+        expect(result.severity).toBe('MEDIUM');
+        expect(result.action).toBe('WITHHOLD');
+      },
+    );
 
     it('should WITHHOLD for Hindi medication request', async () => {
-      const result = await gate.evaluateSafety('मुझे दवा बढ़ाना है', correlationId, 'hi');
+      const result = await gate.evaluateSafety(
+        'मुझे दवा बढ़ाना है',
+        correlationId,
+        'hi',
+      );
       expect(result.status).toBe('WITHHOLD');
       expect(result.ruleId).toBe('MEDICATION_01');
       expect(result.language).toBe('hi');
     });
 
     it('should WITHHOLD for Hinglish medication request', async () => {
-      const result = await gate.evaluateSafety('dose increase karna hai', correlationId);
+      const result = await gate.evaluateSafety(
+        'dose increase karna hai',
+        correlationId,
+      );
       expect(result.status).toBe('WITHHOLD');
       expect(result.ruleId).toBe('MEDICATION_01');
     });
@@ -203,7 +241,10 @@ describe('DevelopmentSafetyGate', () => {
   // ─── Priority ordering ────────────────────────────────
   describe('Priority ordering: EMERGENCY > SELF_HARM > MEDICATION', () => {
     it('should prioritize EMERGENCY over MEDICATION keywords', async () => {
-      const result = await gate.evaluateSafety('I have severe chest pain and want to change dose', correlationId);
+      const result = await gate.evaluateSafety(
+        'I have severe chest pain and want to change dose',
+        correlationId,
+      );
       expect(result.status).toBe('ESCALATION_REQUIRED');
       expect(result.ruleId).toBe('EMERGENCY_01');
     });
@@ -217,29 +258,95 @@ describe('DevelopmentSafetyGate', () => {
   // ─── Language detection ────────────────────────────────
   describe('Automatic language detection', () => {
     it('should auto-detect Hindi from Devanagari script', async () => {
-      const result = await gate.evaluateSafety('सीने में दर्द है', correlationId);
+      const result = await gate.evaluateSafety(
+        'सीने में दर्द है',
+        correlationId,
+      );
       expect(result.language).toBe('hi');
     });
 
     it('should auto-detect Hinglish from romanized Hindi', async () => {
-      const result = await gate.evaluateSafety('seene mein bahut tez dard hai', correlationId);
+      const result = await gate.evaluateSafety(
+        'seene mein bahut tez dard hai',
+        correlationId,
+      );
       expect(result.language).toMatch(/hi-Latn|hi/);
     });
 
     it('should default to English for English text', async () => {
-      const result = await gate.evaluateSafety('What is diabetes?', correlationId);
+      const result = await gate.evaluateSafety(
+        'What is diabetes?',
+        correlationId,
+      );
       expect(result.language).toBe('en');
     });
+
+    it.each([
+      'I want to suicide',
+      'I want to harm myself',
+      'severe chest pain',
+    ])(
+      'keeps English for English text that Hinglish patterns also match: %s',
+      async (text) => {
+        const result = await gate.evaluateSafety(text, correlationId);
+        expect(result.language).toBe('en');
+      },
+    );
+
+    it('answers Hinglish in Devanagari Hindi', async () => {
+      const result = await gate.evaluateSafety(
+        'seene mein bahut tez dard hai',
+        correlationId,
+      );
+      expect(result.language).toBe('hi');
+      expect(result.patientSafeMessage).toMatch(/[ऀ-ॿ]/u);
+    });
+  });
+
+  // Replies follow the profile language, whatever script the question uses.
+  describe('Profile language', () => {
+    it.each([
+      ['सीने में तेज दर्द है', 'en', 'en'],
+      ['seene mein bahut tez dard hai', 'en', 'en'],
+      ['Severe chest tightness and left arm numbness', 'hi', 'hi'],
+      ['chest me pain ho raha hai', 'hi', 'hi'],
+    ])(
+      'replies to %s in the %s profile language',
+      async (text, profile, expected) => {
+        const result = await gate.evaluateSafety(text, correlationId, profile);
+        expect(result.status).toBe('ESCALATION_REQUIRED');
+        expect(result.language).toBe(expected);
+      },
+    );
+
+    it.each(['hi', 'en'])(
+      'says the emergency numbers outside brackets (%s)',
+      async (profile) => {
+        const result = await gate.evaluateSafety(
+          'chest me pain ho raha hai',
+          correlationId,
+          profile,
+        );
+        expect(result.patientSafeMessage).toMatch(/108/);
+        expect(result.patientSafeMessage).not.toMatch(/\([^)]*108[^)]*\)/);
+      },
+    );
   });
 
   // ─── Correlation ID passthrough ────────────────────────
   describe('Correlation ID', () => {
     it('should preserve correlationId in all responses', async () => {
       const customCorrelationId = 'my-custom-corr-id-xyz';
-      const safeResult = await gate.evaluateSafety('hello', customCorrelationId);
+      const safeResult = await gate.evaluateSafety(
+        'hello',
+        customCorrelationId,
+      );
       expect(safeResult.correlationId).toBe(customCorrelationId);
 
-      const escalationResult = await gate.evaluateSafety('severe chest pain', customCorrelationId);
+      const escalationResult = await gate.evaluateSafety(
+        'severe chest pain',
+        customCorrelationId,
+      );
       expect(escalationResult.correlationId).toBe(customCorrelationId);
     });
   });

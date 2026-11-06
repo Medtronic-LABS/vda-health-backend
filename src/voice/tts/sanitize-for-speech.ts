@@ -11,15 +11,15 @@ export function sanitizeForSpeech(value: string, languageCode: string): string {
     .replace(/\*\*|__|~~|`|^\s{0,3}#{1,6}\s+/gmu, '')
     .replace(
       /\bEmpanelled\s+Health\s+Care\s+Providers?\s*\(\s*EHCPs?\s*\)/giu,
-      hindi ? 'सूचीबद्ध अस्पताल' : 'empanelled hospitals',
+      hindi ? 'योजना से जुड़े अस्पताल' : 'approved hospitals',
     )
     .replace(
       /\s*\(\s*(?:EHCPs?|AB[\s-]*PM[\s-]*JAY|PM[\s-]*JAY|BIS|CSC|PMAMs?|SECC(?:\s*2011)?|[A-Za-z\s.,/&'-]{2,60})\s*\)/gu,
       '',
     )
     .replace(/\b(?:AB[\s-]*)?PM[\s-]?JAY\b/giu, hindi ? 'आयुष्मान भारत योजना' : 'Ayushman Bharat scheme')
-    .replace(/\bEHCPs?\b/giu, hindi ? 'सूचीबद्ध अस्पताल' : 'empanelled hospital')
-    .replace(/\bPMAMs?\b/gu, hindi ? 'आयुष्मान मित्र' : 'Ayushman Mitra')
+    .replace(/\bEHCPs?\b/giu, hindi ? 'योजना से जुड़े अस्पताल' : 'approved hospital')
+    .replace(/\bPMAMs?\b/gu, hindi ? 'आरोग्य मित्र' : 'Arogya Mitra')
     .replace(/\bCSC\b/gu, hindi ? 'कॉमन सर्विस सेंटर' : 'Common Service Centre')
     .replace(/\bHbA1c\b/giu, hindi ? 'एच बी ए वन सी' : 'H B A one C')
     .replace(/\s+([,.!?।॥;:])/gu, '$1')

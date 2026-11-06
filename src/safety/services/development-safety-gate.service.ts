@@ -1,5 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { ISafetyGate, SafetyResult } from '../interfaces/safety-gate.interface';
+import {
+  asksToStopAllMedicines,
+  emergencyKind,
+  emergencyMessage,
+  medicineChangeMessage,
+  SELF_HARM_MESSAGE,
+  STOP_ALL_MEDICINES_MESSAGE,
+} from '../standard-messages';
 
 @Injectable()
 export class DevelopmentSafetyGate implements ISafetyGate {
@@ -17,9 +25,12 @@ export class DevelopmentSafetyGate implements ISafetyGate {
   ];
 
   private normalizeForSafety(text: string): string {
-    return text.normalize('NFKC')
+    return text
+      .normalize('NFKC')
       .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g, '')
-      .replace(/\s+/g, ' ').trim().toLowerCase();
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
   }
 
   // self-harm patterns mapping
@@ -55,42 +66,29 @@ export class DevelopmentSafetyGate implements ISafetyGate {
       this.emergencyPatterns.hiLatn.test(normalizedText) ||
       this.additionalEmergencyPatterns[2].test(normalizedText);
 
-    if (!language) {
+    // Replies follow the profile language whatever script the question uses;
+    // Hinglish is answered in Devanagari Hindi. Script is only a fallback.
+    if (language) {
+      inputLang = language.startsWith('hi') ? 'hi' : 'en';
+    } else {
+      // Hinglish patterns also hold English words ("suicide"), so they count
+      // only when no English pattern matches.
+      const englishMatch =
+        this.emergencyPatterns.en.test(normalizedText) ||
+        this.additionalEmergencyPatterns[0].test(normalizedText) ||
+        this.selfHarmPatterns.en.test(normalizedText) ||
+        this.medicationPatterns.en.test(normalizedText);
+      const hinglishMatch =
+        hiLatnEmergencyMatch ||
+        this.selfHarmPatterns.hiLatn.test(normalizedText) ||
+        this.medicationPatterns.hiLatn.test(normalizedText);
       if (
         hiEmergencyMatch ||
         this.selfHarmPatterns.hi.test(normalizedText) ||
-        this.medicationPatterns.hi.test(normalizedText)
+        this.medicationPatterns.hi.test(normalizedText) ||
+        (hinglishMatch && !englishMatch)
       ) {
         inputLang = 'hi';
-      } else if (
-        hiLatnEmergencyMatch ||
-        this.selfHarmPatterns.hiLatn.test(normalizedText) ||
-        this.medicationPatterns.hiLatn.test(normalizedText)
-      ) {
-        inputLang = 'hi-Latn';
-      }
-    } else {
-      if (
-        (inputLang === 'en' || inputLang === 'hi-Latn') &&
-        (hiEmergencyMatch ||
-          this.selfHarmPatterns.hi.test(normalizedText) ||
-          this.medicationPatterns.hi.test(normalizedText))
-      ) {
-        inputLang = 'hi';
-      } else if (
-        inputLang === 'en' &&
-        (hiLatnEmergencyMatch ||
-          this.selfHarmPatterns.hiLatn.test(normalizedText) ||
-          this.medicationPatterns.hiLatn.test(normalizedText))
-      ) {
-        const matchesEn =
-          this.emergencyPatterns.en.test(normalizedText) ||
-          this.additionalEmergencyPatterns[0].test(normalizedText) ||
-          this.selfHarmPatterns.en.test(normalizedText) ||
-          this.medicationPatterns.en.test(normalizedText);
-        if (!matchesEn) {
-          inputLang = 'hi-Latn';
-        }
       }
     }
 
@@ -124,20 +122,18 @@ export class DevelopmentSafetyGate implements ISafetyGate {
 
     // 2. EMERGENCY Rule Check
     if (
-      this.additionalEmergencyPatterns.some((pattern) => pattern.test(normalizedText)) ||
+      this.additionalEmergencyPatterns.some((pattern) =>
+        pattern.test(normalizedText),
+      ) ||
       this.emergencyPatterns.en.test(normalizedText) ||
       this.emergencyPatterns.hi.test(normalizedText) ||
-      this.emergencyPatterns.hiLatn.test(normalizedText)
+      this.emergencyPatterns.hiLatn.test(normalizedText) ||
+      emergencyKind(normalizedText) !== null
     ) {
-      let patientSafeMessage =
-        'If you are feeling very unwell, experiencing severe chest pain, or having difficulty breathing, please immediately call emergency services (112 or 108) or go to the nearest hospital right away.';
-      if (inputLang === 'hi') {
-        patientSafeMessage =
-          'यदि आपकी तबीयत ज्यादा खराब लग रही है या सीने में तेज दर्द और सांस लेने में तकलीफ है, तो कृपया तुरंत आपातकालीन नंबर (112 या 108) पर संपर्क करें या बिना किसी देरी के नजदीकी अस्पताल जाएं।';
-      } else if (inputLang === 'hi-Latn') {
-        patientSafeMessage =
-          'Yadi aapki tabiyat zyada kharab lag rahi hai ya seene mein tej dard aur saans lene mein takleef hai, toh kripya turant emergency number (112 ya 108) par contact karein ya bina kisi deri ke nazdeeki hospital jayein.';
-      }
+      const patientSafeMessage = emergencyMessage(
+        normalizedText,
+        inputLang === 'hi',
+      );
 
       return {
         status: 'ESCALATION_REQUIRED',
@@ -157,15 +153,8 @@ export class DevelopmentSafetyGate implements ISafetyGate {
       this.selfHarmPatterns.hi.test(normalizedText) ||
       this.selfHarmPatterns.hiLatn.test(normalizedText)
     ) {
-      let patientSafeMessage =
-        'If you are having thoughts of self-harm or suicide, please reach out for help immediately. Contact a mental health professional or call a support hotline.';
-      if (inputLang === 'hi') {
-        patientSafeMessage =
-          'यदि आप आत्म-नुकसान या आत्महत्या के विचार महसूस कर रहे हैं, तो कृपया तुरंत मदद लें। किसी मानसिक स्वास्थ्य पेशेवर से संपर्क करें।';
-      } else if (inputLang === 'hi-Latn') {
-        patientSafeMessage =
-          'Yadi aap self-harm ya suicide ke thoughts face kar rahe hain, toh please immediately professional help ya mental health helpline se contact karein.';
-      }
+      const patientSafeMessage =
+        inputLang === 'hi' ? SELF_HARM_MESSAGE.hi : SELF_HARM_MESSAGE.en;
 
       return {
         status: 'ESCALATION_REQUIRED',
@@ -185,15 +174,11 @@ export class DevelopmentSafetyGate implements ISafetyGate {
       this.medicationPatterns.hi.test(normalizedText) ||
       this.medicationPatterns.hiLatn.test(normalizedText)
     ) {
-      let patientSafeMessage =
-        'Unsafe medication request detected. We cannot advise on modifying dosage, stopping, or starting high-risk medications without direct clinician consultation.';
-      if (inputLang === 'hi') {
-        patientSafeMessage =
-          'असुरक्षित दवा अनुरोध का पता चला है। हम चिकित्सक के परामर्श के बिना खुराक बदलने, दवा बंद करने या शुरू करने की सलाह नहीं दे सकते।';
-      } else if (inputLang === 'hi-Latn') {
-        patientSafeMessage =
-          'Unsafe medication request detect hua hai. Hum doctor ke consult ke bina dosage change karne, dawa band karne ya start karne ki advice nahi de sakte.';
-      }
+      const hindi = inputLang === 'hi';
+      const stopAll = STOP_ALL_MEDICINES_MESSAGE[hindi ? 'hi' : 'en'];
+      const patientSafeMessage = asksToStopAllMedicines(normalizedText)
+        ? `${stopAll.summary} ${stopAll.reminders}`
+        : medicineChangeMessage(normalizedText, hindi);
 
       return {
         status: 'WITHHOLD',

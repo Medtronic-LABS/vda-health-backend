@@ -1,6 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { IntentType } from '../../ai/intents/intent.types';
 
+// "पीएमजे" is how patients shorten PM-JAY; the look-ahead keeps PMJDY (Jan Dhan) out.
+const PMJAY_PATTERN =
+  /(?:ayushman|aayushman|ab[\s-]*pm[\s-]*jay|abpmj(?:ay)?|pm[\s-]*jay|jan\s*arogya|golden\s*card|vay\s*vandana|आयुष्मान|पीएम[\s-]*जे(?:एवाई|वाई)?(?!डी)|जन\s*आरोग्य|गोल्डन\s*कार्ड|एबीपीएमजे|वय\s*वंदना)/i;
+// Hinglish "banwayein/banvana" and "card kaise bane" ask how to get the card made.
+const PMJAY_APPLICATION_PATTERN =
+  /(?:apply|application|enrol+l?|registration|register|card\s*(?:creation|ban)|\bban[wv]a|card\s+(?:kaise|kese)\s+ban|कैसे\s*(?:अप्लाई|आवेदन|बनवाएं|बनवाएँ|बनेगा)|आवेदन|पंजीकरण|कार्ड\s*(?:बन|बनवा|कैसे))/i;
+
 export interface NormalizedKnowledgeQuery {
   query: string;
   category?: string;
@@ -46,11 +53,19 @@ export class KnowledgeQueryNormalizerService {
         normalized: false,
       };
     }
-    const needsNormalization = intent === IntentType.GOVERNMENT_SCHEME_QUERY
-      || language === 'hi' || language === 'hi-Latn' || /himcare|himachal/i.test(lower);
+    const needsNormalization =
+      intent === IntentType.GOVERNMENT_SCHEME_QUERY ||
+      language === 'hi' ||
+      language === 'hi-Latn' ||
+      /himcare|himachal/i.test(lower);
 
     if (!needsNormalization && !location.state && !location.district) {
-      return { query: patientQuery, state: effectiveState, district: location.district, normalized: false };
+      return {
+        query: patientQuery,
+        state: effectiveState,
+        district: location.district,
+        normalized: false,
+      };
     }
 
     const schemeQuery = this.normalizeSchemeQuery(lower, effectiveState);
@@ -65,17 +80,14 @@ export class KnowledgeQueryNormalizerService {
         : 'PM-JAY empanelled hospital facility',
       [IntentType.LAB_RESULT_QUERY]: 'HbA1c meaning average blood sugar',
       [IntentType.MEDICATION_QUERY]: 'medicine medication information',
-      [IntentType.REFERRAL_QUERY]: 'clinical referral pathway hospital referral',
+      [IntentType.REFERRAL_QUERY]:
+        'clinical referral pathway hospital referral',
     };
 
-    const pmjayPattern =
-      /(?:ayushman|aayushman|ab[\s-]*pm[\s-]*jay|abpmj(?:ay)?|pm[\s-]*jay|jan\s*arogya|golden\s*card|आयुष्मान|पीएम[\s-]*जेएवाई|पीएमजेएवाई|जन\s*आरोग्य|गोल्डन\s*कार्ड|एबीपीएमजे)/i;
     const pmjayApplication =
       intent === IntentType.GOVERNMENT_SCHEME_QUERY &&
-      pmjayPattern.test(lower) &&
-      /(?:apply|application|enrol+l?|registration|register|card\s*(?:creation|ban)|कैसे\s*(?:अप्लाई|आवेदन|बनवाएं|बनेगा)|आवेदन|पंजीकरण|कार्ड\s*(?:बन|बनवा|कैसे))/i.test(
-        lower,
-      );
+      PMJAY_PATTERN.test(lower) &&
+      PMJAY_APPLICATION_PATTERN.test(lower);
 
     return {
       query: byIntent[intent] || patientQuery,
@@ -87,7 +99,9 @@ export class KnowledgeQueryNormalizerService {
     };
   }
 
-  private extractLocation(lower: string): Pick<NormalizedKnowledgeQuery, 'district' | 'state'> {
+  private extractLocation(
+    lower: string,
+  ): Pick<NormalizedKnowledgeQuery, 'district' | 'state'> {
     let district: string | undefined;
     let state: string | undefined;
 
@@ -165,20 +179,16 @@ export class KnowledgeQueryNormalizerService {
       return 'HIMCARE benefits coverage eligibility enrollment';
     }
 
-    if (/\b(?:pmbjp|jan\s*aushadhi|janaushadhi)\b|जन\s*औषधि|पीएमबीजेपी/i.test(lower)) {
-      return 'Pradhan Mantri Bhartiya Janaushadhi Pariyojana PMBJP generic medicines Jan Aushadhi Kendra benefits';
-    }
-
     if (
-      /(?:ayushman|aayushman|ab[\s-]*pm[\s-]*jay|abpmj(?:ay)?|pm[\s-]*jay|jan\s*arogya|golden\s*card|आयुष्मान|पीएम[\s-]*जेएवाई|पीएमजेएवाई|जन\s*आरोग्य|गोल्डन\s*कार्ड|एबीपीएमजे)/i.test(
+      /\b(?:pmbjp|jan\s*aushadhi|janaushadhi)\b|जन\s*औषधि|पीएमबीजेपी/i.test(
         lower,
       )
     ) {
-      if (
-        /(?:apply|application|enrol+l?|registration|register|card\s*(?:creation|ban)|कैसे\s*(?:अप्लाई|आवेदन|बनवाएं|बनवाएँ|बनेगा)|आवेदन|पंजीकरण|कार्ड\s*(?:बन|बनवा|कैसे))/i.test(
-          lower,
-        )
-      ) {
+      return 'Pradhan Mantri Bhartiya Janaushadhi Pariyojana PMBJP generic medicines Jan Aushadhi Kendra benefits';
+    }
+
+    if (PMJAY_PATTERN.test(lower)) {
+      if (PMJAY_APPLICATION_PATTERN.test(lower)) {
         return 'AB PM-JAY Beneficiary Identification System BIS eligibility database Ayushman card Common Service Centre CSC PMAM';
       }
       if (
@@ -200,7 +210,11 @@ export class KnowledgeQueryNormalizerService {
     // A surgery/hospitalisation question needs coverage evidence rather than a
     // broad scheme inventory. This remains retrieval-only: the generated answer
     // must still be supported by the returned governed sources.
-    if (/(?:operation|surgery|hospitali[sz](?:ation|ed)|admit|admission|ऑपरेशन|सर्जरी|अस्पताल\s*में\s*भर्ती)/i.test(lower)) {
+    if (
+      /(?:operation|surgery|hospitali[sz](?:ation|ed)|admit|admission|ऑपरेशन|सर्जरी|अस्पताल\s*में\s*भर्ती)/i.test(
+        lower,
+      )
+    ) {
       return 'Ayushman Bharat PM-JAY government health scheme surgery hospitalization coverage eligibility';
     }
 

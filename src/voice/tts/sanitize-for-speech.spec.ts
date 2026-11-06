@@ -31,6 +31,6 @@ describe('sanitizeForSpeech', () => {
     expect(spoken).not.toContain('EHCP');
     expect(spoken).not.toContain('AB PM-JAY');
     expect(spoken).not.toContain('Eligibility');
-    expect(spoken).toContain('सूचीबद्ध अस्पताल');
+    expect(spoken).toContain('योजना से जुड़े अस्पताल');
   });
 });

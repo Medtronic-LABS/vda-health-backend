@@ -11,6 +11,7 @@ describe('FacilitySearchService IPHS ranking', () => {
     id: string,
     name: string,
     emergencyAvailable: boolean | null,
+    hospitalType?: string,
   ): Facility =>
     ({
       id,
@@ -20,6 +21,7 @@ describe('FacilitySearchService IPHS ranking', () => {
       state: 'HARYANA',
       district: 'TEST',
       emergencyAvailable,
+      hospitalType,
       active: true,
     }) as Facility;
 
@@ -52,7 +54,9 @@ describe('FacilitySearchService IPHS ranking', () => {
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       innerJoin: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
       take: jest.fn().mockReturnThis(),
       getMany: jest.fn().mockResolvedValue(rows),
     };
@@ -119,6 +123,79 @@ describe('FacilitySearchService IPHS ranking', () => {
     expect(results.map((result) => result.facility.id)).toEqual(['B', 'A']);
   });
 
+  it('lists government hospitals before private ones, whatever their names', async () => {
+    const service = createService(
+      [
+        facility('A', 'ARSH HOSPITAL', null, 'PRIVATE'),
+        facility('B', 'B K Civil Hospital', null, 'PUBLIC'),
+        facility('C', 'Apollo', null, 'Private(For Profit)'),
+        facility('D', 'Central Govt Dispensary', null, 'GOI'),
+      ],
+      [],
+    );
+
+    const results = await service.searchWithSchemes(tenantId, {
+      state: 'HARYANA',
+    });
+
+    expect(results.map((result) => result.facility.id)).toEqual([
+      'B',
+      'D',
+      'C',
+      'A',
+    ]);
+  });
+
+  it('orders government first in the database query, before the result limit', async () => {
+    const query = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+    const service = new FacilitySearchService(
+      {
+        createQueryBuilder: jest.fn().mockReturnValue(query),
+      } as unknown as Repository<Facility>,
+      {} as Repository<FacilityIphsOverlay>,
+      {} as Repository<FacilityScheme>,
+    );
+
+    await service.search(tenantId, { state: 'HARYANA', limit: 3 });
+
+    expect(query.addSelect).toHaveBeenCalledWith(
+      expect.stringMatching(/^CASE WHEN .*public.* THEN 0 ELSE 1 END$/),
+      'government_rank',
+    );
+    // A selected alias, not an expression: take() with joins rejects expressions.
+    expect(query.orderBy).toHaveBeenCalledWith('government_rank', 'ASC');
+    expect(query.addOrderBy).toHaveBeenCalledWith('facility.name', 'ASC');
+    expect(query.orderBy.mock.invocationCallOrder[0]).toBeLessThan(
+      query.take.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('keeps an emergency-capable private hospital above a government one of unknown capability', async () => {
+    const privateCapable = facility(
+      'A',
+      'Private Trauma Centre',
+      true,
+      'PRIVATE',
+    );
+    const governmentUnknown = facility('B', 'Civil Hospital', null, 'PUBLIC');
+    const service = createService([governmentUnknown, privateCapable], []);
+
+    const results = await service.searchWithSchemes(tenantId, {
+      state: 'HARYANA',
+      emergency: true,
+    });
+
+    expect(results.map((result) => result.facility.id)).toEqual(['A', 'B']);
+  });
+
   it('keeps generic facility search unchanged without attaching demo capabilities', async () => {
     const hospital = facility('A', 'CHC KHERI KALAN', null);
     const service = createService([hospital], []);
@@ -161,7 +238,9 @@ describe('FacilitySearchService IPHS ranking', () => {
       andWhere: jest.fn().mockReturnThis(),
       leftJoin: jest.fn().mockReturnThis(),
       distinct: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
       take: jest.fn().mockReturnThis(),
       getMany: jest.fn().mockResolvedValue([hospital]),
     };
@@ -207,7 +286,9 @@ describe('FacilitySearchService IPHS ranking', () => {
       andWhere: jest.fn().mockReturnThis(),
       leftJoin: jest.fn().mockReturnThis(),
       distinct: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
       take: jest.fn().mockReturnThis(),
       getMany: jest.fn().mockResolvedValue([hospital]),
     };

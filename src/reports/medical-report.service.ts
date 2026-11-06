@@ -638,13 +638,13 @@ export class MedicalReportService {
             : facts.tests.some((test) => this.rangePosition(test))
               ? hindi ? 'तुलना किए गए नतीजे छपी सीमा के भीतर हैं, लेकिन कुछ सीमाएँ छूट सकती हैं। चिंता या लक्षण हों तो डॉक्टर को रिपोर्ट दिखाएँ।'
                 : 'Compared results are within their printed ranges, but some ranges may be missing. If you have symptoms or concerns, show the report to a clinician.'
-              : hindi ? 'लैब की छपी सीमाएँ साफ़ नहीं पढ़ी गईं, इसलिए तुलना नहीं कर सकता। असली रिपोर्ट डॉक्टर को दिखाएँ।'
+              : hindi ? 'लैब की छपी सीमाएँ साफ़ नहीं पढ़ी गईं, इसलिए मैं तुलना नहीं कर सकती। असली रिपोर्ट डॉक्टर को दिखाएँ।'
                 : 'The printed ranges were not read clearly, so I cannot compare results. Show the original report to a clinician.';
         }
       }
     }
     let summary = unsupported
-      ? (hindi ? 'मैं इस रिपोर्ट से बीमारी या इलाज तय नहीं कर सकता। कृपया डॉक्टर से बात करें।'
+      ? (hindi ? 'मैं इस रिपोर्ट से बीमारी या इलाज तय नहीं कर सकती। कृपया डॉक्टर से बात करें।'
         : 'I cannot diagnose or decide treatment from this report. Please speak to a clinician.')
       : report.extractionStatus === 'EXTRACTED' && !this.isVerifiedReport(report)
         ? (hindi ? 'इस पुरानी रिपोर्ट के नतीजों का स्रोत सत्यापित नहीं है। असली रिपोर्ट देखें।'

@@ -2,6 +2,30 @@ import { Injectable } from '@nestjs/common';
 import { ClinicalContext } from '../../abdm/models/clinical-context.models';
 import { TerminologyResolverService } from '../../knowledge/services/terminology-resolver.service';
 
+/**
+ * Clinical review: replies follow the profile language unless the patient
+ * explicitly asks for one ("सिंपल हिंदी में समझाओ", "tell me in English").
+ */
+export function explicitlyRequestedLanguage(
+  text: string | undefined,
+): 'hi' | 'en' | null {
+  if (!text) return null;
+  const input = text.normalize('NFD').replace(/़/gu, '').toLowerCase();
+  if (
+    /\bin\s+(?:simple\s+|easy\s+|plain\s+)?hindi\b|\bhindi\s+(?:me|mein|main)\b|हिंदी\s*में|हिन्दी\s*में/u.test(
+      input,
+    )
+  )
+    return 'hi';
+  if (
+    /\bin\s+(?:simple\s+|easy\s+|plain\s+)?english\b|\benglish\s+(?:me|mein|main)\b|अंग्रेजी\s*में|इंग्लिश\s*में/u.test(
+      input,
+    )
+  )
+    return 'en';
+  return null;
+}
+
 export interface FormattedPatientResponse {
   response_type: string;
   content: Record<string, unknown>;
@@ -19,6 +43,49 @@ export interface PatientResponseContent {
   actions?: Array<{ label: string; action: string }>;
 }
 
+// Common Hindi words written in Latin script; their presence means a Hinglish question.
+const HINGLISH_WORDS = new Set([
+  'hai',
+  'hain',
+  'kya',
+  'kaise',
+  'kaisa',
+  'kyun',
+  'kyon',
+  'mujhe',
+  'meri',
+  'mera',
+  'mere',
+  'mein',
+  'nahi',
+  'nahin',
+  'kab',
+  'kahan',
+  'kaha',
+  'karna',
+  'karu',
+  'karun',
+  'karein',
+  'chahiye',
+  'batao',
+  'samjhao',
+  'dawai',
+  'dawa',
+  'ka',
+  'ki',
+  'ke',
+  'ko',
+  'aur',
+  'bhi',
+  'tha',
+  'thi',
+  'hota',
+  'hoti',
+  'liye',
+  'wala',
+  'wali',
+]);
+
 @Injectable()
 export class ConversationResponseFormatter {
   private readonly terminologyResolver = new TerminologyResolverService();
@@ -26,8 +93,11 @@ export class ConversationResponseFormatter {
   patientFacingText(content: PatientResponseContent): string {
     const parts = [content.summary];
     for (const section of content.sections || []) {
-      const sectionParts = [section.title, section.body, ...(section.bullets || []).map((bullet) => `• ${bullet}`)]
-        .filter((value): value is string => Boolean(value?.trim()));
+      const sectionParts = [
+        section.title,
+        section.body,
+        ...(section.bullets || []).map((bullet) => `• ${bullet}`),
+      ].filter((value): value is string => Boolean(value?.trim()));
       if (sectionParts.length) parts.push(sectionParts.join('\n'));
     }
     const responseTextBeforeCards = this.normalizedText(parts.join('\n\n'));
@@ -37,60 +107,91 @@ export class ConversationResponseFormatter {
       // data. Do not flatten them into patient_text when the same medicine is
       // already explained in the summary or sections, otherwise patients hear
       // and see the medication details twice.
-      if (this.isMedicationCardAlreadyExplained(card, medicationNames, responseTextBeforeCards)) {
+      if (
+        this.isMedicationCardAlreadyExplained(
+          card,
+          medicationNames,
+          responseTextBeforeCards,
+        )
+      ) {
         continue;
       }
-      const cardParts = [card.title, card.value, card.subtitle]
-        .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+      const cardParts = [card.title, card.value, card.subtitle].filter(
+        (value): value is string =>
+          typeof value === 'string' && Boolean(value.trim()),
+      );
       if (cardParts.length) parts.push(cardParts.join(': '));
     }
     return parts.join('\n\n');
   }
 
-  normalizeGeneratedContent(
-    generated: unknown,
-  ): PatientResponseContent | null {
+  normalizeGeneratedContent(generated: unknown): PatientResponseContent | null {
     if (!generated || typeof generated !== 'object') return null;
     const candidate = generated as Record<string, unknown>;
-    const rawSummary = typeof candidate.summary === 'string' ? candidate.summary.trim() : '';
-    const summary = this.terminologyResolver.sanitizeBureaucraticTerms(rawSummary);
+    const rawSummary =
+      typeof candidate.summary === 'string' ? candidate.summary.trim() : '';
+    const summary =
+      this.terminologyResolver.sanitizeBureaucraticTerms(rawSummary);
     // A normal patient reply must be concise, but the SafetyGate owns emergency output.
-    if (!summary || this.wordCount(summary) > 120 || this.containsInternalRetrievalMaterial(summary)) return null;
-
-    const rawSpoken = typeof candidate.spoken_summary === 'string' ? candidate.spoken_summary.trim() : '';
-    const cleanedSpoken = rawSpoken
-      ? this.terminologyResolver.sanitizeBureaucraticTerms(rawSpoken)
-      : undefined;
-    const spoken_summary =
-      cleanedSpoken &&
-      this.wordCount(cleanedSpoken) <= 130 &&
-      !this.containsInternalRetrievalMaterial(cleanedSpoken)
-        ? cleanedSpoken
-        : undefined;
+    if (
+      !summary ||
+      this.wordCount(summary) > 120 ||
+      this.containsInternalRetrievalMaterial(summary)
+    )
+      return null;
 
     const sections = Array.isArray(candidate.sections)
       ? candidate.sections
-          .filter((s): s is Record<string, unknown> => !!s && typeof s === 'object')
+          .filter(
+            (s): s is Record<string, unknown> => !!s && typeof s === 'object',
+          )
           .slice(0, 3)
           .map((s) => ({
             title: this.safePatientText(s.title),
             body: this.safePatientText(s.body),
             bullets: Array.isArray(s.bullets)
-              ? s.bullets.map((b) => this.safePatientText(b)).filter((b): b is string => Boolean(b)).slice(0, 4)
+              ? s.bullets
+                  .map((b) => this.safePatientText(b))
+                  .filter((b): b is string => Boolean(b))
+                  .slice(0, 3)
               : undefined,
           }))
           .map((section) => ({
-            title: section.title && this.normalizedText(section.title) !== this.normalizedText(summary) ? section.title : undefined,
-            body: section.body && this.normalizedText(section.body) !== this.normalizedText(summary) ? section.body : undefined,
-            bullets: section.bullets?.filter((bullet, index, bullets) =>
-              this.normalizedText(bullet) !== this.normalizedText(summary)
-              && bullets.findIndex((item) => this.normalizedText(item) === this.normalizedText(bullet)) === index),
+            title:
+              section.title &&
+              this.normalizedText(section.title) !==
+                this.normalizedText(summary)
+                ? section.title
+                : undefined,
+            body:
+              section.body &&
+              this.normalizedText(section.body) !== this.normalizedText(summary)
+                ? section.body
+                : undefined,
+            bullets: section.bullets?.filter(
+              (bullet, index, bullets) =>
+                this.normalizedText(bullet) !== this.normalizedText(summary) &&
+                bullets.findIndex(
+                  (item) =>
+                    this.normalizedText(item) === this.normalizedText(bullet),
+                ) === index,
+            ),
           }))
-          .filter((section) => Boolean(section.title || section.body || section.bullets?.length))
+          .filter((section) =>
+            Boolean(section.title || section.body || section.bullets?.length),
+          )
       : undefined;
+    // Short answers: at most three points in total, since the voice reads them all.
+    let pointsLeft = 3;
+    for (const section of sections || []) {
+      section.bullets = section.bullets?.slice(0, Math.max(0, pointsLeft));
+      pointsLeft -= section.bullets?.length || 0;
+    }
     const cards = Array.isArray(candidate.cards)
       ? candidate.cards
-          .filter((c): c is Record<string, unknown> => !!c && typeof c === 'object')
+          .filter(
+            (c): c is Record<string, unknown> => !!c && typeof c === 'object',
+          )
           .slice(0, 5)
           .map((c) => ({
             title: this.safePatientText(c.title),
@@ -100,29 +201,117 @@ export class ConversationResponseFormatter {
       : undefined;
     const actions = Array.isArray(candidate.actions)
       ? candidate.actions
-          .filter((a): a is Record<string, unknown> => !!a && typeof a === 'object' && typeof a.label === 'string' && typeof a.action === 'string')
+          .filter(
+            (a): a is Record<string, unknown> =>
+              !!a &&
+              typeof a === 'object' &&
+              typeof a.label === 'string' &&
+              typeof a.action === 'string',
+          )
           .slice(0, 2)
-          .map((a) => ({ label: this.safePatientText(a.label) || '', action: this.safePatientText(a.action) || '' }))
+          .map((a) => ({
+            label: this.safePatientText(a.label) || '',
+            action: this.safePatientText(a.action) || '',
+          }))
           .filter((a) => Boolean(a.label && a.action))
       : undefined;
 
     return {
       summary,
-      ...(spoken_summary ? { spoken_summary } : {}),
       sections,
       cards,
       actions,
     };
   }
 
+  /**
+   * The voice reads what the screen shows, minus headings, bracketed glosses,
+   * links and symbols, so a patient can read and listen at the same time.
+   * Card subtitles (phone numbers, labels) stay on screen only.
+   */
+  spokenText(content: PatientResponseContent): string {
+    const medicationNames = this.medicationNames(content.medications);
+    const shown = this.normalizedText(
+      this.patientFacingText({ ...content, cards: [] }),
+    );
+    const parts = [content.summary];
+    for (const section of content.sections || [])
+      parts.push(section.body || '', ...(section.bullets || []));
+    for (const card of content.cards || []) {
+      if (this.isMedicationCardAlreadyExplained(card, medicationNames, shown))
+        continue;
+      parts.push(
+        [card.title, card.value]
+          .filter((value) => typeof value === 'string' && value.trim())
+          .join(', '),
+      );
+    }
+    return parts
+      .map((part) =>
+        (part || '')
+          .replace(/\s*[([][^)\]]*[)\]]/gu, '')
+          .replace(/https?:\/\/\S+/gu, '')
+          .replace(/[•*#_]+/gu, ' ')
+          .replace(/\s+/gu, ' ')
+          .trim(),
+      )
+      .filter(Boolean)
+      .map((part) =>
+        /[.!?।:]$/u.test(part)
+          ? part
+          : `${part}${/[ऀ-ॿ]/u.test(part) ? '।' : '.'}`,
+      )
+      .join(' ');
+  }
+
+  /** Replies stay in the profile language; a question in the other language gets an offer to switch. */
+  private languageSwitchNote(
+    profileLanguage: string | undefined,
+    inputText: string | undefined,
+  ): string | null {
+    const asked = this.inputLanguage(inputText);
+    if (!asked || !profileLanguage) return null;
+    // The answer is already in the language the patient asked for.
+    if (explicitlyRequestedLanguage(inputText)) return null;
+    if (profileLanguage.startsWith('hi') && asked === 'en') {
+      return 'आप चाहें तो प्रोफ़ाइल में भाषा बदलकर अंग्रेज़ी में जवाब पा सकते हैं।';
+    }
+    if (profileLanguage.startsWith('en') && asked === 'hi') {
+      return 'You can change the language to Hindi in your Profile to get answers in Hindi.';
+    }
+    return null;
+  }
+
+  private inputLanguage(text: string | undefined): 'hi' | 'en' | null {
+    if (!text?.trim()) return null;
+    if (/[ऀ-ॿ]/u.test(text)) return 'hi';
+    const words = text.toLowerCase().match(/[a-z]+/g) || [];
+    if (words.some((word) => HINGLISH_WORDS.has(word))) return 'hi';
+    return words.length >= 3 ? 'en' : null;
+  }
+
   /** Enforces semantic response completeness, not question-specific templates. */
-  meetsResponseRequirements(content: PatientResponseContent, requirements: string[]): boolean {
+  meetsResponseRequirements(
+    content: PatientResponseContent,
+    requirements: string[],
+  ): boolean {
     if (requirements.includes('GROUNDED_GUIDANCE')) {
-      const bulletCount = (content.sections || []).reduce((count, section) => count + (section.bullets?.length || 0), 0);
+      const bulletCount = (content.sections || []).reduce(
+        (count, section) => count + (section.bullets?.length || 0),
+        0,
+      );
       if (bulletCount < 2) return false;
     }
-    if (requirements.includes('ALL_RECORD_ITEMS') && !(content.cards?.length || content.sections?.length)) return false;
-    if (requirements.includes('CARE_PLAN_ITEMS') && !(content.sections?.length || content.cards?.length)) return false;
+    if (
+      requirements.includes('ALL_RECORD_ITEMS') &&
+      !(content.cards?.length || content.sections?.length)
+    )
+      return false;
+    if (
+      requirements.includes('CARE_PLAN_ITEMS') &&
+      !(content.sections?.length || content.cards?.length)
+    )
+      return false;
     return true;
   }
 
@@ -130,11 +319,16 @@ export class ConversationResponseFormatter {
     return text.trim().split(/\s+/).filter(Boolean).length;
   }
 
-  private medicationNames(medications: PatientResponseContent['medications']): string[] {
+  private medicationNames(
+    medications: PatientResponseContent['medications'],
+  ): string[] {
     if (!Array.isArray(medications)) return [];
     return medications
       .flatMap((medication) => [medication.name, medication.medicationName])
-      .filter((name): name is string => typeof name === 'string' && Boolean(name.trim()))
+      .filter(
+        (name): name is string =>
+          typeof name === 'string' && Boolean(name.trim()),
+      )
       .map((name) => this.normalizedText(name));
   }
 
@@ -143,7 +337,8 @@ export class ConversationResponseFormatter {
     medicationNames: string[],
     responseTextBeforeCards: string,
   ): boolean {
-    const title = typeof card.title === 'string' ? this.normalizedText(card.title) : '';
+    const title =
+      typeof card.title === 'string' ? this.normalizedText(card.title) : '';
     if (!title || !medicationNames.includes(title)) return false;
     return responseTextBeforeCards.includes(title);
   }
@@ -153,15 +348,23 @@ export class ConversationResponseFormatter {
   }
 
   private containsInternalRetrievalMaterial(text: string): boolean {
-    return /(?:^|\n)\s*(?:title|source|domain|content)\s*:/i.test(text)
-      || /\b[\w.-]+\.(?:pdf|docx|txt|md|csv)\b/i.test(text)
-      || /\[(?:knowledge source|authorized knowledge source|deterministic scheme facts)\]/i.test(text);
+    return (
+      /(?:^|\n)\s*(?:title|source|domain|content)\s*:/i.test(text) ||
+      /\b[\w.-]+\.(?:pdf|docx|txt|md|csv)\b/i.test(text) ||
+      /\[(?:knowledge source|authorized knowledge source|deterministic scheme facts)\]/i.test(
+        text,
+      )
+    );
   }
 
   private safePatientText(value: unknown): string | undefined {
     if (typeof value !== 'string') return undefined;
-    const text = this.terminologyResolver.sanitizeBureaucraticTerms(value.trim());
-    return text && !this.containsInternalRetrievalMaterial(text) ? text : undefined;
+    const text = this.terminologyResolver.sanitizeBureaucraticTerms(
+      value.trim(),
+    );
+    return text && !this.containsInternalRetrievalMaterial(text)
+      ? text
+      : undefined;
   }
 
   /**
@@ -190,10 +393,20 @@ export class ConversationResponseFormatter {
     // Retrieval provenance stays in audit/evaluation services. The patient API
     // exposes only the standardized patient response and allowed UI structures.
     for (const internalField of [
-      'knowledge_sources', 'scheme_results', 'matchedChunks', 'matched_chunks',
-      'retrievalTrace', 'retrieval_trace', 'formattedKnowledgePrompt',
-      'raw_content', 'rawContent', 'metadata', 'sources', 'documentId',
-      'sourceDocumentId', 'embedding',
+      'knowledge_sources',
+      'scheme_results',
+      'matchedChunks',
+      'matched_chunks',
+      'retrievalTrace',
+      'retrieval_trace',
+      'formattedKnowledgePrompt',
+      'raw_content',
+      'rawContent',
+      'metadata',
+      'sources',
+      'documentId',
+      'sourceDocumentId',
+      'embedding',
     ]) {
       delete formattedContent[internalField];
     }
@@ -217,13 +430,14 @@ export class ConversationResponseFormatter {
         );
         // Medication cards are derived only from authorized ClinicalContext,
         // never from Gemini's optional cards.
-        formattedContent['cards'] = clinicalContext.medications.slice(0, 5).map(
-          (m) => ({
+        formattedContent['cards'] = clinicalContext.medications
+          .slice(0, 5)
+          .map((m) => ({
             title: m.medicationName,
             value: m.dosage || undefined,
-            subtitle: [m.frequency, m.route].filter(Boolean).join(' · ') || undefined,
-          }),
-        );
+            subtitle:
+              [m.frequency, m.route].filter(Boolean).join(' · ') || undefined,
+          }));
       }
 
       if (
@@ -236,23 +450,27 @@ export class ConversationResponseFormatter {
         // The semantic classifier selects the record category. This shared
         // formatter never routes individual lab questions by keyword rules.
         const requestedLabs = clinicalContext.labResults;
-        formattedContent['lab_results'] = requestedLabs.slice(0, 3).map(
-          (l) => ({
+        formattedContent['lab_results'] = requestedLabs
+          .slice(0, 3)
+          .map((l) => ({
             test_name: l.testName,
             value: l.value,
             unit: l.unit,
             reference_range: l.referenceRange,
             observation_date: l.observationDate,
-            interpretation: l.interpretationProvenance === 'GOVERNED' ? l.interpretation : null,
-          }),
-        );
+            interpretation:
+              l.interpretationProvenance === 'GOVERNED'
+                ? l.interpretation
+                : null,
+          }));
         // Lab cards are likewise derived only from authorized ClinicalContext.
         formattedContent['cards'] = requestedLabs.slice(0, 3).map((l) => ({
           title: l.testName,
           value: [l.value, l.unit].filter(Boolean).join(' '),
-          subtitle: l.interpretationProvenance === 'GOVERNED'
-            ? l.interpretation || l.referenceRange || undefined
-            : l.referenceRange || undefined,
+          subtitle:
+            l.interpretationProvenance === 'GOVERNED'
+              ? l.interpretation || l.referenceRange || undefined
+              : l.referenceRange || undefined,
         }));
       }
 
@@ -288,16 +506,36 @@ export class ConversationResponseFormatter {
     // patient cards instead of relying on Gemini's summary to repeat them.
     if (intent === 'PRESCRIPTION_QUERY') {
       const prescription = content['prescription'];
-      const medicines = prescription && typeof prescription === 'object'
-        ? (prescription as Record<string, unknown>)['medications']
-        : undefined;
+      const medicines =
+        prescription && typeof prescription === 'object'
+          ? (prescription as Record<string, unknown>)['medications']
+          : undefined;
       if (Array.isArray(medicines)) {
-        formattedContent['cards'] = medicines.slice(0, 12)
-          .filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+        formattedContent['cards'] = medicines
+          .slice(0, 12)
+          .filter(
+            (item): item is Record<string, unknown> =>
+              !!item && typeof item === 'object',
+          )
           .map((item) => ({
-            title: typeof item['medicationName'] === 'string' ? item['medicationName'] : typeof item['name'] === 'string' ? item['name'] : undefined,
-            value: typeof item['dosage'] === 'string' ? item['dosage'] : typeof item['strength'] === 'string' ? item['strength'] : undefined,
-            subtitle: typeof item['frequency'] === 'string' ? item['frequency'] : typeof item['instructions'] === 'string' ? item['instructions'] : undefined,
+            title:
+              typeof item['medicationName'] === 'string'
+                ? item['medicationName']
+                : typeof item['name'] === 'string'
+                  ? item['name']
+                  : undefined,
+            value:
+              typeof item['dosage'] === 'string'
+                ? item['dosage']
+                : typeof item['strength'] === 'string'
+                  ? item['strength']
+                  : undefined,
+            subtitle:
+              typeof item['frequency'] === 'string'
+                ? item['frequency']
+                : typeof item['instructions'] === 'string'
+                  ? item['instructions']
+                  : undefined,
           }));
       }
     }
@@ -327,23 +565,38 @@ export class ConversationResponseFormatter {
     // Generate canonical plain text after ClinicalContext cards have been
     // attached, so TTS/history consumers receive the same authorized details
     // that the visual patient UI renders.
-    const summary = typeof formattedContent['summary'] === 'string'
-      ? formattedContent['summary']
-      : undefined;
+    const summary =
+      typeof formattedContent['summary'] === 'string'
+        ? formattedContent['summary']
+        : undefined;
     if (summary) {
       formattedContent['summary'] = summary;
+      // In the summary, not as a section: the app drops card lists (facilities)
+      // from the screen when a reply has sections.
+      const note = this.languageSwitchNote(options.language, options.inputText);
+      // Replies pass through this formatter twice; add the note only once.
+      if (note && !summary.includes(note))
+        formattedContent['summary'] = `${summary}\n\n${note}`;
       const structured = formattedContent as unknown as PatientResponseContent;
       formattedContent['patient_text'] = this.patientFacingText(structured);
-      formattedContent[options.language || 'en'] = formattedContent['patient_text'];
+      formattedContent['spoken_summary'] = this.spokenText(structured);
+      formattedContent[options.language || 'en'] =
+        formattedContent['patient_text'];
     }
 
     // A missing translation remains missing. The client can show the original
     // language explicitly, rather than presenting Hindi under the English key.
     const hiText = formattedContent['hi'];
     const enText = formattedContent['en'];
-    if (typeof enText === 'string' && /[\u0900-\u097f]/u.test(enText)) delete formattedContent['en'];
-    if (typeof hiText === 'string' && /[\u0900-\u097f]/u.test(hiText) === false
-      && typeof enText === 'string' && hiText === enText) delete formattedContent['hi'];
+    if (typeof enText === 'string' && /[\u0900-\u097f]/u.test(enText))
+      delete formattedContent['en'];
+    if (
+      typeof hiText === 'string' &&
+      /[\u0900-\u097f]/u.test(hiText) === false &&
+      typeof enText === 'string' &&
+      hiText === enText
+    )
+      delete formattedContent['hi'];
 
     return {
       response_type: responseType,

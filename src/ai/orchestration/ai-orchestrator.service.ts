@@ -24,7 +24,10 @@ import { AuditService } from '../../audit/audit.service';
 import { ClinicalContext } from '../../abdm/models/clinical-context.models';
 import { HealthRecordCategory } from '../../abdm/interfaces/health-record-service.interface';
 import { ConversationHistoryService } from '../../conversations/services/conversation-history.service';
-import { ConversationResponseFormatter } from '../../conversations/formatters/conversation-response.formatter';
+import {
+  ConversationResponseFormatter,
+  explicitlyRequestedLanguage,
+} from '../../conversations/formatters/conversation-response.formatter';
 import {
   KnowledgeRetrievalService,
   iphsServiceTermPattern,
@@ -77,6 +80,21 @@ import {
   SanitizedPrescriptionMedicine,
   SanitizedPrescriptionSessionContext,
 } from '../../prescription-context/prescription-session-context.service';
+import {
+  asksToStopAllMedicines,
+  emergencyMessage,
+  MEDICINE_DOSE_MESSAGE,
+  medicineChangeMessage,
+  SIDE_EFFECT_MESSAGE,
+  STILL_HIGH_ON_MEDICINES_MESSAGE,
+  STOP_ALL_MEDICINES_MESSAGE,
+} from '../../safety/standard-messages';
+import {
+  approvedAnswerTopic,
+  APPROVED_ANSWERS,
+  bmiAnswer,
+  FARIDABAD_DIALYSIS,
+} from './approved-answers';
 
 type VerifiedIphsLevel = Exclude<IphsLevel, 'UNKNOWN'>;
 type IphsEvidenceStatus = 'VERIFIED' | 'NOT_VERIFIED' | 'UNAVAILABLE';
@@ -89,7 +107,8 @@ const IPHS_SERVICE_SEARCH_TERMS: Array<{
 }> = [
   {
     service: /^(?:ultrasound|usg|sonography)$/i,
-    query: 'IPHS 2022 Ultrasound USG sonography diagnostic facility Community Health Centre District Hospital',
+    query:
+      'IPHS 2022 Ultrasound USG sonography diagnostic facility Community Health Centre District Hospital',
     evidenceTerms: ['Ultrasound', 'USG', 'sonography'],
   },
   {
@@ -110,7 +129,11 @@ const IPHS_SERVICE_SEARCH_TERMS: Array<{
   {
     service: /^hba1c$/i,
     query: 'HbA1c glycosylated haemoglobin',
-    evidenceTerms: ['HbA1c', 'glycosylated haemoglobin', 'glycosylated hemoglobin'],
+    evidenceTerms: [
+      'HbA1c',
+      'glycosylated haemoglobin',
+      'glycosylated hemoglobin',
+    ],
   },
   {
     service: /^blood glucose$/i,
@@ -135,28 +158,315 @@ interface FacilityServiceContext {
 
 type PrescriptionContextResolution =
   | { kind: 'MEDICINE_LIST' }
-  | { kind: 'ADHERENCE_STATUS'; question: 'PENDING' | 'MISSED' | 'STREAK' | 'CORRECTION' }
+  | {
+      kind: 'ADHERENCE_STATUS';
+      question: 'PENDING' | 'MISSED' | 'STREAK' | 'CORRECTION';
+    }
   | { kind: 'REFILL_SUPPORT' }
   | { kind: 'PRESCRIPTION_STATUS' }
   | { kind: 'MEDICINE_FACT'; medicine: SanitizedPrescriptionMedicine }
   | { kind: 'REMINDER_FACT'; medicine?: SanitizedPrescriptionMedicine }
-  | { kind: 'CLINICAL_MEDICATION_DECISION' }
+  | { kind: 'CLINICAL_MEDICATION_DECISION'; decision: MedicationDecision }
   | { kind: 'INVESTIGATION_LIST' }
-  | { kind: 'MEDICINE_EDUCATION'; medicine: SanitizedPrescriptionMedicine; question: string }
-  | { kind: 'INVESTIGATION_EDUCATION'; investigation: SanitizedPrescriptionInvestigation; question: string }
-  | { kind: 'MEDICINE_FOR_BP'; medicines: SanitizedPrescriptionMedicine[]; question: string };
+  | {
+      kind: 'MEDICINE_EDUCATION';
+      medicine: SanitizedPrescriptionMedicine;
+      question: string;
+    }
+  | {
+      kind: 'INVESTIGATION_EDUCATION';
+      investigation: SanitizedPrescriptionInvestigation;
+      question: string;
+    }
+  | {
+      kind: 'MEDICINE_FOR_BP';
+      medicines: SanitizedPrescriptionMedicine[];
+      question: string;
+    };
 
 /** Narrow education route; the orchestrator applies it only after safety and identity checks. */
-export function basicEducationTopic(inputText: string, patientAge: number | null | undefined): 'FEVER' | 'HBA1C' | null {
-  if (inputText.length > 75 || /\b(?:report|result|value|reading|dose|medicine|tablet|pill|prescription)\b|रिपोर्ट|नतीजा|मान|खुराक|दवा|गोली|पर्ची/u.test(inputText)
-    || /\d/u.test(inputText.replace(/\b(?:hba1c|a1c)\b/giu, ''))) return null;
-  if (Number(patientAge) >= 18 && /\b(?:fever|bukhar)\b|बुखार/u.test(inputText)
-    && !/\b(?:headache|cough|vomit|rash|pain|breath|pregnan|child)\b|सिरदर्द|सिर\s*दर्द|खांसी|खाँसी|उल्टी|दर्द|सांस|साँस|गर्भ/u.test(inputText)
-    && /\b(?:what should i do|what can i do|self care|kya karu|kya karun)\b|क्या\s*(?:करूं|करूँ|करना|करें)/iu.test(inputText)) return 'FEVER';
-  if (/\b(?:hba1c|a1c)\b|एच\s*बी\s*ए\s*वन\s*सी/iu.test(inputText)
-    && !/\b(?:my|mine|meri|mera|mujhe|i have)\b|मेरी|मेरा|मुझे/u.test(inputText)
-    && /\b(?:what|mean|meaning|explain|kya|hota|hai)\b|क्या|होता|समझा/u.test(inputText)) return 'HBA1C';
+export function basicEducationTopic(
+  inputText: string,
+  patientAge: number | null | undefined,
+): 'FEVER' | 'HBA1C' | null {
+  if (
+    inputText.length > 75 ||
+    /\b(?:report|result|value|reading|dose|medicine|tablet|pill|prescription)\b|रिपोर्ट|नतीजा|मान|खुराक|दवा|गोली|पर्ची/u.test(
+      inputText,
+    ) ||
+    /\d/u.test(inputText.replace(/\b(?:hba1c|a1c)\b/giu, ''))
+  )
+    return null;
+  if (
+    Number(patientAge) >= 18 &&
+    /\b(?:fever|bukhar)\b|बुखार/u.test(inputText) &&
+    !/\b(?:headache|cough|vomit|rash|pain|breath|pregnan|child)\b|सिरदर्द|सिर\s*दर्द|खांसी|खाँसी|उल्टी|दर्द|सांस|साँस|गर्भ/u.test(
+      inputText,
+    ) &&
+    /\b(?:what should i do|what can i do|self care|kya karu|kya karun)\b|क्या\s*(?:करूं|करूँ|करना|करें)/iu.test(
+      inputText,
+    )
+  )
+    return 'FEVER';
+  if (
+    /\b(?:hba1c|a1c)\b|एच\s*बी\s*ए\s*वन\s*सी/iu.test(inputText) &&
+    !/\b(?:my|mine|meri|mera|mujhe|i have)\b|मेरी|मेरा|मुझे/u.test(inputText) &&
+    /\b(?:what|mean|meaning|explain|kya|hota|hai)\b|क्या|होता|समझा/u.test(
+      inputText,
+    )
+  )
+    return 'HBA1C';
   return null;
+}
+
+// When no answer can be trusted, say so honestly and give a next step;
+// rephrasing cannot help when the approved information is missing.
+export const NO_RELIABLE_ANSWER_HI =
+  'माफ़ कीजिए, मेरे पास अभी इस सवाल का जवाब देने के लिए पूरी जानकारी उपलब्ध नहीं है। कृपया अपने क्षेत्र की आशा स्वास्थ्य कर्मी या नज़दीकी स्वास्थ्य केंद्र से संपर्क करें।';
+export const NO_RELIABLE_ANSWER_EN =
+  'Sorry, I do not have enough information to answer this yet. Please contact the ASHA worker in your area or your nearest health centre.';
+// DOSE: missed/double dose; CHANGE: one named action; STOP_ALL: may mean the
+// reminders; MEDICINE: other medicine worries (side effects, still high);
+// GENERAL: diagnosis or treatment of an illness, with no medicine named.
+export type MedicationDecision =
+  | 'DOSE'
+  | 'CHANGE'
+  | 'STOP_ALL'
+  | 'MEDICINE'
+  | 'SIDE_EFFECT'
+  | 'STILL_HIGH'
+  | 'GENERAL';
+
+/** A clinical question that is not about the patient's medicines. */
+export const CLINICAL_ADVICE_MESSAGE = {
+  hi: 'माफ़ कीजिए, मैं बीमारी की जाँच या इलाज के बारे में सलाह नहीं दे सकती। इसके लिए कृपया नजदीकी डॉक्टर या कम्युनिटी हेल्थ ऑफिसर (CHO) से संपर्क करें।',
+  en: 'Sorry, I cannot advise on diagnosing or treating an illness. Please contact your nearest doctor or Community Health Officer (CHO).',
+};
+
+/** Picks the deflection for a clinical question the classifier sent here. */
+export function clinicalQuestionKind(text: string): MedicationDecision {
+  // Round 3: side effects, and BP or sugar still high on medicines.
+  if (
+    /\b(?:side\s*effects?|reaction|dushprabhav)\b|साइड\s*इफेक्ट|दुष्प्रभाव|रिएक्शन/iu.test(
+      text,
+    )
+  )
+    return 'SIDE_EFFECT';
+  if (
+    /(?:despite|even after|still|बावजूद|के\s*बाद\s*भी|पर\s*भी|फिर\s*भी|ke\s*baad\s*bhi|par\s*bhi|phir\s*bhi).{0,40}(?:high|zyada|jyada|ज़्यादा|ज्यादा|बढ़|बढ|badh)|(?:high|zyada|jyada|ज़्यादा|ज्यादा|बढ़|बढ|badh).{0,40}(?:despite|even after|बावजूद|के\s*बाद\s*भी|पर\s*भी|फिर\s*भी|ke\s*baad\s*bhi|par\s*bhi|phir\s*bhi)/iu.test(
+      text,
+    )
+  )
+    return 'STILL_HIGH';
+  if (
+    /\b(?:dose|dosage|double|missed?|skip(?:ped)?|bhool|bhul)\b|खुराक|दोगुनी|छूट|भूल/iu.test(
+      text,
+    )
+  )
+    return 'DOSE';
+  return /\b(?:medicines?|medications?|tablets?|pills?|dawai|dawa|goli)\b|दवा|दवाई|गोली|मेडिसिन/iu.test(
+    text,
+  )
+    ? 'MEDICINE'
+    : 'GENERAL';
+}
+
+// Clinical review: Ayushman card answers give both routes, in person and online.
+// The link stays on its own line; spoken text drops https links.
+export const AYUSHMAN_ONLINE_PORTAL = 'https://beneficiary.nha.gov.in';
+export const AYUSHMAN_ONLINE_SECTION = {
+  hi: {
+    title: 'ऑनलाइन आवेदन',
+    body: `घर बैठे आयुष्मान ऐप या इस वेबसाइट से भी कार्ड बनवा सकते हैं:\n${AYUSHMAN_ONLINE_PORTAL}`,
+  },
+  en: {
+    title: 'Apply online',
+    body: `You can also apply from home on the Ayushman App or this website:\n${AYUSHMAN_ONLINE_PORTAL}`,
+  },
+};
+// NHA videos from Dr. Garima (Vay Vandana playlist): the Hindi and English
+// Ayushman App walkthroughs. Shown as a tappable link; the voice skips links.
+export const VAY_VANDANA_VIDEO = {
+  hi: {
+    title: 'वीडियो देखें',
+    body: 'आयुष्मान ऐप से वय वंदना कार्ड बनाने का तरीका इस वीडियो में देखें:\nhttps://www.youtube.com/watch?v=IHiHf-A7UT0',
+  },
+  en: {
+    title: 'Watch a video',
+    body: 'See how to make the Vay Vandana card on the Ayushman App in this video:\nhttps://www.youtube.com/watch?v=4tbf3lkhyjM',
+  },
+};
+// Source: NHA "FAQs related to the benefits for senior citizens" (ACTIVE in the
+// knowledge base): everyone aged 70+ is eligible whatever their income, and
+// Aadhaar is the only document needed.
+export const VAY_VANDANA_IN_PERSON_ANSWER = {
+  hi: {
+    summary: 'वय वंदना कार्ड आप केंद्र जाकर या ऑनलाइन बनवा सकते हैं।',
+    title: 'केंद्र या अस्पताल जाकर',
+    bullets: [
+      '70 साल या उससे ज़्यादा उम्र के सभी लोग इसके पात्र हैं, आमदनी कुछ भी हो।',
+      'पास के जन सेवा केंद्र या योजना से जुड़े अस्पताल में आरोग्य मित्र से मिलें।',
+      'सिर्फ़ आधार कार्ड साथ ले जाएँ।',
+    ],
+  },
+  en: {
+    summary: 'You can get your Vay Vandana card at a centre or online.',
+    title: 'At a centre or hospital',
+    bullets: [
+      'Everyone aged 70 or above can get it, whatever their income.',
+      'Meet the Arogya Mitra at a Common Service Centre or an approved hospital.',
+      'Take only your Aadhaar card.',
+    ],
+  },
+};
+// Used when a generated card-application answer cannot be verified.
+export const AYUSHMAN_IN_PERSON_ANSWER = {
+  hi: {
+    summary: 'आयुष्मान कार्ड आप केंद्र जाकर या ऑनलाइन बनवा सकते हैं।',
+    title: 'केंद्र या अस्पताल जाकर',
+    bullets: [
+      'पास के जन सेवा केंद्र या योजना से जुड़े अस्पताल में आरोग्य मित्र से मिलें।',
+      'आधार कार्ड और राशन कार्ड साथ ले जाएँ।',
+      'सूची में नाम मिलने पर आपका कार्ड बन जाएगा।',
+    ],
+  },
+  en: {
+    summary: 'You can get your Ayushman card at a centre or online.',
+    title: 'At a centre or hospital',
+    bullets: [
+      'Meet the Arogya Mitra at a Common Service Centre or an approved hospital.',
+      'Take your Aadhaar card and ration card with you.',
+      'If your name is on the list, your card will be made.',
+    ],
+  },
+};
+
+// Hindi voice input writes English medicine words in Devanagari ("मेडिसिन पेंडिंग है").
+const devanagariWord = (pattern: string) =>
+  new RegExp(`(?<![\\u0900-\\u097F])(?:${pattern})(?![\\u0900-\\u097F])`, 'gu');
+const DEVANAGARI_MEDICINE_WORDING: Array<[RegExp, string]> = [
+  [devanagariWord('मेडिसिन(?:्स|ें)?|मेडिसिंस|मेडिकेशन(?:्स)?'), 'दवाई'],
+  [devanagariWord('टेबलेट(?:्स)?|टैबलेट्स'), 'टैबलेट'],
+  [devanagariWord('पेंडिंग'), 'बाकी'],
+  [devanagariWord('मिस(?:्ड)?'), 'छूट'],
+  [devanagariWord('शेड्यूल|टाइमिंग|टाइम'), 'समय'],
+  [devanagariWord('डोज़?'), 'खुराक'],
+];
+
+// Strength words a patient may speak instead of digits ("टेलमा फोर्टी", "पाँच सौ").
+const SPOKEN_NUMBERS: Record<string, string> = {
+  five: '5',
+  ten: '10',
+  twenty: '20',
+  forty: '40',
+  fifty: '50',
+  eighty: '80',
+  hundred: '×100',
+  thousand: '×1000',
+  फाइव: '5',
+  पांच: '5',
+  पाँच: '5',
+  टेन: '10',
+  दस: '10',
+  ट्वेंटी: '20',
+  बीस: '20',
+  फोर्टी: '40',
+  फ़ोर्टी: '40',
+  चालीस: '40',
+  फिफ्टी: '50',
+  पचास: '50',
+  एटी: '80',
+  अस्सी: '80',
+  हंड्रेड: '×100',
+  सौ: '×100',
+  थाउजेंड: '×1000',
+  हज़ार: '×1000',
+  हजार: '×1000',
+};
+
+const DEVANAGARI_SOUNDS: Record<string, string> = {
+  क: 'k',
+  ख: 'k',
+  ग: 'g',
+  घ: 'g',
+  च: 'c',
+  छ: 'c',
+  ज: 'j',
+  झ: 'j',
+  ट: 't',
+  ठ: 't',
+  ड: 'd',
+  ढ: 'd',
+  ण: 'n',
+  त: 't',
+  थ: 't',
+  द: 'd',
+  ध: 'd',
+  न: 'n',
+  प: 'p',
+  फ: 'f',
+  ब: 'b',
+  भ: 'b',
+  म: 'm',
+  र: 'r',
+  ल: 'l',
+  व: 'v',
+  श: 's',
+  ष: 's',
+  स: 's',
+  'ं': 'n',
+};
+
+/**
+ * Consonant skeleton used to compare a spoken or misspelt medicine word with
+ * its verified name across scripts: "टेलमा" and "Telma" -> "tlm", "metformon"
+ * and "मेटफॉर्मिन" -> "mtfrmn". Short skeletons fall back to the exact word.
+ */
+export function medicineWordKey(word: string): string {
+  const lower = word.normalize('NFC').toLocaleLowerCase();
+  const skeleton = /[ऀ-ॿ]/u.test(lower)
+    ? [
+        ...lower
+          .replace(/ज़/gu, 'z')
+          .replace(/फ़/gu, 'f')
+          .replace(/[डढ]़/gu, 'r'),
+      ]
+        .map((char) =>
+          /[a-z]/.test(char) ? char : DEVANAGARI_SOUNDS[char] || '',
+        )
+        .join('')
+    : lower
+        .replace(/ph/g, 'f')
+        .replace(/sh/g, 's')
+        .replace(/ch/g, 'C')
+        .replace(/ck/g, 'k')
+        .replace(/c(?=[eiy])/g, 's')
+        .replace(/c/g, 'k')
+        .replace(/C/g, 'c')
+        .replace(/q/g, 'k')
+        .replace(/x/g, 'ks')
+        .replace(/w/g, 'v')
+        .replace(/[^a-z]|[aeiouyh]/g, '');
+  const collapsed = skeleton.replace(/(.)\1+/g, '$1');
+  return collapsed.length >= 3 ? collapsed : `=${lower}`;
+}
+
+/** Word keys for medicine matching; spoken strengths become digits. */
+function medicineQuestionKeys(value: string): string[] {
+  const words = value.toLocaleLowerCase().match(/[\p{L}\p{M}\p{N}]+/gu) || [];
+  const keys: string[] = [];
+  for (const word of words) {
+    const spoken = SPOKEN_NUMBERS[word];
+    const previous = keys[keys.length - 1];
+    if (spoken?.startsWith('×')) {
+      const factor = Number(spoken.slice(1));
+      if (previous && /^\d+$/.test(previous))
+        keys[keys.length - 1] = String(Number(previous) * factor);
+      else keys.push(String(factor));
+    } else if (spoken) keys.push(spoken);
+    else keys.push(/^\d+(?:\.\d+)?$/.test(word) ? word : medicineWordKey(word));
+  }
+  return keys;
 }
 
 @Injectable()
@@ -206,29 +516,41 @@ export class AiOrchestratorService implements IAiOrchestrator {
 
   private triageContent(language: string): Record<string, string> {
     const summary = language.startsWith('hi')
-      ? 'मैं आपकी बात ठीक से समझ नहीं पाया। क्या आप दवा के रिमाइंडर, अस्पताल/स्वास्थ्य सुविधा, या सरकारी स्वास्थ्य योजना के बारे में मदद चाहते हैं?'
-      : 'I could not determine what you need help with. Are you asking about a medicine reminder, a hospital or health facility, or a government health scheme?';
+      ? 'माफ़ कीजिए, मैं आपकी बात ठीक से समझ नहीं पाई। कृपया अपना सवाल दोबारा पूछें। आप ब्लड प्रेशर, शुगर, अपनी दवाइयों, स्वास्थ्य सेवाओं या सरकारी स्वास्थ्य योजनाओं के बारे में पूछ सकते हैं।'
+      : 'Sorry, I did not understand that. Please ask your question again. You can ask about blood pressure, sugar, your medicines, health services or government health schemes.';
     return { summary, [language]: summary };
   }
 
   private clinicalDeflectionContent(
     language: string,
     possibleEmergency = false,
+    decision: MedicationDecision = 'DOSE',
+    inputText = '',
   ): Record<string, unknown> {
     const hindi = language.startsWith('hi');
+    const stopAll = STOP_ALL_MEDICINES_MESSAGE[hindi ? 'hi' : 'en'];
     const summary = possibleEmergency
-      ? hindi
-        ? 'मैं लक्षणों की गंभीरता तय नहीं कर सकता। अगर तकलीफ़ गंभीर है, बढ़ रही है, या आपको तुरंत मदद चाहिए, तो 108/112 पर कॉल करें या नज़दीकी आपातकालीन सुविधा जाएँ।'
-        : 'I cannot determine how serious these symptoms are. If the problem is severe, worsening, or you need immediate help, call 108/112 or go to a nearby emergency facility.'
-      : hindi
-        ? 'इस सवाल में इलाज या दवा से जुड़ा फैसला चाहिए, इसलिए इसकी सलाह डॉक्टर, CHO या ANM से लें। मैं दवा की खुराक बदलने, रोकने, दोहरी खुराक लेने या छूटी हुई खुराक के बारे में फैसला नहीं दे सकता।'
-        : 'This question needs a treatment or medicine decision from a doctor, CHO, or ANM. I cannot decide whether to change, stop, double, or take a missed dose.';
+      ? emergencyMessage(inputText, hindi)
+      : decision === 'SIDE_EFFECT'
+        ? SIDE_EFFECT_MESSAGE[hindi ? 'hi' : 'en']
+        : decision === 'STILL_HIGH'
+          ? STILL_HIGH_ON_MEDICINES_MESSAGE[hindi ? 'hi' : 'en']
+          : decision === 'STOP_ALL' || decision === 'MEDICINE'
+            ? stopAll.summary
+            : decision === 'CHANGE'
+              ? medicineChangeMessage(inputText, hindi)
+              : decision === 'GENERAL'
+                ? CLINICAL_ADVICE_MESSAGE[hindi ? 'hi' : 'en']
+                : MEDICINE_DOSE_MESSAGE[hindi ? 'hi' : 'en'];
     return {
       summary,
       [language]: summary,
+      ...(decision === 'STOP_ALL' && !possibleEmergency
+        ? { sections: [{ body: stopAll.reminders }] }
+        : {}),
       actions: [
         {
-          label: hindi ? 'नज़दीकी स्वास्थ्य सुविधा ढूँढें' : 'Find a nearby health facility',
+          label: hindi ? 'पास का अस्पताल ढूँढें' : 'Find a nearby hospital',
           action: 'FIND_FACILITY',
         },
         {
@@ -239,10 +561,12 @@ export class AiOrchestratorService implements IAiOrchestrator {
     };
   }
 
+  // Out of scope: say so plainly, never guess, say what VDA can help with,
+  // and point other health questions to the ASHA or health centre.
   private outOfScopeContent(language: string): Record<string, unknown> {
     const summary = language.startsWith('hi')
-      ? 'मैं दवा के रिमाइंडर, अस्पताल/स्वास्थ्य सुविधा और सरकारी स्वास्थ्य योजनाओं में मदद कर सकता हूँ। दूसरे सवाल के लिए कृपया सही सेवा या व्यक्ति से संपर्क करें।'
-      : 'I can help with medicine reminders, hospitals or health facilities, and government health schemes. Please use the appropriate service or person for other requests.';
+      ? 'माफ़ कीजिए, इस सवाल का सही जवाब मैं नहीं दे सकती। मैं ब्लड प्रेशर, शुगर, आपकी दवाइयों, स्वास्थ्य सेवाओं और सरकारी स्वास्थ्य योजनाओं के बारे में मदद कर सकती हूँ। सेहत से जुड़े दूसरे सवालों के लिए अपने क्षेत्र की आशा या नज़दीकी स्वास्थ्य केंद्र से पूछें।'
+      : 'Sorry, I cannot give a correct answer to this question. I can help with blood pressure, sugar, your medicines, health services and government health schemes. For other health questions, please ask the ASHA worker in your area or your nearest health centre.';
     return { summary, [language]: summary };
   }
 
@@ -252,89 +576,204 @@ export class AiOrchestratorService implements IAiOrchestrator {
    */
   private resolvePrescriptionContextQuestion(
     context: SanitizedPrescriptionSessionContext | null,
-    input: string,
+    rawInput: string,
     language: string,
   ): PrescriptionContextResolution | null {
+    const input = DEVANAGARI_MEDICINE_WORDING.reduce(
+      (text, [pattern, replacement]) => text.replace(pattern, replacement),
+      rawInput,
+    );
     const normalized = this.normalizePrescriptionReference(input);
-    const asksMissedDose = /(?:(?:दवा|दवाई|गोली|खुराक).{0,32}(?:भूल|छूट)|(?:भूल|छूट).{0,32}(?:दवा|दवाई|गोली|खुराक)|\b(?:dawai|dawa|medicine|medication|tablet|pill|dose)\b.{0,40}\b(?:bhool|forgot|miss(?:ed)?|skip(?:ped)?)\b|\b(?:bhool|forgot|miss(?:ed)?|skip(?:ped)?)\b.{0,40}\b(?:dawai|dawa|medicine|medication|tablet|pill|dose)\b)/i.test(input);
-    const asksDoseAction = /(?:\b(?:abhi|now)\b.{0,20}\b(?:le|lu|loon|lena|take)\b|\b(?:do|two|2|double|agli|next)\b.{0,20}\b(?:tablet|pill|dose|khurak|goli|skip|le|lu|take)\b|(?:अभी|अब).{0,20}(?:ले|लूं|लूँ|लेना)|(?:दो|दोगुनी|अगली).{0,20}(?:गोली|खुराक|दवा|छोड़|स्किप|ले|लूं|लूँ))/i.test(input);
-    const asksTreatmentChange = /(?:\b(?:stop|start|increase|decrease|change|adjust|double|band|badhau|badha|ghatau|ghata)\b|बंद|शुरू|बढ़ा|घटा|बदल|दोगुनी)/i.test(input);
-    const asksWhatToDoAfterMiss = /(?:\b(?:ab|now|what)\b.{0,20}\b(?:kya|what|karu|karoon|do|take|skip)\b|(?:अब|तो|फिर).{0,20}(?:क्या\s*करूँ|क्या\s*करूं|ले\s*लूं|ले\s*लूँ|छोड़\s*दूं|स्किप))/i.test(input);
-    const hasGenericMedicineReference = /(?:\b(?:medicines?|medications?|doses?|dosage|tablets?|pills?|dawai|dawa|khurak|goli)\b|दवा|दवाई|गोली|खुराक|टैबलेट)/i.test(input);
-    const asksNamedTreatmentChange = /(?:\b(?:band|start|change|badha|badhau|ghata|ghatau)\s*(?:kar)?\s*(?:du|dun|doon|lu|loon|sakta|sakti)\b|(?:बंद|शुरू|बदल|बढ़ा|घटा)\s*(?:कर)?\s*(?:दूं|दूँ|लूं|लूँ|सकता|सकती))/i.test(input);
-    const strengthSubstitution = /\b\d+(?:\.\d+)?\s*(?:mg|mcg|ml|g)\b.{0,48}\b(?:instead|replace|rather|jagah|badle)\b.{0,48}\b\d+(?:\.\d+)?\s*(?:mg|mcg|ml|g)\b|\b(?:jagah|badle|instead|replace)\b.{0,48}\b\d+(?:\.\d+)?\s*(?:mg|mcg|ml|g)\b/i.test(input);
-    const clinicalMedicationDecision = strengthSubstitution || asksDoseAction
-      || (asksMissedDose && asksWhatToDoAfterMiss)
-      || (asksTreatmentChange && (hasGenericMedicineReference || asksNamedTreatmentChange));
+    const asksMissedDose =
+      /(?:(?:दवा|दवाई|गोली|खुराक).{0,32}(?:भूल|छूट)|(?:भूल|छूट).{0,32}(?:दवा|दवाई|गोली|खुराक)|\b(?:dawai|dawa|medicine|medication|tablet|pill|dose)\b.{0,40}\b(?:bhool|forgot|miss(?:ed)?|skip(?:ped)?)\b|\b(?:bhool|forgot|miss(?:ed)?|skip(?:ped)?)\b.{0,40}\b(?:dawai|dawa|medicine|medication|tablet|pill|dose)\b)/i.test(
+        input,
+      );
+    const asksDoseAction =
+      /(?:\b(?:abhi|now)\b.{0,20}\b(?:le|lu|loon|lena|take)\b|\b(?:do|two|2|double|agli|next)\b.{0,20}\b(?:tablet|pill|dose|khurak|goli|skip|le|lu|take)\b|(?:अभी|अब).{0,20}(?:ले|लूं|लूँ|लेना)|(?:दो|दोगुनी|अगली).{0,20}(?:गोली|खुराक|दवा|छोड़|स्किप|ले|लूं|लूँ))/i.test(
+        input,
+      );
+    const asksTreatmentChange =
+      /(?:\b(?:stop|start|increase|decrease|change|adjust|double|band|badhau|badha|ghatau|ghata)\b|बंद|शुरू|बढ़ा|घटा|बदल|दोगुनी)/i.test(
+        input,
+      );
+    const asksWhatToDoAfterMiss =
+      /(?:\b(?:ab|now|what)\b.{0,20}\b(?:kya|what|karu|karoon|do|take|skip)\b|(?:अब|तो|फिर).{0,20}(?:क्या\s*करूँ|क्या\s*करूं|ले\s*लूं|ले\s*लूँ|छोड़\s*दूं|स्किप)|\bkya\s*kar(?:u|un|oon|en)\b|क्या\s*कर(?:ूँ|ूं|ें))/i.test(
+        input,
+      );
+    const hasGenericMedicineReference =
+      /(?:\b(?:medicines?|medications?|doses?|dosage|tablets?|pills?|dawai|dawa|khurak|goli)\b|दवा|दवाई|गोली|खुराक|टैबलेट)/i.test(
+        input,
+      );
+    const asksNamedTreatmentChange =
+      /(?:\b(?:band|start|change|badha|badhau|ghata|ghatau)\s*(?:kar)?\s*(?:du|dun|doon|lu|loon|sakta|sakti)\b|(?:बंद|शुरू|बदल|बढ़ा|घटा)\s*(?:कर)?\s*(?:दूं|दूँ|लूं|लूँ|सकता|सकती))/i.test(
+        input,
+      );
+    const strengthSubstitution =
+      /\b\d+(?:\.\d+)?\s*(?:mg|mcg|ml|g)\b.{0,48}\b(?:instead|replace|rather|jagah|badle)\b.{0,48}\b\d+(?:\.\d+)?\s*(?:mg|mcg|ml|g)\b|\b(?:jagah|badle|instead|replace)\b.{0,48}\b\d+(?:\.\d+)?\s*(?:mg|mcg|ml|g)\b/i.test(
+        input,
+      );
+    const clinicalMedicationDecision =
+      strengthSubstitution ||
+      asksDoseAction ||
+      (asksMissedDose && asksWhatToDoAfterMiss) ||
+      (asksTreatmentChange &&
+        (hasGenericMedicineReference || asksNamedTreatmentChange));
 
     // Treatment authority is decided before prescription availability. A
     // missing or unverified plan can never turn a dose decision into an
     // informational "upload a prescription" response. This local decision
     // also keeps the raw patient question out of external classification.
     if (clinicalMedicationDecision) {
-      return { kind: 'CLINICAL_MEDICATION_DECISION' };
+      return {
+        kind: 'CLINICAL_MEDICATION_DECISION',
+        decision:
+          strengthSubstitution ||
+          asksDoseAction ||
+          (asksMissedDose && asksWhatToDoAfterMiss)
+            ? 'DOSE'
+            : asksToStopAllMedicines(input)
+              ? 'STOP_ALL'
+              : 'CHANGE',
+      };
     }
 
     // Adherence is recorded on the patient's device. A prescription lists
     // medicines and times, but cannot establish whether a dose was taken.
     // Keep these intents ahead of the broad prescription-list matcher.
-    if (/\b(?:galti|galat|accidental(?:ly)?|mistake|wrong)\b.{0,45}\b(?:taken|mark|le\s*li|liya)\b|गलती.{0,45}(?:ले ली|मार्क|दर्ज)/i.test(input)) {
+    if (
+      /\b(?:galti|galat|accidental(?:ly)?|mistake|wrong)\b.{0,45}\b(?:taken|mark|le\s*li|liya)\b|गलती.{0,45}(?:ले ली|मार्क|दर्ज)/i.test(
+        input,
+      )
+    ) {
       return { kind: 'ADHERENCE_STATUS', question: 'CORRECTION' };
     }
-    if (/\b(?:streak|lagatar|continuous)\b|लगातार.{0,25}(?:दिन|दवा)|स्ट्रीक/i.test(input)) {
+    if (
+      /\b(?:streak|lagatar|continuous)\b|लगातार.{0,25}(?:दिन|दवा)|स्ट्रीक/i.test(
+        input,
+      )
+    ) {
       return { kind: 'ADHERENCE_STATUS', question: 'STREAK' };
     }
-    if (/\b(?:pending|remaining|left to take|baaki|baki)\b|बाकी|लंबित/i.test(input) && hasGenericMedicineReference) {
+    if (
+      /\b(?:pending|remaining|left to take|baaki|baki)\b|बाकी|लंबित/i.test(
+        input,
+      ) &&
+      hasGenericMedicineReference
+    ) {
       return { kind: 'ADHERENCE_STATUS', question: 'PENDING' };
     }
-    if ((asksMissedDose || (hasGenericMedicineReference && /\b(?:missed|skipped|bhool|chhoot)\b|छूट|भूल/i.test(input)))
-      && /\b(?:show|list|dikhao|kal|yesterday|which|kaunsi|konsi)\b|दिखाओ|कौनसी|कौन\s*सी|कल/i.test(input)) {
+    if (
+      (asksMissedDose ||
+        (hasGenericMedicineReference &&
+          /\b(?:missed|skipped|bhool|chhoot)\b|छूट|भूल/i.test(input))) &&
+      /\b(?:show|list|dikhao|kal|yesterday|which|kaunsi|konsi)\b|दिखाओ|कौनसी|कौन\s*सी|कल/i.test(
+        input,
+      )
+    ) {
       return { kind: 'ADHERENCE_STATUS', question: 'MISSED' };
     }
-    if (/\b(?:refill|run(?:ning)? out|finished|khatam|stock)\b|खत्म|समाप्त/i.test(input) && hasGenericMedicineReference) {
+    if (
+      /\b(?:refill|run(?:ning)? out|finished|khatam|stock)\b|खत्म|समाप्त/i.test(
+        input,
+      ) &&
+      hasGenericMedicineReference
+    ) {
       return { kind: 'REFILL_SUPPORT' };
     }
 
-    const statusQuestion = /(?:\b(?:prescription|parchi)\b|पर्ची).{0,40}(?:\b(?:status|verify|verified|verification|approved|reviewed|check|pending)\b|स्थिति|जाँच|जांच|सत्यापित|मंजूर|मंज़ूर)|(?:\b(?:status|verification)\b|स्थिति).{0,35}(?:\b(?:prescription|parchi)\b|पर्ची)|^(?:my\s+prescription|meri\s+parchi|मेरी\s+पर्ची)[?.!]*$/i.test(input.trim());
+    const statusQuestion =
+      /(?:\b(?:prescription|parchi)\b|पर्ची).{0,40}(?:\b(?:status|verify|verified|verification|approved|reviewed|check|pending)\b|स्थिति|जाँच|जांच|सत्यापित|मंजूर|मंज़ूर)|(?:\b(?:status|verification)\b|स्थिति).{0,35}(?:\b(?:prescription|parchi)\b|पर्ची)|^(?:my\s+prescription|meri\s+parchi|मेरी\s+पर्ची)[?.!]*$/i.test(
+        input.trim(),
+      );
     if (statusQuestion) return { kind: 'PRESCRIPTION_STATUS' };
-    const genericMedicine = /(?:\b(?:my|meri|mera|mere|show|list|batao|dikhao)\b.{0,35}\b(?:medicine|medicines|medication|medications|dawa|dawai|dawain|dawaiyan)\b|\b(?:medicine|medicines|medication|medications|dawa|dawai|dawain|dawaiyan)\b.{0,30}\b(?:schedule|routine|timing|time|kab|list|show|batao|dikhao)\b|मेरी?\s*दवा(?:इ|ई)?(?:यां|याँ|यों|ओं|एं|एँ)?|दवा(?:इ|ई)?(?:यां|याँ|यों|ओं|एं|एँ)?.{0,20}(?:समय|कब|दिखा|बताओ))/i.test(input);
-    const genericTiming = /(?:\b(?:schedule|routine|timing|time|kab)\b|समय|कब)/i.test(input);
-    const genericList = genericMedicine
-      || /(?:आज\s*की|aaj\s*ki|today(?:'s)?)\s*(?:दवा|दवाई|दवाइयाँ|dawa|dawai|medicines?)/i.test(input)
-      || /\bwhat\s+(?:medicines|medications)\s+am\s+i\s+taking\b/i.test(input)
-      || /^(?:my\s+)?(?:medicine|medicines|medication|medications|dawa|dawai|दवा|दवाई)(?:\s+(?:please|बताओ|दिखाओ))?\s*[?.!]*$/i.test(input.trim());
-    if (!context || (!context.medicines.length && !context.investigations.length)) {
-      if (genericList) return { kind: genericTiming ? 'REMINDER_FACT' : 'MEDICINE_LIST' };
+    const genericMedicine =
+      /(?:\b(?:my|meri|mera|mere|show|list|batao|dikhao)\b.{0,35}\b(?:medicine|medicines|medication|medications|dawa|dawai|dawain|dawaiyan)\b|\b(?:medicine|medicines|medication|medications|dawa|dawai|dawain|dawaiyan)\b.{0,30}\b(?:schedule|routine|timing|time|kab|list|show|batao|dikhao)\b|मेरी?\s*दवा(?:इ|ई)?(?:यां|याँ|यों|ओं|एं|एँ)?|दवा(?:इ|ई)?(?:यां|याँ|यों|ओं|एं|एँ)?.{0,20}(?:समय|कब|दिखा|बताओ))/i.test(
+        input,
+      );
+    const genericTiming =
+      /(?:\b(?:schedule|routine|timing|time|kab|samay)\b|समय|कब)/i.test(input);
+    const genericList =
+      genericMedicine ||
+      /(?:आज\s*की|aaj\s*ki|today(?:'s)?)\s*(?:दवा|दवाई|दवाइयाँ|dawa|dawai|medicines?)/i.test(
+        input,
+      ) ||
+      /\bwhat\s+(?:medicines|medications)\s+am\s+i\s+taking\b/i.test(input) ||
+      /^(?:my\s+)?(?:medicine|medicines|medication|medications|dawa|dawai|दवा|दवाई)(?:\s+(?:please|बताओ|दिखाओ))?\s*[?.!]*$/i.test(
+        input.trim(),
+      );
+    if (
+      !context ||
+      (!context.medicines.length && !context.investigations.length)
+    ) {
+      if (genericList)
+        return { kind: genericTiming ? 'REMINDER_FACT' : 'MEDICINE_LIST' };
       return null;
     }
     const mentions = <T extends { name: string }>(items: T[]): T | undefined =>
-      items.find((item) => normalized.includes(this.normalizePrescriptionReference(item.name)));
-    const refers = /(?:\b(?:ye|yeh|this|it|iski|iska|iske)\b|इसे|इसकी|इसका|इसके|ये|यह)/i.test(input);
-    const medicineMatches = this.matchVerifiedMedicines(context.medicines, input);
+      items.find((item) =>
+        normalized.includes(this.normalizePrescriptionReference(item.name)),
+      );
+    const refers =
+      /(?:\b(?:ye|yeh|this|it|iski|iska|iske)\b|इसे|इसकी|इसका|इसके|ये|यह)/i.test(
+        input,
+      );
+    const medicineMatches = this.matchVerifiedMedicines(
+      context.medicines,
+      input,
+    );
     // A short brand may refer to multiple verified products or strengths.
     // Show the verified list so the patient can name the exact one.
     if (medicineMatches.length > 1) return { kind: 'MEDICINE_LIST' };
-    const medicine = medicineMatches[0]
-      || (refers && context.lastReferencedMedicine
-        ? context.medicines.find((item) => item.name === context.lastReferencedMedicine)
+    const medicine =
+      medicineMatches[0] ||
+      (refers && context.lastReferencedMedicine
+        ? context.medicines.find(
+            (item) => item.name === context.lastReferencedMedicine,
+          )
         : undefined);
-    const investigation = mentions(context.investigations)
-      || (refers && context.lastReferencedInvestigation
-        ? context.investigations.find((item) => item.name === context.lastReferencedInvestigation)
+    const investigation =
+      mentions(context.investigations) ||
+      (refers && context.lastReferencedInvestigation
+        ? context.investigations.find(
+            (item) => item.name === context.lastReferencedInvestigation,
+          )
         : undefined);
     const isReminder = /(?:reminder|रिमाइंडर)/i.test(input);
-    const asksTiming = /(?:\b(?:kab|when)\b|कब\s*(?:लेना|लूं|लूँ|लें|है|होगा)|कितने बजे|timing|time|समय)/i.test(input);
-    const asksMedicineSpecificDoseSafety = Boolean(medicine && (asksDoseAction || asksTreatmentChange));
-    const asksList = genericList || /(?:कौन\s*सी\s*दवा|कौनसी\s*दवाई|meri\s*(?:kaunsi|konsi)\s*(?:dawai|medicine)|my\s*medicines|medicines?\s*(?:are|in))/i.test(input);
-    const asksTestList = /(?:कौन\s*सा\s*(?:test|टेस्ट|जांच)|kaunsa\s*(?:test|investigation)|which\s*(?:test|investigation)|prescription.*(?:test|जांच)|(?:test|जांच).*(?:prescription|पर्ची))/i.test(input);
-    const asksGeneralUse = /(?:किस\s*(?:लिए|काम)|kis\s*(?:liye|liye)|क्या\s*(?:करती|करता|है)|kya\s*(?:karti|karta)|what\s*(?:does|is)|why\s*(?:is|was)|use\s*(?:करते|करती|hoti|hota|hai)|काम\s*(?:की|का|है)|side\s*effects?|नुकसान)/i.test(input);
-    const asksBpMedicine = /(?:\b(?:bp|blood\s*pressure)\b|बीपी|ब्लड प्रेशर).*(?:दवा|दवाई|medicine)|(?:दवा|दवाई|medicine).*(?:\b(?:bp|blood\s*pressure)\b|बीपी|ब्लड प्रेशर)/i.test(input);
+    const asksTiming =
+      /(?:\b(?:kab|when|samay)\b|कब\s*(?:लेना|लेनी|लूं|लूँ|लें|है|होगा)|कितने बजे|timing|time|समय)/i.test(
+        input,
+      );
+    const asksMedicineSpecificDoseSafety = Boolean(
+      medicine && (asksDoseAction || asksTreatmentChange),
+    );
+    const asksList =
+      genericList ||
+      /(?:कौन\s*सी\s*दवा|कौनसी\s*दवाई|meri\s*(?:kaunsi|konsi)\s*(?:dawai|medicine)|my\s*medicines|medicines?\s*(?:are|in))/i.test(
+        input,
+      );
+    const asksTestList =
+      /(?:कौन\s*सा\s*(?:test|टेस्ट|जांच)|kaunsa\s*(?:test|investigation)|which\s*(?:test|investigation)|prescription.*(?:test|जांच)|(?:test|जांच).*(?:prescription|पर्ची))/i.test(
+        input,
+      );
+    const asksGeneralUse =
+      /(?:किस\s*(?:लिए|काम)|kis\s*(?:liye|liye)|क्या\s*(?:करती|करता|है)|kya\s*(?:karti|karta)|what\s*(?:does|is)|why\s*(?:is|was)|use\s*(?:करते|करती|hoti|hota|hai)|काम\s*(?:की|का|है)|side\s*effects?|नुकसान)/i.test(
+        input,
+      );
+    const asksBpMedicine =
+      /(?:\b(?:bp|blood\s*pressure)\b|बीपी|ब्लड प्रेशर).*(?:दवा|दवाई|medicine)|(?:दवा|दवाई|medicine).*(?:\b(?:bp|blood\s*pressure)\b|बीपी|ब्लड प्रेशर)/i.test(
+        input,
+      );
 
     if ((asksMedicineSpecificDoseSafety || asksTreatmentChange) && medicine) {
-      return { kind: 'CLINICAL_MEDICATION_DECISION' };
+      return {
+        kind: 'CLINICAL_MEDICATION_DECISION',
+        decision: asksDoseAction ? 'DOSE' : 'CHANGE',
+      };
     }
-    if (isReminder || (genericList && genericTiming)) return { kind: 'REMINDER_FACT', medicine };
-    if (asksTiming && !medicine && genericList && context.medicines.length > 0) return { kind: 'REMINDER_FACT' };
+    if (isReminder || (genericList && genericTiming))
+      return { kind: 'REMINDER_FACT', medicine };
+    if (asksTiming && !medicine && genericList && context.medicines.length > 0)
+      return { kind: 'REMINDER_FACT' };
     if (asksTestList) return { kind: 'INVESTIGATION_LIST' };
     if (investigation && asksGeneralUse) {
       return {
@@ -371,31 +810,37 @@ export class AiOrchestratorService implements IAiOrchestrator {
 
   private prescriptionContextDirectContent(
     context: SanitizedPrescriptionSessionContext,
-    resolution: Extract<PrescriptionContextResolution, { kind: 'MEDICINE_LIST' | 'MEDICINE_FACT' | 'REMINDER_FACT' | 'INVESTIGATION_LIST' }>,
+    resolution: Extract<
+      PrescriptionContextResolution,
+      {
+        kind:
+          | 'MEDICINE_LIST'
+          | 'MEDICINE_FACT'
+          | 'REMINDER_FACT'
+          | 'INVESTIGATION_LIST';
+      }
+    >,
     language: string,
   ): Record<string, unknown> {
-    const isHinglish = language === 'hi-Latn' || language === 'hinglish';
-    const hindi = language.startsWith('hi') && !isHinglish;
+    const hindi = language.startsWith('hi');
     if (resolution.kind === 'MEDICINE_LIST') {
       const bullets = context.medicines.map((medicine) =>
-        this.patientPrescriptionMedicineLine(medicine, hindi, isHinglish));
+        this.patientPrescriptionMedicineLine(medicine, hindi),
+      );
       const summary = hindi
         ? 'आपकी अभी सेव की हुई पर्ची में ये दवाइयाँ लिखी हैं:'
-        : isHinglish
-          ? 'Aapki abhi save ki gayi parchi mein ye dawaiyan likhi hain:'
-          : 'Your currently saved prescription lists these medicines:';
+        : 'Your currently saved prescription lists these medicines:';
       const closing = hindi
         ? 'अगर आप चाहें, तो मैं आपकी दवाइयों के सही समय पर आपको याद दिला सकती हूँ।'
-        : isHinglish
-          ? 'Agar aap chahein, toh main aapki dawaiyon ke sahi samay par aapko yaad dila sakti hoon.'
-          : 'If you would like, I can remind you when it is time to take your medicines.';
-      const spoken_summary = `${summary} ${bullets.join('. ')}. ${closing}`;
+        : 'If you would like, I can remind you when it is time to take your medicines.';
       return {
         summary,
         [language]: summary,
-        spoken_summary,
         sections: [
-          { title: hindi ? 'पर्ची की दवाइयाँ' : isHinglish ? 'Parchi ki dawaiyan' : 'Prescription medicines', bullets },
+          {
+            title: hindi ? 'पर्ची की दवाइयाँ' : 'Prescription medicines',
+            bullets,
+          },
           { body: closing },
         ],
       };
@@ -403,111 +848,299 @@ export class AiOrchestratorService implements IAiOrchestrator {
     if (resolution.kind === 'INVESTIGATION_LIST') {
       const bullets = context.investigations.map((item) => item.name);
       const summary = bullets.length
-        ? (hindi ? 'आपकी सेव की हुई पर्ची में ये जांचें लिखी हैं:' : isHinglish ? 'Aapki save ki gayi parchi mein ye jaanchein likhi hain:' : 'Your saved prescription lists these tests:')
-        : (hindi ? 'आपकी सेव की हुई पर्ची में कोई जांच नहीं लिखी है।' : isHinglish ? 'Aapki save ki gayi parchi mein koi jaanch nahi likhi hai.' : 'No tests are listed in your saved prescription.');
-      return { summary, [language]: summary, ...(bullets.length ? { sections: [{ title: hindi ? 'जांचें' : isHinglish ? 'Jaanchein' : 'Tests', bullets }] } : {}) };
+        ? hindi
+          ? 'आपकी सेव की हुई पर्ची में ये जांचें लिखी हैं:'
+          : 'Your saved prescription lists these tests:'
+        : hindi
+          ? 'आपकी सेव की हुई पर्ची में कोई जांच नहीं लिखी है।'
+          : 'No tests are listed in your saved prescription.';
+      return {
+        summary,
+        [language]: summary,
+        ...(bullets.length
+          ? {
+              sections: [
+                {
+                  title: hindi ? 'जांचें' : 'Tests',
+                  bullets,
+                },
+              ],
+            }
+          : {}),
+      };
     }
     if (resolution.kind === 'MEDICINE_FACT') {
       const medicine = resolution.medicine;
       const bullets = [
-        `${hindi ? 'पर्ची में लिखी बारंबारता' : 'Prescribed frequency'}: ${this.patientPrescriptionFrequency(medicine.frequency, hindi) || (hindi ? 'दर्ज नहीं' : 'not recorded')}`,
+        `${hindi ? 'पर्ची के अनुसार कितनी बार' : 'Prescribed frequency'}: ${this.patientPrescriptionFrequency(medicine.frequency, hindi) || (hindi ? 'दर्ज नहीं' : 'not recorded')}`,
         `${hindi ? 'पर्ची में लिखा समय' : 'Prescribed timing'}: ${this.patientPrescriptionTiming(medicine.timingInstruction, hindi) || (hindi ? 'दर्ज नहीं' : 'not recorded')}`,
       ];
-      const reminders = context.reminders.filter((item) => this.normalizePrescriptionReference(item.medicineName) === this.normalizePrescriptionReference(medicine.name));
-      if (reminders.length) bullets.push(`${hindi ? 'फ़ोन पर सेव रिमाइंडर' : 'Device reminder'}: ${reminders.flatMap((item) => item.reminderTimes).map((time) => this.patientReminderTime(time, hindi)).join(', ')}`);
+      const reminders = context.reminders.filter(
+        (item) =>
+          this.normalizePrescriptionReference(item.medicineName) ===
+          this.normalizePrescriptionReference(medicine.name),
+      );
+      if (reminders.length)
+        bullets.push(
+          `${hindi ? 'फ़ोन पर सेव रिमाइंडर' : 'Device reminder'}: ${reminders
+            .flatMap((item) => item.reminderTimes)
+            .map((time) => this.patientReminderTime(time, hindi))
+            .join(', ')}`,
+        );
       const summary = hindi
-        ? `${medicine.name} के लिए पर्ची और फ़ोन में दर्ज जानकारी:`
+        ? `${medicine.name} के बारे में आपकी पर्ची और फ़ोन में यह लिखा है:`
         : `Recorded prescription and phone information for ${medicine.name}:`;
-      return { summary, [language]: summary, sections: [{ title: hindi ? 'पर्ची में लिखी जानकारी' : 'Prescription information', bullets }] };
+      return {
+        summary,
+        [language]: summary,
+        sections: [
+          {
+            title: hindi
+              ? 'पर्ची में लिखी जानकारी'
+              : 'Prescription information',
+            bullets,
+          },
+        ],
+      };
     }
     const reminders = resolution.medicine
-      ? context.reminders.filter((item) => this.normalizePrescriptionReference(item.medicineName) === this.normalizePrescriptionReference(resolution.medicine!.name))
+      ? context.reminders.filter(
+          (item) =>
+            this.normalizePrescriptionReference(item.medicineName) ===
+            this.normalizePrescriptionReference(resolution.medicine!.name),
+        )
       : context.reminders;
-    const bullets = reminders.map((item) => `${item.medicineName}: ${item.reminderTimes.map((time) => this.patientReminderTime(time, hindi)).join(', ')}`);
+    const bullets = reminders.map(
+      (item) =>
+        `${item.medicineName}: ${item.reminderTimes.map((time) => this.patientReminderTime(time, hindi)).join(', ')}`,
+    );
     const summary = bullets.length
-      ? (hindi ? 'आपके सेव किए हुए रिमाइंडर:' : 'Your saved reminders:')
+      ? hindi
+        ? 'आपके सेव किए हुए रिमाइंडर:'
+        : 'Your saved reminders:'
       : context.remindersUnavailable
-        ? (hindi ? 'दवाइयाँ सत्यापित हैं, लेकिन इस समय फोन पर सेव रिमाइंडर का समय यहाँ नहीं दिख रहा। दवाइयाँ टैब खोलें।' : 'Your medicines are verified, but saved reminder times are unavailable here right now. Open Medicines to sync them.')
-      : resolution.medicine
-        ? (hindi ? 'इस दवा की जानकारी सत्यापित है, लेकिन इसके लिए अभी कोई रिमाइंडर समय नहीं चुना गया है।' : 'This medicine is verified, but no reminder time has been selected for it yet.')
-        : (hindi ? 'आपकी दवाइयों की जानकारी सत्यापित है, लेकिन आपने अभी रिमाइंडर का समय नहीं चुना है।' : 'Your medicines are verified, but you have not selected reminder times yet.');
-    return { summary, [language]: summary, ...(bullets.length ? { sections: [{ title: hindi ? 'दवा रिमाइंडर' : 'Medicine reminders', bullets }] } : {}) };
+        ? hindi
+          ? 'आपकी दवाइयाँ मंज़ूर हैं, पर रिमाइंडर का समय अभी यहाँ नहीं दिख रहा। “दवाइयाँ” वाला हिस्सा खोलें।'
+          : 'Your medicines are verified, but saved reminder times are unavailable here right now. Open Medicines to sync them.'
+        : resolution.medicine
+          ? hindi
+            ? 'यह दवा मंज़ूर है, पर इसके रिमाइंडर का समय अभी नहीं चुना गया है।'
+            : 'This medicine is verified, but no reminder time has been selected for it yet.'
+          : hindi
+            ? 'आपकी दवाइयाँ मंज़ूर हैं, पर आपने अभी रिमाइंडर का समय नहीं चुना है।'
+            : 'Your medicines are verified, but you have not selected reminder times yet.';
+    return {
+      summary,
+      [language]: summary,
+      ...(bullets.length
+        ? {
+            sections: [
+              { title: hindi ? 'दवा रिमाइंडर' : 'Medicine reminders', bullets },
+            ],
+          }
+        : {}),
+    };
+  }
+
+  /**
+   * Card-application answers list the centre route and the online route.
+   * When the generated answer could not be verified, the approved fixed
+   * in-person steps replace the "no reliable answer" message.
+   */
+  private withBothCardApplicationRoutes(
+    content: Record<string, any>,
+    hindi: boolean,
+    replaceUnverified: boolean,
+    seniorCard = false,
+  ): Record<string, any> {
+    const online = AYUSHMAN_ONLINE_SECTION[hindi ? 'hi' : 'en'];
+    // Vay Vandana (70+) questions also get NHA's how-to video, on screen only.
+    const extra = seniorCard
+      ? [{ ...VAY_VANDANA_VIDEO[hindi ? 'hi' : 'en'] }]
+      : [];
+    // 70+ cards need only Aadhaar (NHA senior-citizen FAQ), unlike the
+    // ration-card route the general guidelines describe, so they always get
+    // the fixed senior answer.
+    if (replaceUnverified || seniorCard) {
+      const inPerson = (
+        seniorCard ? VAY_VANDANA_IN_PERSON_ANSWER : AYUSHMAN_IN_PERSON_ANSWER
+      )[hindi ? 'hi' : 'en'];
+      return {
+        summary: inPerson.summary,
+        sections: [
+          { title: inPerson.title, bullets: inPerson.bullets },
+          { ...online },
+          ...extra,
+        ],
+      };
+    }
+    const sections = Array.isArray(content.sections) ? content.sections : [];
+    if (sections.some((section) => section?.body === online.body))
+      return content;
+    return { ...content, sections: [...sections, { ...online }, ...extra] };
   }
 
   private normalizePrescriptionReference(value: string): string {
     return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
   }
 
-  private matchVerifiedMedicines(items: SanitizedPrescriptionMedicine[], input: string): SanitizedPrescriptionMedicine[] {
-    const words = (value: string) => value.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
-    const question = words(input);
-    const hasSequence = (sequence: string[]) => sequence.length > 0 && question.some((_, start) =>
-      sequence.every((word, offset) => question[start + offset] === word));
+  private matchVerifiedMedicines(
+    items: SanitizedPrescriptionMedicine[],
+    input: string,
+  ): SanitizedPrescriptionMedicine[] {
+    const question = medicineQuestionKeys(input);
+    const findSequence = (sequence: string[]) =>
+      sequence.length
+        ? question.findIndex((_, start) =>
+            sequence.every((word, offset) => question[start + offset] === word),
+          )
+        : -1;
     // Full names take precedence over short brand mentions. A requested number
     // must agree with the verified name, so "Telma 80" cannot select Telma 40.
-    const full = items.filter((item) => hasSequence(words(item.name)));
+    const full = items.filter(
+      (item) => findSequence(medicineQuestionKeys(item.name)) >= 0,
+    );
     if (full.length) return full;
+    const brandWords = (item: SanitizedPrescriptionMedicine) =>
+      medicineQuestionKeys(item.name).filter(
+        (word) =>
+          !/^\d+(?:\.\d+)?$/.test(word) && !/^=(?:mg|mcg|ml|g|iu)$/.test(word),
+      );
+    const mentionedWithoutOtherStrength = (sequence: string[]) => {
+      const start = findSequence(sequence);
+      return (
+        start >= 0 &&
+        !/^\d+(?:\.\d+)?$/.test(question[start + sequence.length] || '')
+      );
+    };
+    const brands = items.filter((item) =>
+      mentionedWithoutOtherStrength(brandWords(item)),
+    );
+    if (brands.length) return brands;
+    // Spoken Hindi often drops a short suffix ("ओज़ोमेट" for Ozomet VG 2), so a
+    // distinctive first brand word may select the medicine on its own.
     return items.filter((item) => {
-      const name = words(item.name);
-      const brand = name.filter((word) => !/^\d+(?:\.\d+)?$/.test(word) && !/^(?:mg|mcg|ml|g|iu)$/.test(word));
-      if (!brand.length || !hasSequence(brand)) return false;
-      const next = question.findIndex((_, index) => brand.every((word, offset) => question[index + offset] === word)) + brand.length;
-      return !/^\d+(?:\.\d+)?$/.test(question[next] || '');
+      const first = brandWords(item)[0];
+      return Boolean(
+        first &&
+        !first.startsWith('=') &&
+        mentionedWithoutOtherStrength([first]),
+      );
     });
+  }
+
+  /** A named medicine was not found: show what the verified prescription does list. */
+  private unmatchedPrescriptionContent(
+    context: SanitizedPrescriptionSessionContext | null,
+    language: string,
+  ): Record<string, unknown> {
+    const hindi = language.startsWith('hi');
+    const bullets = (context?.medicines || []).map((medicine) =>
+      this.patientPrescriptionMedicineLine(medicine, hindi),
+    );
+    const summary = !context
+      ? hindi
+        ? 'अभी आपकी कोई सेव की हुई पर्ची नहीं है। दवाइयों या जांच की जानकारी के लिए कृपया अपनी पर्ची अपलोड करें।'
+        : 'You do not have a saved prescription yet. Please upload one for medicine or test information.'
+      : bullets.length
+        ? hindi
+          ? 'यह नाम आपकी पर्ची में नहीं मिला। आपकी पर्ची में ये दवाइयाँ हैं:'
+          : 'I could not find that name in your prescription. Your prescription has these medicines:'
+        : hindi
+          ? 'यह दवा या जांच आपकी अभी सेव की हुई पर्ची में नहीं मिली। कृपया पर्ची में लिखा नाम जांचें।'
+          : 'This medicine or test is not in your currently saved prescription. Please check the name on the prescription.';
+    return {
+      summary,
+      [language]: summary,
+      ...(bullets.length ? { sections: [{ bullets }] } : {}),
+    };
   }
 
   private patientReminderTime(value: string, hindi: boolean): string {
     const [hours, minutes] = value.split(':').map(Number);
     if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return value;
-    const part = hours < 12 ? (hindi ? 'सुबह' : 'morning') : hours < 17 ? (hindi ? 'दोपहर' : 'afternoon') : (hindi ? 'शाम' : 'evening');
+    const part =
+      hours < 12
+        ? hindi
+          ? 'सुबह'
+          : 'morning'
+        : hours < 17
+          ? hindi
+            ? 'दोपहर'
+            : 'afternoon'
+          : hindi
+            ? 'शाम'
+            : 'evening';
     const hour = hours % 12 || 12;
-    return hindi ? `${part} ${hour}:${String(minutes).padStart(2, '0')} बजे` : `${hour}:${String(minutes).padStart(2, '0')} ${hours < 12 ? 'AM' : 'PM'}`;
+    return hindi
+      ? `${part} ${hour}:${String(minutes).padStart(2, '0')} बजे`
+      : `${hour}:${String(minutes).padStart(2, '0')} ${hours < 12 ? 'AM' : 'PM'}`;
   }
 
   private patientPrescriptionMedicineLine(
     medicine: SanitizedPrescriptionMedicine,
     hindi: boolean,
-    hinglish = false,
   ): string {
     const strength = this.patientPrescriptionStrength(medicine.strength);
     const name = [medicine.name, strength].filter(Boolean).join(' ');
     const details = [
-      this.patientPrescriptionFrequency(medicine.frequency, hindi, hinglish),
-      this.patientPrescriptionTiming(medicine.timingInstruction, hindi, hinglish),
+      this.patientPrescriptionFrequency(medicine.frequency, hindi),
+      this.patientPrescriptionTiming(medicine.timingInstruction, hindi),
       medicine.administrationInstruction,
     ].filter((value): value is string => Boolean(value));
-    return details.length ? `${name} — ${[...new Set(details)].join(' • ')}` : name;
+    return details.length
+      ? `${name} — ${[...new Set(details)].join(' • ')}`
+      : name;
   }
 
   private patientPrescriptionStrength(value?: string): string | undefined {
     if (!value?.trim()) return undefined;
-    const normalized = value.trim().replace(/(\d)\s*(mg|mcg|g|ml|iu)\b/i, '$1 $2');
+    const normalized = value
+      .trim()
+      .replace(/(\d)\s*(mg|mcg|g|ml|iu)\b/i, '$1 $2');
     // A unitless number such as "40" is ambiguous and must not be shown as a dose.
     return /^\d+(?:\.\d+)?$/.test(normalized) ? undefined : normalized;
   }
 
-  private patientPrescriptionFrequency(value: string | undefined, hindi: boolean, hinglish = false): string | undefined {
+  private patientPrescriptionFrequency(
+    value: string | undefined,
+    hindi: boolean,
+  ): string | undefined {
     if (!value?.trim()) return undefined;
-    const normalized = value.trim().toLowerCase().replace(/[._-]+/g, ' ').replace(/\s+/g, ' ');
+    const normalized = value
+      .trim()
+      .toLowerCase()
+      .replace(/[._-]+/g, ' ')
+      .replace(/\s+/g, ' ');
     if (/^(?:od|daily|once daily|once a day|1 time daily)$/.test(normalized)) {
-      return hindi ? 'दिन में 1 बार' : hinglish ? 'din mein 1 baar' : 'once daily';
+      return hindi ? 'दिन में 1 बार' : 'once daily';
     }
     if (/^(?:bd|bid|twice daily|twice a day|2 times daily)$/.test(normalized)) {
-      return hindi ? 'दिन में 2 बार' : hinglish ? 'din mein 2 baar' : 'twice daily';
+      return hindi ? 'दिन में 2 बार' : 'twice daily';
     }
-    if (/^(?:tds|tid|thrice daily|three times daily|3 times daily)$/.test(normalized)) {
-      return hindi ? 'दिन में 3 बार' : hinglish ? 'din mein 3 baar' : 'three times daily';
+    if (
+      /^(?:tds|tid|thrice daily|three times daily|3 times daily)$/.test(
+        normalized,
+      )
+    ) {
+      return hindi ? 'दिन में 3 बार' : 'three times daily';
     }
     return value.trim();
   }
 
-  private patientPrescriptionTiming(value: string | undefined, hindi: boolean, hinglish = false): string | undefined {
+  private patientPrescriptionTiming(
+    value: string | undefined,
+    hindi: boolean,
+  ): string | undefined {
     if (!value?.trim()) return undefined;
     const normalized = value.trim().toLowerCase();
-    if (/^(?:morning|सुबह)$/.test(normalized)) return hindi ? 'सुबह' : hinglish ? 'subah' : 'morning';
-    if (/^(?:afternoon|दोपहर)$/.test(normalized)) return hindi ? 'दोपहर' : hinglish ? 'dopahar' : 'afternoon';
-    if (/^(?:evening|शाम)$/.test(normalized)) return hindi ? 'शाम' : hinglish ? 'shaam' : 'evening';
-    if (/^(?:night|bedtime|रात)$/.test(normalized)) return hindi ? 'रात' : hinglish ? 'raat' : 'night';
+    if (/^(?:morning|सुबह)$/.test(normalized))
+      return hindi ? 'सुबह' : 'morning';
+    if (/^(?:afternoon|दोपहर)$/.test(normalized))
+      return hindi ? 'दोपहर' : 'afternoon';
+    if (/^(?:evening|शाम)$/.test(normalized)) return hindi ? 'शाम' : 'evening';
+    if (/^(?:night|bedtime|रात)$/.test(normalized))
+      return hindi ? 'रात' : 'night';
     return value.trim();
   }
 
@@ -553,7 +1186,11 @@ export class AiOrchestratorService implements IAiOrchestrator {
       });
       for (const turn of history) {
         if (!turn.inputText) continue;
-        const prior = this.knowledgeQueryNormalizer?.normalize(turn.inputText, language, IntentType.FACILITY_QUERY);
+        const prior = this.knowledgeQueryNormalizer?.normalize(
+          turn.inputText,
+          language,
+          IntentType.FACILITY_QUERY,
+        );
         if (!state && prior?.state) state = prior.state;
         if (!district && prior?.district) district = prior.district;
         if (state && district) break;
@@ -605,9 +1242,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
         state: entry.state.toUpperCase().replace(/\s+/g, '_'),
         iphsLevel: entry.iphsLevel,
         iphsClassification:
-          entry.iphsLevel === 'CHC'
-            ? 'CHC_NOT_SUBCLASSIFIED'
-            : entry.iphsLevel,
+          entry.iphsLevel === 'CHC' ? 'CHC_NOT_SUBCLASSIFIED' : entry.iphsLevel,
         iphsServices: { status: 'NOT_VERIFIED', services: [] },
         emergencyCapability: 'UNKNOWN',
         referralLevel:
@@ -706,65 +1341,93 @@ export class AiOrchestratorService implements IAiOrchestrator {
     ).length;
     // Facility-specific records and demo mappings are tracked per result.
     // IPHS level alignment remains a valid recommendation when that facility
-    // has no separate service-specific record.
-    const hasIphsSuitableCandidates =
-      serviceContext?.iphsEvidenceStatus === 'VERIFIED' &&
-      (serviceContext.appropriateIphsLevels.length || 0) > 0;
+    // has no separate service-specific record. Levels are only resolved from
+    // verified IPHS evidence (see the facility branch of orchestrateTurn).
     const hasResolvedFacilityLevel =
       (serviceContext?.appropriateIphsLevels.length || 0) > 0;
+    const hi = language.startsWith('hi');
+    const place = scope || (hi ? 'आपके इलाके' : 'your area');
+    const service = serviceContext?.requestedService;
+    const callFirst = hi
+      ? 'जाने से पहले अस्पताल को फ़ोन करके पूछ लें।'
+      : 'Please call the hospital before you go.';
+    // Availability at a named facility is never claimed, whatever the evidence.
+    const notSure = hi
+      ? `अभी ${service} होता है या नहीं, यह पक्का नहीं है।`
+      : `I do not know if they offer ${service} right now.`;
     const lowCostNotice = serviceContext?.lowCostPreference
-      ? language === 'hi'
-        ? `आपने कम खर्च वाला विकल्प पूछा है, इसलिए government/PM-JAY listed facilities को प्राथमिकता दी गई है। ${serviceContext.requestedService} की फीस या scheme coverage सुविधा से confirm कर लें।`
-        : `Because you asked for a lower-cost option, government and PM-JAY-listed facilities were prioritized. Confirm the ${serviceContext.requestedService} fee or scheme coverage with the facility.`
+      ? hi
+        ? `आपने कम खर्च पूछा था, इसलिए सरकारी और आयुष्मान योजना वाले अस्पताल पहले दिखाए हैं। ${service} का खर्च अस्पताल से पूछ लें।`
+        : `You asked for low cost, so government and Ayushman scheme hospitals are shown first. Ask the hospital about the ${service} cost.`
       : '';
     const summary = serviceContext
       ? results.length
-        ? usesDemoCapability
-          && matchedDemoFacilityIds.size === results.length
-          ? language === 'hi'
-            ? `${scope || 'इस क्षेत्र'} में ${serviceContext.requestedService} के ये परिणाम केवल VDA Pilot की synthetic, unverified facility mapping पर आधारित हैं। यह सरकारी या वास्तविक उपलब्धता की पुष्टि नहीं है; जाने से पहले सुविधा से जांच करें।`
-            : `These ${serviceContext.requestedService} results in ${scope || 'this area'} use synthetic, unverified VDA Pilot facility mappings. They are not government or real-world availability verification; confirm with the facility before travelling.`
+        ? usesDemoCapability && matchedDemoFacilityIds.size === results.length
+          ? hi
+            ? `${place} में ${service} के ये नाम सिर्फ़ पायलट की जानकारी हैं, पक्के नहीं। ${callFirst}`
+            : `These ${service} results in ${place} are pilot data only, not confirmed. ${callFirst}`
           : hasMixedServiceEvidence
-            ? language === 'hi'
-              ? `${matchedSourceFacilityIds.size ? `कुछ केंद्रों के source records में ${serviceContext.requestedService} दर्ज है।` : ''} ${matchedDemoFacilityIds.size ? 'कुछ केंद्र पायलट मैपिंग के आधार पर सुझाए गए हैं; इसकी पुष्टि नहीं है।' : ''} ${unmatchedFacilityCount ? `बाकी केंद्र ${hasIphsSuitableCandidates ? 'IPHS मानकों के अनुसार उपयुक्त स्तर' : 'चुने गए केंद्र स्तर'} के आधार पर सुझाए गए हैं।` : ''} किसी भी केंद्र पर अभी की उपलब्धता की पुष्टि नहीं है; जाने से पहले सुविधा की उपलब्धता की पुष्टि कर लें। ${lowCostNotice}`.trim()
-              : `${matchedSourceFacilityIds.size ? `Some facility records list ${serviceContext.requestedService}.` : ''} ${matchedDemoFacilityIds.size ? 'Some results rely on an unverified pilot mapping.' : ''} ${unmatchedFacilityCount ? `The remaining results are recommended because their ${hasIphsSuitableCandidates ? 'level is appropriate under IPHS standards' : 'selected facility level'} matches.` : ''} Current availability is not confirmed at any facility; call before travelling. ${lowCostNotice}`.trim()
+            ? [
+                matchedSourceFacilityIds.size
+                  ? hi
+                    ? `कुछ अस्पतालों के रिकॉर्ड में ${service} लिखा है।`
+                    : `Some hospital records list ${service}.`
+                  : '',
+                matchedDemoFacilityIds.size
+                  ? hi
+                    ? 'कुछ नाम सिर्फ़ पायलट की जानकारी से हैं, पक्के नहीं।'
+                    : 'Some names come only from pilot data and are not confirmed.'
+                  : '',
+                unmatchedFacilityCount
+                  ? hi
+                    ? `सरकारी मानकों के अनुसार, बाकी अस्पतालों में ${service} की सुविधा मिल सकती है।`
+                    : `As per government standards, the others may offer ${service}.`
+                  : '',
+                notSure,
+                callFirst,
+                lowCostNotice,
+              ]
+                .filter(Boolean)
+                .join(' ')
             : hasFacilitySpecificServiceEvidence
-            ? language === 'hi'
-              ? `${scope || 'इस क्षेत्र'} में नीचे दी गई सुविधाओं के source records में ${serviceContext.requestedService} से मेल खाने वाली सेवा दर्ज है। जाने से पहले सुविधा से उपलब्धता की पुष्टि करें।`
-              : `The source records for the facilities below list a service matching ${serviceContext.requestedService} in ${scope || 'this area'}. Confirm availability with the facility before travelling.`
-            : hasIphsSuitableCandidates
-              ? language === 'hi'
-                ? `IPHS मानकों के अनुसार ${serviceContext.requestedService} के लिए उपयुक्त केंद्र स्तर की ये सुविधाएँ ${scope || 'इस क्षेत्र'} में मिली हैं। यहाँ इस सेवा की अभी उपलब्धता की पुष्टि नहीं है; जाने से पहले सुविधा की उपलब्धता की पुष्टि कर लें। ${lowCostNotice}`.trim()
-                : `These facilities in ${scope || 'this area'} match the facility level appropriate for ${serviceContext.requestedService} under IPHS guidance. Current ${serviceContext.requestedService} availability at the named facilities is not verified in source data; confirm before travelling. ${lowCostNotice}`.trim()
+              ? hi
+                ? `${place} में इन अस्पतालों के रिकॉर्ड में ${service} लिखा है। ${callFirst}`
+                : `Records for these hospitals in ${place} list ${service}. ${callFirst}`
               : hasResolvedFacilityLevel
-                ? language === 'hi'
-                  ? `${serviceContext.requestedService} के लिए उपयुक्त स्तर की ये सुविधाएँ ${scope || 'इस क्षेत्र'} में मिली हैं। इन नामित सुविधाओं पर ${serviceContext.requestedService} की वर्तमान उपलब्धता verify नहीं है; जाने से पहले सुविधा से confirm कर लें। ${lowCostNotice}`.trim()
-                  : `These facilities in ${scope || 'this area'} match the resolved level for ${serviceContext.requestedService}. Current ${serviceContext.requestedService} availability at the named facilities is not verified; confirm before travelling. ${lowCostNotice}`.trim()
-              : language === 'hi'
-                ? `${scope || 'इस क्षेत्र'} में नीचे दी गई facilities आपकी location के आधार पर मिली हैं, लेकिन ${serviceContext.requestedService} के लिए उपयुक्त facility level या वर्तमान उपलब्धता source data में confirm नहीं हो सकी। जाने से पहले सुविधा से confirm कर लें।`
-                : `The facilities below match your location in ${scope || 'this area'}, but source data could not confirm an appropriate facility level or current ${serviceContext.requestedService} availability. Confirm with the facility before travelling.`
-        : language === 'hi'
-          ? serviceContext.iphsEvidenceStatus === 'UNAVAILABLE'
-            ? 'इस समय IPHS स्रोत की जाँच पूरी नहीं हो सकी। इसलिए अभी उपयुक्त सुविधा की सिफारिश नहीं दे सकता। कृपया थोड़ी देर बाद दोबारा कोशिश करें।'
-            : hasIphsSuitableCandidates
-            ? `${serviceContext.requestedService} के लिए IPHS guidelines के अनुसार उपयुक्त facility level की कोई सुविधा ${scope || 'इस क्षेत्र'} में नहीं मिली।`
-            : hasResolvedFacilityLevel
-              ? `${serviceContext.requestedService} के लिए selected facility level की कोई सुविधा ${scope || 'इस क्षेत्र'} में नहीं मिली।`
-            : `${scope || 'इस क्षेत्र'} में ${serviceContext.requestedService} की सेवा की पुष्टि नहीं हो सकी। जाने से पहले नज़दीकी अस्पताल से उपलब्धता पूछें।`
-          : serviceContext.iphsEvidenceStatus === 'UNAVAILABLE'
-            ? 'The IPHS source could not be checked right now, so I cannot recommend a suitable facility. Please try again shortly.'
-            : hasIphsSuitableCandidates
-            ? `No facility at an IPHS-suitable level for ${serviceContext.requestedService} was found in ${scope || 'this area'}.`
-            : hasResolvedFacilityLevel
-              ? `No facility at the selected level for ${serviceContext.requestedService} was found in ${scope || 'this area'}.`
-            : `I could not confirm ${serviceContext.requestedService} service in ${scope || 'this area'}. Please check availability with a nearby hospital before travelling.`
+                ? [
+                    // Clinical review standard message 10 ("सरकारी मानक" = IPHS).
+                    hi
+                      ? `सरकारी मानकों के अनुसार, ${place} के इन अस्पतालों में ${service} की सुविधा मिल सकती है। कृपया जाने से पहले सुविधा उपलब्ध होने की पुष्टि कर लें।`
+                      : `As per government standards, these hospitals in ${place} may offer ${service}. Please confirm ${service} is available before you go.`,
+                    lowCostNotice,
+                  ]
+                    .filter(Boolean)
+                    .join(' ')
+                : [
+                    hi
+                      ? `${place} में ये अस्पताल आपके पास हैं।`
+                      : `These hospitals are near you in ${place}.`,
+                    notSure,
+                    callFirst,
+                  ].join(' ')
+        : serviceContext.iphsEvidenceStatus === 'UNAVAILABLE'
+          ? hi
+            ? 'अभी अस्पतालों की जानकारी नहीं मिल पाई। कृपया थोड़ी देर बाद दोबारा कोशिश करें।'
+            : 'I could not get hospital information right now. Please try again in a little while.'
+          : hasResolvedFacilityLevel
+            ? hi
+              ? `${place} में ${service} के लिए सही अस्पताल नहीं मिला। आप पास का कोई दूसरा ज़िला बता सकते हैं।`
+              : `I could not find the right hospital for ${service} in ${place}. You can tell me another nearby district.`
+            : hi
+              ? `${place} में ${service} की जानकारी नहीं मिली। जाने से पहले पास के अस्पताल से पूछ लें।`
+              : `I could not find ${service} information for ${place}. Please ask a nearby hospital before you go.`
       : results.length
-        ? language === 'hi'
-          ? `${scope || 'इस क्षेत्र'} में उपलब्ध अस्पताल नीचे दिए गए हैं। सूचीबद्ध योजना के लिए पात्रता अलग से जांचनी होगी।`
-          : `Available hospitals in ${scope || 'this area'} are listed below. Eligibility for a listed scheme must be checked separately.`
-        : language === 'hi'
-          ? `मुझे ${scope || 'इस क्षेत्र'}${scheme ? ` और ${scheme}` : ''} के लिए कोई अस्पताल नहीं मिला। आप दूसरा जिला या क्षेत्र बता सकते हैं।`
-          : `I could not find a hospital for ${scope || 'this area'}${scheme ? ` and ${scheme}` : ''}. Please provide another district or area.`;
+        ? hi
+          ? `${place} में ये अस्पताल हैं। योजना से इलाज मिलेगा या नहीं, यह अस्पताल में पूछना होगा।`
+          : `These hospitals are in ${place}. Ask the hospital whether your scheme covers your treatment.`
+        : hi
+          ? `मुझे ${place}${scheme ? ` में ${scheme}` : ''} के लिए कोई अस्पताल नहीं मिला। आप दूसरा ज़िला बता सकते हैं।`
+          : `I could not find a hospital for ${place}${scheme ? ` and ${scheme}` : ''}. You can tell me another district.`;
     const emergencyConfirmed = results.some(
       ({ facility, iphsOverlay }) =>
         iphsOverlay?.emergencyCapability === 'SOURCE_REPORTED_CAPABLE' ||
@@ -774,96 +1437,89 @@ export class AiOrchestratorService implements IAiOrchestrator {
       emergency && results.length
         ? `${summary} ${
             emergencyConfirmed
-              ? language === 'hi'
-                ? 'Emergency-capable के रूप में source-reported सुविधाओं को प्राथमिकता दी गई है।'
-                : 'Facilities explicitly reported as emergency-capable are prioritized.'
-              : language === 'hi'
-                ? 'उपलब्ध रिकॉर्ड में emergency सुविधा की पुष्टि नहीं है।'
-                : 'Available records do not confirm emergency capability.'
+              ? hi
+                ? 'जिन अस्पतालों में इमरजेंसी सुविधा दर्ज है, वे पहले दिखाए हैं।'
+                : 'Hospitals with emergency care in their records are shown first.'
+              : hi
+                ? 'इन अस्पतालों में इमरजेंसी सुविधा पक्की नहीं है।'
+                : 'Emergency care at these hospitals is not confirmed.'
           }`
         : summary;
+    // Three nearby places keep the spoken answer short; facility_results keeps all.
     const cards = results
-      .slice(0, 5)
-      .map(
-        ({
-          facility,
-          schemes,
-          iphsOverlay,
-          demoCapabilities,
-          travelTimeMinutes,
-          distanceKm,
-        }) => {
-          const serviceCard = Boolean(serviceContext);
-          const government = /government|public|goi/i.test(
-            facility.hospitalType || '',
-          );
-          const schemeLabels = schemes.map((item) =>
-            /^pm-?jay$/i.test(item) ? 'PM-JAY listed' : `${item} listed`,
-          );
-          const serviceEvidenceLabel = !serviceCard
-            ? null
-            : matchedDemoFacilityIds.has(facility.id)
-              ? language === 'hi'
-                ? 'पायलट मैपिंग (अपुष्ट)'
-                : 'Pilot mapping (unverified)'
-              : matchedSourceFacilityIds.has(facility.id)
-                ? language === 'hi'
-                  ? 'सेवा स्रोत रिकॉर्ड में दर्ज'
-                  : 'Service listed in source record'
-                : hasIphsSuitableCandidates
-                  ? language === 'hi'
-                    ? 'IPHS मानकों के आधार पर उपयुक्त केंद्र स्तर'
-                    : 'Suitable facility level under IPHS standards'
-                  : language === 'hi'
-                    ? 'उपयुक्त केंद्र स्तर के आधार पर सुझाव'
-                    : 'Suggested by facility level';
-          return {
-            title: facility.name,
-            value: serviceCard
-              ? [facility.city, facility.district, facility.state]
-                  .filter(Boolean)
-                  .join(', ')
-              : [facility.locality, facility.district, facility.state]
-                  .filter(Boolean)
-                  .join(', '),
-            subtitle: serviceCard
-              ? [
-                  government ? 'Government health facility' : 'Private health facility',
-                  ...schemeLabels,
-                  serviceEvidenceLabel,
-                  facility.contactNumber ? `Phone: ${facility.contactNumber}` : null,
-                ]
-                  .filter(Boolean)
-                  .join('\n')
-              : [
-                  facility.hospitalType,
-                  iphsOverlay?.iphsLevel !== 'UNKNOWN'
-                    ? iphsOverlay?.iphsLevel
-                    : null,
-                  travelTimeMinutes != null ? `${travelTimeMinutes} min` : null,
-                  distanceKm != null ? `${distanceKm} km` : null,
-                  demoCapabilities.some(
-                    (capability) =>
-                      normalizedMatchedValues.has(
-                        capability.serviceCode.trim().toLocaleLowerCase('en-IN'),
-                      ) ||
-                      normalizedMatchedValues.has(
-                        capability.serviceName.trim().toLocaleLowerCase('en-IN'),
-                      ),
-                  )
-                    ? 'DEMO/PILOT · NOT VERIFIED'
-                    : null,
-                  schemes.length ? schemes.join(' · ') : null,
-                  facility.specialityCodes?.length
-                    ? facility.specialityCodes.join(', ')
-                    : null,
-                  facility.contactNumber || null,
-                ]
-                  .filter(Boolean)
-                  .join(' · '),
-          };
-        },
-      );
+      .slice(0, 3)
+      .map(({ facility, schemes, travelTimeMinutes, distanceKm }) => {
+        const government = /government|public|goi/i.test(
+          facility.hospitalType || '',
+        );
+        const evidence = !serviceContext
+          ? null
+          : matchedDemoFacilityIds.has(facility.id)
+            ? hi
+              ? 'पायलट जानकारी, पक्की नहीं'
+              : 'Pilot data, not confirmed'
+            : matchedSourceFacilityIds.has(facility.id)
+              ? hi
+                ? `रिकॉर्ड में ${service} लिखा है`
+                : `Records list ${service}`
+              : hasResolvedFacilityLevel
+                ? hi
+                  ? `${service} के लिए सही स्तर`
+                  : `Right level for ${service}`
+                : hi
+                  ? 'आपके इलाके में'
+                  : 'Near your area';
+        const area = [
+          facility.locality || facility.city,
+          facility.district,
+          facility.state,
+        ]
+          .filter((part): part is string => Boolean(part))
+          .filter(
+            (part, index, parts) =>
+              parts.findIndex(
+                (other) =>
+                  other.toLocaleLowerCase() === part.toLocaleLowerCase(),
+              ) === index,
+          )
+          .join(', ');
+        return {
+          title: facility.name,
+          value: area,
+          subtitle: [
+            hi
+              ? government
+                ? 'सरकारी अस्पताल'
+                : 'प्राइवेट अस्पताल'
+              : government
+                ? 'Government hospital'
+                : 'Private hospital',
+            ...schemes.map((item) =>
+              /^(?:pm-?jay|ayushman_bharat)$/i.test(item)
+                ? hi
+                  ? 'आयुष्मान योजना में शामिल'
+                  : 'Part of Ayushman Bharat (PM-JAY)'
+                : item.replace(/_/g, ' '),
+            ),
+            evidence,
+            distanceKm != null
+              ? hi
+                ? `${distanceKm} km दूर`
+                : `${distanceKm} km away`
+              : null,
+            travelTimeMinutes != null
+              ? hi
+                ? `${travelTimeMinutes} मिनट`
+                : `${travelTimeMinutes} min`
+              : null,
+            facility.contactNumber
+              ? `${hi ? 'फ़ोन' : 'Phone'}: ${facility.contactNumber}`
+              : null,
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        };
+      });
     return {
       summary: finalSummary,
       [language]: finalSummary,
@@ -948,7 +1604,8 @@ export class AiOrchestratorService implements IAiOrchestrator {
       serviceAvailability: serviceContext
         ? matchedDemoFacilityIds.size === results.length && results.length > 0
           ? 'DEMO_PILOT_NOT_VERIFIED'
-          : matchedSourceFacilityIds.size === results.length && results.length > 0
+          : matchedSourceFacilityIds.size === results.length &&
+              results.length > 0
             ? 'SOURCE_VERIFIED'
             : 'NOT_VERIFIED'
         : undefined,
@@ -1002,7 +1659,9 @@ export class AiOrchestratorService implements IAiOrchestrator {
           evidenceTerms.length === 0 ||
           evidenceTerms.some((term) => {
             const pattern = iphsServiceTermPattern(term);
-            return pattern ? new RegExp(pattern, 'i').test(chunk.content) : false;
+            return pattern
+              ? new RegExp(pattern, 'i').test(chunk.content)
+              : false;
           }),
       )
       .slice(0, evidenceTerms.length ? 8 : result.matchedChunks.length);
@@ -1044,43 +1703,47 @@ export class AiOrchestratorService implements IAiOrchestrator {
       const serviceSearch = IPHS_SERVICE_SEARCH_TERMS.find(({ service: key }) =>
         key.test(service.trim()),
       );
-      const evidenceTerms = (serviceSearch?.evidenceTerms || [service.trim()]).filter(
-        (term) => Boolean(iphsServiceTermPattern(term)),
-      );
+      const evidenceTerms = (
+        serviceSearch?.evidenceTerms || [service.trim()]
+      ).filter((term) => Boolean(iphsServiceTermPattern(term)));
       if (!evidenceTerms.length) {
         return { levels: [], sources: [], evidenceStatus: 'NOT_VERIFIED' };
       }
       const semantic = await this.knowledgeRetrievalService.retrieve(
-          serviceSearch?.query ||
-            `IPHS 2022 diagnostic service ${service} appropriate facility level essential desirable`,
-          {
-            tenantId,
-            intent: 'FACILITY_SERVICE_LEVEL',
-            language,
-            domain: 'healthcare_facilities',
-            category: 'iphs_2022_facility_standards',
-            state,
-            stateMatchMode: 'INCLUDING_GLOBAL',
-            maxResults: 8,
-            minRelevanceScore: 0.25,
-            maxContextLength: 12000,
-          },
+        serviceSearch?.query ||
+          `IPHS 2022 diagnostic service ${service} appropriate facility level essential desirable`,
+        {
+          tenantId,
+          intent: 'FACILITY_SERVICE_LEVEL',
+          language,
+          domain: 'healthcare_facilities',
+          category: 'iphs_2022_facility_standards',
+          state,
+          stateMatchMode: 'INCLUDING_GLOBAL',
+          maxResults: 8,
+          minRelevanceScore: 0.25,
+          maxContextLength: 12000,
+        },
       );
       if (semantic.providerType !== 'postgres_pgvector') {
         return { levels: [], sources: [], evidenceStatus: 'UNAVAILABLE' };
       }
       const semanticEvidence = this.iphs2022Evidence(semantic, evidenceTerms);
       const ensureServiceTable = /^(?:X-ray|MRI)$/i.test(service.trim());
-      const lexical = ensureServiceTable || semanticEvidence.matchedChunks.length < 3
-        ? await this.knowledgeRetrievalService.retrieveIphsServiceChunks?.(
-            evidenceTerms,
-            tenantId,
-            state,
-            ensureServiceTable ? 6 : 3,
-          ) || []
-        : [];
+      const lexical =
+        ensureServiceTable || semanticEvidence.matchedChunks.length < 3
+          ? (await this.knowledgeRetrievalService.retrieveIphsServiceChunks?.(
+              evidenceTerms,
+              tenantId,
+              state,
+              ensureServiceTable ? 6 : 3,
+            )) || []
+          : [];
       const seen = new Set<string>();
-      const matchedChunks = [...lexical, ...semanticEvidence.matchedChunks].filter(
+      const matchedChunks = [
+        ...lexical,
+        ...semanticEvidence.matchedChunks,
+      ].filter(
         (chunk) => !seen.has(chunk.chunkId) && Boolean(seen.add(chunk.chunkId)),
       );
       const retrieved = this.iphs2022Evidence(
@@ -1108,15 +1771,20 @@ export class AiOrchestratorService implements IAiOrchestrator {
       // incidental X-ray equipment mentions and does not assert availability
       // at any named facility.
       const xrayChcTable = /^X-ray$/i.test(service.trim())
-        ? retrieved.matchedChunks.find((chunk) =>
-            /IPHS 2022.*CHC/i.test(chunk.title) &&
-            /Diagnostic Services[\s\S]{0,800}Digital\s*x[\s-]*ray\s+E\b/i.test(chunk.content),
+        ? retrieved.matchedChunks.find(
+            (chunk) =>
+              /IPHS 2022.*CHC/i.test(chunk.title) &&
+              /Diagnostic Services[\s\S]{0,800}Digital\s*x[\s-]*ray\s+E\b/i.test(
+                chunk.content,
+              ),
           )
         : undefined;
       if (xrayChcTable) {
         return {
           levels: ['CHC'],
-          sources: retrieved.sources.filter((source) => source.title === xrayChcTable.title),
+          sources: retrieved.sources.filter(
+            (source) => source.title === xrayChcTable.title,
+          ),
           evidenceStatus: 'VERIFIED',
         };
       }
@@ -1323,26 +1991,85 @@ export class AiOrchestratorService implements IAiOrchestrator {
       return { isMismatch: false };
     }
 
-    const trimmedInput = inputText.normalize('NFKC').replace(/[’‘]/g, "'").replace(/\s+/g, ' ').trim();
+    const trimmedInput = inputText
+      .normalize('NFKC')
+      .replace(/[’‘]/g, "'")
+      .replace(/\s+/g, ' ')
+      .trim();
     if (!trimmedInput) {
       return { isMismatch: false };
     }
 
     // Common non-name words that follow self-declarations (e.g. "I am sick", "Main theek hoon")
     const nonNameWords = new Set([
-      'sick', 'ill', 'fine', 'okay', 'ok', 'good', 'well', 'better', 'worse',
-      'diabetic', 'pregnant', 'having', 'feeling', 'suffering', 'experiencing',
-      'taking', 'asking', 'here', 'back', 'new', 'not', 'tired', 'dizzy',
-      'worried', 'in', 'at', 'with', 'a', 'an', 'the', 'patient', 'user',
-      'theek', 'thik', 'bimar', 'beemar', 'pareshan', 'dard', 'khush', 'accha',
-      'achha', 'sahi', 'ready', 'calling', 'writing', 'typing', 'speaking',
-      'looking', 'searching', 'wondering', 'confused', 'doctor', 'dr',
-      'madad', 'help', 'koshish', 'aaya', 'aayi', 'bataiye', 'bol', 'boliye',
+      'sick',
+      'ill',
+      'fine',
+      'okay',
+      'ok',
+      'good',
+      'well',
+      'better',
+      'worse',
+      'diabetic',
+      'pregnant',
+      'having',
+      'feeling',
+      'suffering',
+      'experiencing',
+      'taking',
+      'asking',
+      'here',
+      'back',
+      'new',
+      'not',
+      'tired',
+      'dizzy',
+      'worried',
+      'in',
+      'at',
+      'with',
+      'a',
+      'an',
+      'the',
+      'patient',
+      'user',
+      'theek',
+      'thik',
+      'bimar',
+      'beemar',
+      'pareshan',
+      'dard',
+      'khush',
+      'accha',
+      'achha',
+      'sahi',
+      'ready',
+      'calling',
+      'writing',
+      'typing',
+      'speaking',
+      'looking',
+      'searching',
+      'wondering',
+      'confused',
+      'doctor',
+      'dr',
+      'madad',
+      'help',
+      'koshish',
+      'aaya',
+      'aayi',
+      'bataiye',
+      'bol',
+      'boliye',
     ]);
 
     const selfPatterns: RegExp[] = [
-      // Hindi / Hinglish: "Main Sunita hoon", "Mai Sunita hu", "Hum Sunita hain"
-      /\b(?:main|mein|mai|hum)\s+([a-zA-Z\u0900-\u097F]+(?:\s+[a-zA-Z\u0900-\u097F]+)?)\s+(?:hoon|hu|hun|hai|hain)\b/i,
+      // Hindi / Hinglish: "Main Sunita hoon", "Mai Sunita hu", "Hum Sunita hain".
+      // Not "mein ... hai": in Hinglish that is "in ... is" ("hospital mein ilaaj hota hai").
+      /\b(?:main|mein|mai)\s+([a-zA-Zऀ-ॿ]+(?:\s+[a-zA-Zऀ-ॿ]+)?)\s+(?:hoon|hu|hun)\b/i,
+      /\bhum\s+([a-zA-Zऀ-ॿ]+(?:\s+[a-zA-Zऀ-ॿ]+)?)\s+hain\b/i,
       // Hindi: "Mera naam Sunita hai", "Hamara naam Sunita hai"
       /\b(?:mera|hamara)\s+naam\s+(?:bhi\s+)?([a-zA-Z\u0900-\u097F]+(?:\s+[a-zA-Z\u0900-\u097F]+)?)\s+hai\b/i,
       // English: "I am Sunita", "I'm Sunita", "Im Sunita"
@@ -1362,9 +2089,13 @@ export class AiOrchestratorService implements IAiOrchestrator {
       /\b(?:main|mein|mai|hum)\s+[a-z]+(?:\s+[a-z]+)?\s+(?:nahi|nahin|nhi|nai)\s+([a-z]+(?:\s+[a-z]+)?)\s+(?:hoon|hu|hun|hain)\b/i,
       /मैं\s+[\u0900-\u097F]+(?:\s+[\u0900-\u097F]+)?\s+नहीं\s+([\u0900-\u097F]+(?:\s+[\u0900-\u097F]+)?)\s+हूँ/u,
     ];
-    let extractedClaim: string | null = correctionPatterns
-      .map((pattern) => trimmedInput.match(pattern)?.[1]?.trim())
-      .find((claim) => claim && !nonNameWords.has(claim.split(/\s+/)[0].toLowerCase())) || null;
+    let extractedClaim: string | null =
+      correctionPatterns
+        .map((pattern) => trimmedInput.match(pattern)?.[1]?.trim())
+        .find(
+          (claim) =>
+            claim && !nonNameWords.has(claim.split(/\s+/)[0].toLowerCase()),
+        ) || null;
     for (const pattern of selfPatterns) {
       if (extractedClaim) break;
       const match = trimmedInput.match(pattern);
@@ -1401,7 +2132,9 @@ export class AiOrchestratorService implements IAiOrchestrator {
     }
 
     // Check if any token of the claimed name matches any token of the authorized name
-    const matchesAuthorized = cleanClaim.some((token) => cleanAuth.includes(token));
+    const matchesAuthorized = cleanClaim.some((token) =>
+      cleanAuth.includes(token),
+    );
     if (matchesAuthorized) {
       return { isMismatch: false };
     }
@@ -1409,7 +2142,10 @@ export class AiOrchestratorService implements IAiOrchestrator {
     // Also handle honorifics / suffixes like "Sunita ji" -> "Sunita"
     const honorifics = new Set(['ji', 'shri', 'smt', 'mr', 'mrs', 'ms', 'dr']);
     const nonHonorificClaim = cleanClaim.filter((t) => !honorifics.has(t));
-    if (nonHonorificClaim.length > 0 && nonHonorificClaim.some((token) => cleanAuth.includes(token))) {
+    if (
+      nonHonorificClaim.length > 0 &&
+      nonHonorificClaim.some((token) => cleanAuth.includes(token))
+    ) {
       return { isMismatch: false };
     }
 
@@ -1447,32 +2183,54 @@ export class AiOrchestratorService implements IAiOrchestrator {
     // Prescription context is stored server-side and contains only the active
     // confirmed prescription's safe fields plus local reminder times. Raw input
     // resolves a minimal subset locally; it is never forwarded to Gemini.
-    let prescriptionContext = await this.prescriptionSessionContext.get(sessionId);
-    if (!prescriptionContext && /\b(?:medicine|medicines|medication|dawa|dawai|prescription)\b|दवा|दवाई|दवाइ|पर्ची/i.test(inputText)) {
-      prescriptionContext = await this.prescriptionSessionContext.currentVerifiedForPatient(sessionId, identity);
+    let prescriptionContext =
+      await this.prescriptionSessionContext.get(sessionId);
+    if (
+      !prescriptionContext &&
+      /\b(?:medicine|medicines|medication|dawa|dawai|prescription)\b|दवा|दवाई|दवाइ|पर्ची/i.test(
+        inputText,
+      )
+    ) {
+      prescriptionContext =
+        await this.prescriptionSessionContext.currentVerifiedForPatient(
+          sessionId,
+          identity,
+        );
     }
-    const prescriptionResponseLanguage = prescriptionContext?.pendingMedicationSafetyLanguage
-      || language
-      || (prescriptionContextRequired ? await this.languageProvider.detectLanguage(inputText) : undefined)
-      || identity.preferredLanguage
-      || 'en';
+    const prescriptionResponseLanguage =
+      prescriptionContext?.pendingMedicationSafetyLanguage ||
+      language ||
+      (prescriptionContextRequired
+        ? await this.languageProvider.detectLanguage(inputText)
+        : undefined) ||
+      identity.preferredLanguage ||
+      'en';
     // A missed-dose selection is valid for the immediately following turn only.
     // The loaded value remains available to this turn's resolver, then is cleared.
     if (prescriptionContext?.pendingMedicationSafety) {
-      await this.prescriptionSessionContext.clearPendingMedicationSafety(sessionId);
+      await this.prescriptionSessionContext.clearPendingMedicationSafety(
+        sessionId,
+      );
     }
-    const prescriptionContextResolution = this.resolvePrescriptionContextQuestion(
-      prescriptionContext,
-      inputText,
-      prescriptionResponseLanguage,
-    );
-    const labReportQuestion = /(?:\b(?:sugar|glucose|hba1c)\b|शुगर|ग्लूकोज|एच\s*बी\s*ए\s*वन\s*सी)/i.test(inputText)
-      && /(?:\b(?:report|result|value|reading|explain|understand|mean)\b|रिपोर्ट|जांच|जाँच|समझ|नतीजा|परिणाम|मान)/i.test(inputText)
-      && prescriptionContextResolution?.kind !== 'CLINICAL_MEDICATION_DECISION';
+    const prescriptionContextResolution =
+      this.resolvePrescriptionContextQuestion(
+        prescriptionContext,
+        inputText,
+        prescriptionResponseLanguage,
+      );
+    const labReportQuestion =
+      /(?:\b(?:sugar|glucose|hba1c)\b|शुगर|ग्लूकोज|एच\s*बी\s*ए\s*वन\s*सी)/i.test(
+        inputText,
+      ) &&
+      /(?:\b(?:report|result|value|reading|explain|understand|mean)\b|रिपोर्ट|जांच|जाँच|समझ|नतीजा|परिणाम|मान)/i.test(
+        inputText,
+      ) &&
+      prescriptionContextResolution?.kind !== 'CLINICAL_MEDICATION_DECISION';
     const isPrescriptionContextTurn = Boolean(prescriptionContextResolution);
-    const isPrescriptionContextGenerationTurn = prescriptionContextResolution?.kind === 'MEDICINE_EDUCATION'
-      || prescriptionContextResolution?.kind === 'INVESTIGATION_EDUCATION'
-      || prescriptionContextResolution?.kind === 'MEDICINE_FOR_BP';
+    const isPrescriptionContextGenerationTurn =
+      prescriptionContextResolution?.kind === 'MEDICINE_EDUCATION' ||
+      prescriptionContextResolution?.kind === 'INVESTIGATION_EDUCATION' ||
+      prescriptionContextResolution?.kind === 'MEDICINE_FOR_BP';
     const isPrescriptionGuidelineTurn = false;
     const outboundQuestion = isPrescriptionContextGenerationTurn
       ? prescriptionContextResolution.question
@@ -1517,16 +2275,17 @@ export class AiOrchestratorService implements IAiOrchestrator {
     // ─── LangSmith Turn Tracing Context ─────────────────────────────────────
     // Prescription-context turns do not create external traces: the session
     // context and original patient input must remain inside the VDA boundary.
-    const traceContext: TurnTraceContext | null = this.tracer && !isPrescriptionContextTurn && !prescriptionContextRequired
-      ? await this.tracer.startTurn({
-          sessionId,
-          correlationId,
-          inputText: resolvedInputText,
-          language,
-          tenantId: identity.tenantId,
-          externalId: identity.externalId,
-        })
-      : null;
+    const traceContext: TurnTraceContext | null =
+      this.tracer && !isPrescriptionContextTurn && !prescriptionContextRequired
+        ? await this.tracer.startTurn({
+            sessionId,
+            correlationId,
+            inputText: resolvedInputText,
+            language,
+            tenantId: identity.tenantId,
+            externalId: identity.externalId,
+          })
+        : null;
 
     // ─── Step 1: Deterministic pre-generation safety gate ───────────────────
     // Safety is intentionally evaluated before normal Gemini classification,
@@ -1565,6 +2324,12 @@ export class AiOrchestratorService implements IAiOrchestrator {
         },
         { latencyMs: 0, executed: false },
       );
+    }
+
+    // Clinical review: answer in a language the patient explicitly asks for.
+    const askedLanguage = explicitlyRequestedLanguage(inputText);
+    if (askedLanguage && !requestLanguage?.startsWith(askedLanguage)) {
+      requestLanguage = askedLanguage;
     }
 
     // Safety always sees the original input locally, before any sanitized
@@ -1675,9 +2440,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
               ...(emergencyCards.length ? { cards: emergencyCards } : {}),
               ...(emergencyFacilities.length
                 ? {
-                    emergency_capability_note: requestLanguage.startsWith(
-                      'hi',
-                    )
+                    emergency_capability_note: requestLanguage.startsWith('hi')
                       ? 'उपलब्ध रिकॉर्ड में emergency सुविधा की पुष्टि नहीं है।'
                       : 'Available records do not confirm emergency capability.',
                   }
@@ -1707,28 +2470,43 @@ export class AiOrchestratorService implements IAiOrchestrator {
 
     // Identity claims are checked after clinical safety, before any patient
     // prescription facts or lab records can be returned.
-    const identityCheck = this.detectIdentityMismatch(inputText, authorizedPatientName);
+    const identityCheck = this.detectIdentityMismatch(
+      inputText,
+      authorizedPatientName,
+    );
     if (identityCheck.isMismatch) {
-      this.logger.warn(`[AiOrchestrator] Identity mismatch blocked: session=${sessionId}`);
-      const identityResponseHindi = requestLanguage.startsWith('hi')
-        || /\b(?:main|mein|mai|hum)\b|[\u0900-\u097F]/i.test(inputText);
+      this.logger.warn(
+        `[AiOrchestrator] Identity mismatch blocked: session=${sessionId}`,
+      );
+      const identityResponseHindi = requestLanguage.startsWith('hi');
       const message = identityResponseHindi
-        ? `अभी ${identityCheck.authorizedName} की प्रोफ़ाइल खुली है। ${identityCheck.claimedName} की जानकारी देखने के लिए उनकी सत्यापित प्रोफ़ाइल में जाएँ।`
-        : `You're currently using ${identityCheck.authorizedName}'s profile. To access ${identityCheck.claimedName}'s health information, please switch to ${identityCheck.claimedName}'s verified profile.`;
+        ? `अभी ${identityCheck.authorizedName} की प्रोफ़ाइल खुली है। ${identityCheck.claimedName} की जानकारी देखने के लिए ऐप में उनकी प्रोफ़ाइल चुनें।`
+        : `You're currently using ${identityCheck.authorizedName}'s profile. To access ${identityCheck.claimedName}'s health information, please switch to ${identityCheck.claimedName}'s profile in the app.`;
       const content = {
         summary: message,
         [requestLanguage]: message,
-        actions: [{ label: identityResponseHindi ? 'प्रोफ़ाइल बदलें' : 'Switch Profile', action: 'SWITCH_PROFILE' }],
+        actions: [
+          {
+            label: identityResponseHindi ? 'प्रोफ़ाइल बदलें' : 'Switch Profile',
+            action: 'SWITCH_PROFILE',
+          },
+        ],
       };
       if (traceContext && this.tracer) {
         await this.tracer.endTurn(traceContext, {
-          responseType: 'text', content, intent: IntentType.UNKNOWN,
-          selectedAgent: 'rbac-identity-guard', safetyStatus: 'IDENTITY_ACCESS_RESTRICTED',
+          responseType: 'text',
+          content,
+          intent: IntentType.UNKNOWN,
+          selectedAgent: 'rbac-identity-guard',
+          safetyStatus: 'IDENTITY_ACCESS_RESTRICTED',
         });
       }
       return {
-        responseType: 'text', content, intent: IntentType.UNKNOWN,
-        selectedAgent: 'rbac-identity-guard', safetyStatus: 'IDENTITY_ACCESS_RESTRICTED',
+        responseType: 'text',
+        content,
+        intent: IntentType.UNKNOWN,
+        selectedAgent: 'rbac-identity-guard',
+        safetyStatus: 'IDENTITY_ACCESS_RESTRICTED',
         latencyMs: Date.now() - startTime,
       };
     }
@@ -1737,30 +2515,103 @@ export class AiOrchestratorService implements IAiOrchestrator {
     // ASHA NCD module. Sources: NHS fever in adults and CDC A1C testing.
     // This runs only after the safety and identity gates; report values and
     // prescription questions keep their existing authorized routes.
-    const educationTopic = !prescriptionId && !prescriptionContextResolution
-      ? basicEducationTopic(inputText, authorizedPatient?.age) : null;
+    const educationTopic =
+      !prescriptionId && !prescriptionContextResolution
+        ? basicEducationTopic(inputText, authorizedPatient?.age)
+        : null;
     const hindiEducation = requestLanguage.startsWith('hi');
     const feverEducation = educationTopic === 'FEVER';
     const hba1cEducation = educationTopic === 'HBA1C';
     if (feverEducation || hba1cEducation) {
       const summary = feverEducation
-        ? (hindiEducation
+        ? hindiEducation
           ? 'बुखार में आराम करें, पानी या दूसरे तरल लेते रहें और तापमान जाँचें।'
-          : 'If you have a fever, rest, drink fluids, and check your temperature.')
-        : (hindiEducation
+          : 'If you have a fever, rest, drink fluids, and check your temperature.'
+        : hindiEducation
           ? 'HbA1c खून की जाँच है। यह पिछले लगभग 2–3 महीनों की औसत शुगर दिखाती है, आज की शुगर नहीं।'
-          : 'HbA1c is a blood test showing average blood sugar over roughly the past 2–3 months, not today’s reading.');
+          : 'HbA1c is a blood test showing average blood sugar over roughly the past 2–3 months, not today’s reading.';
       const details = feverEducation
-        ? (hindiEducation
-          ? ['बुखार घर की देखभाल के बाद भी ठीक न हो या बढ़े, तो डॉक्टर से बात करें।', 'बुखार कब से है और तापमान कितना है?']
-          : ['If the fever is getting worse or not improving with home care, speak to a clinician.', 'How long have you had a fever, and what is your temperature?'])
-        : (hindiEducation
-          ? ['आपकी रिपोर्ट का मान देखे बिना आपका परिणाम नहीं बता सकता।', 'रिपोर्ट में HbA1c का मान है तो उसे साझा करें; उसके आधार पर डॉक्टर से अर्थ समझें।']
-          : ['I cannot describe your personal result without seeing its verified value.', 'If you have an HbA1c report, share its value and discuss what it means for you with a clinician.']);
-      return { responseType: 'text', content: { summary, [requestLanguage]: summary,
-        sections: [{ bullets: details }], spoken_summary: `${summary} ${details[0]}` },
-        intent: feverEducation ? IntentType.GENERAL_HEALTH_QUERY : IntentType.LAB_RESULT_QUERY,
-        selectedAgent: 'general-health-education', safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
+        ? hindiEducation
+          ? [
+              'बुखार घर की देखभाल के बाद भी ठीक न हो या बढ़े, तो डॉक्टर से बात करें।',
+              'बुखार कब से है और तापमान कितना है?',
+            ]
+          : [
+              'If the fever is getting worse or not improving with home care, speak to a clinician.',
+              'How long have you had a fever, and what is your temperature?',
+            ]
+        : hindiEducation
+          ? [
+              'आपकी रिपोर्ट देखे बिना मैं आपका नतीजा नहीं बता सकती।',
+              'रिपोर्ट में HbA1c का मान है तो उसे साझा करें; उसके आधार पर डॉक्टर से अर्थ समझें।',
+            ]
+          : [
+              'I cannot describe your personal result without seeing its verified value.',
+              'If you have an HbA1c report, share its value and discuss what it means for you with a clinician.',
+            ];
+      return {
+        responseType: 'text',
+        content: {
+          summary,
+          [requestLanguage]: summary,
+          sections: [{ bullets: details }],
+        },
+        intent: feverEducation
+          ? IntentType.GENERAL_HEALTH_QUERY
+          : IntentType.LAB_RESULT_QUERY,
+        selectedAgent: 'general-health-education',
+        safetyStatus: 'SAFE',
+        latencyMs: Date.now() - startTime,
+      };
+    }
+
+    // Clinically approved fixed answers (see approved-answers.ts), after the
+    // safety and identity gates; prescription questions keep their routes.
+    const approvedTopic =
+      !prescriptionId && !prescriptionContextResolution
+        ? approvedAnswerTopic(inputText)
+        : null;
+    const bmi =
+      !prescriptionId && !prescriptionContextResolution
+        ? bmiAnswer(inputText)
+        : null;
+    if (approvedTopic || bmi) {
+      const lang = hindiEducation ? 'hi' : 'en';
+      const answer = {
+        ...(bmi ? bmi[lang] : APPROVED_ANSWERS[approvedTopic!][lang]),
+      };
+      // Round 3: free dialysis in Faridabad is at B K Civil Hospital.
+      if (
+        approvedTopic === 'FREE_TESTS' &&
+        /faridabad|फरीदाबाद|फ़रीदाबाद/iu.test(
+          [
+            inputText,
+            (await this.facilityLocation(sessionId, inputText, requestLanguage))
+              .district ?? '',
+          ].join(' '),
+        )
+      )
+        answer.bullets = [...answer.bullets, FARIDABAD_DIALYSIS[lang]];
+      return {
+        responseType: 'text',
+        content: {
+          summary: answer.summary,
+          [requestLanguage]: answer.summary,
+          sections: [
+            { bullets: answer.bullets },
+            ...(answer.link
+              ? [{ body: `${answer.link.text}\n${answer.link.url}` }]
+              : []),
+          ],
+        },
+        intent:
+          approvedTopic === 'FREE_MEDICINES' || approvedTopic === 'FREE_TESTS'
+            ? IntentType.GOVERNMENT_SCHEME_QUERY
+            : IntentType.GENERAL_HEALTH_QUERY,
+        selectedAgent: 'approved-answer',
+        safetyStatus: 'SAFE',
+        latencyMs: Date.now() - startTime,
+      };
     }
 
     // Prescription-scoped treatment decisions are resolved locally and
@@ -1768,10 +2619,14 @@ export class AiOrchestratorService implements IAiOrchestrator {
     // generation. Raw prescription questions therefore retain the existing
     // privacy boundary while no longer receiving missed-dose advice.
     if (
-      prescriptionContextResolution?.kind ===
-      'CLINICAL_MEDICATION_DECISION'
+      prescriptionContextResolution?.kind === 'CLINICAL_MEDICATION_DECISION'
     ) {
-      const content = this.clinicalDeflectionContent(requestLanguage);
+      const content = this.clinicalDeflectionContent(
+        requestLanguage,
+        false,
+        prescriptionContextResolution.decision,
+        inputText,
+      );
       await this.auditService.logEvent({
         tenantId: identity.tenantId,
         subjectAbhaRef: identity.externalId,
@@ -1792,27 +2647,35 @@ export class AiOrchestratorService implements IAiOrchestrator {
       };
     }
 
-    if (prescriptionContextResolution?.kind === 'ADHERENCE_STATUS'
-      || prescriptionContextResolution?.kind === 'REFILL_SUPPORT') {
-      const hindi = requestLanguage.startsWith('hi') || /[\u0900-\u097f]|\b(?:meri|mera|maine|mujhe|kaunsi|dikhao|galti|khatam|kal)\b/i.test(inputText);
-      const message = prescriptionContextResolution.kind === 'REFILL_SUPPORT'
-        ? (hindi
-          ? 'दवा खत्म हो रही है तो पर्ची लेकर डॉक्टर, CHO या ANM से रिफिल के लिए संपर्क करें। बिना सलाह दवा बंद या खुराक न बदलें।'
-          : 'If your medicine is running out, contact your doctor, CHO, or ANM with your prescription for a refill. Do not stop or change the dose on your own.')
-        : prescriptionContextResolution.question === 'CORRECTION'
-          ? /\b(?:yesterday|kal)\b|कल/i.test(inputText)
-            ? (hindi
-              ? 'कल का रिकॉर्ड दवाइयाँ टैब से अभी नहीं बदल सकता। मैंने रिकॉर्ड नहीं बदला है।'
-              : 'The Medicines tab cannot correct yesterday’s record yet. I have not changed it.')
-            : (hindi
-              ? 'आज की उसी दवा और समय के लिए दवाइयाँ टैब में “नहीं ली” चुनें। मैंने अभी रिकॉर्ड नहीं बदला है।'
-              : 'For today’s dose, select “Not taken” in Medicines for the same medicine and time. I have not changed the record.')
-          : (hindi
-            ? 'लेने या छूटने का रिकॉर्ड इस फोन के दवाइयाँ टैब में है; यहाँ सर्वर पर इसकी पुष्टि नहीं हो सकती। कृपया उसी टैब में स्थिति देखें।'
-            : 'Dose tracking is stored in Medicines on this device. I cannot verify its current status from the server; please check that tab.');
-      return { responseType: 'text', content: { summary: message, [requestLanguage]: message },
-        intent: IntentType.ADHERENCE_QUERY, selectedAgent: 'medication-adherence',
-        safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
+    if (
+      prescriptionContextResolution?.kind === 'ADHERENCE_STATUS' ||
+      prescriptionContextResolution?.kind === 'REFILL_SUPPORT'
+    ) {
+      const hindi = requestLanguage.startsWith('hi');
+      const message =
+        prescriptionContextResolution.kind === 'REFILL_SUPPORT'
+          ? hindi
+            ? 'दवा खत्म हो रही है तो अपनी पर्ची लेकर डॉक्टर या कम्युनिटी हेल्थ ऑफिसर (CHO) से दवा लें। अपने मन से दवा न बंद करें और न ही बदलें।'
+            : 'If your medicine is running out, take your prescription to your doctor or Community Health Officer (CHO) to get more. Do not stop or change your medicine on your own.'
+          : prescriptionContextResolution.question === 'CORRECTION'
+            ? /\b(?:yesterday|kal)\b|कल/i.test(inputText)
+              ? hindi
+                ? 'कल का रिकॉर्ड अभी बदला नहीं जा सकता। मैंने कुछ नहीं बदला है।'
+                : 'Yesterday’s record cannot be changed yet. I have not changed anything.'
+              : hindi
+                ? 'आज की दवा के लिए “दवाइयाँ” में उसी दवा और समय पर “नहीं ली” चुनें। मैंने अभी कुछ नहीं बदला है।'
+                : 'For today’s dose, open Medicines and choose “Not taken” for that medicine and time. I have not changed anything.'
+            : hindi
+              ? 'दवा लेने या छूटने की जानकारी आपके फ़ोन में “दवाइयाँ” वाले हिस्से में है। कृपया वहाँ देखें।'
+              : 'Your taken and missed doses are saved in Medicines on this phone. Please check there.';
+      return {
+        responseType: 'text',
+        content: { summary: message, [requestLanguage]: message },
+        intent: IntentType.ADHERENCE_QUERY,
+        selectedAgent: 'medication-adherence',
+        safetyStatus: 'SAFE',
+        latencyMs: Date.now() - startTime,
+      };
     }
 
     // Multi-prescription verification and update pipeline
@@ -1820,7 +2683,10 @@ export class AiOrchestratorService implements IAiOrchestrator {
     if (this.prescriptions && authorizedPatientRef) {
       try {
         allPatientPrescriptions = await this.prescriptions.find({
-          where: { tenantId: identity.tenantId, patientRef: authorizedPatientRef },
+          where: {
+            tenantId: identity.tenantId,
+            patientRef: authorizedPatientRef,
+          },
           order: { createdAt: 'DESC' },
         });
       } catch (err) {
@@ -1835,76 +2701,55 @@ export class AiOrchestratorService implements IAiOrchestrator {
       Boolean(previousVerifiedPrescription) &&
       Boolean(latestPrescriptionRecord) &&
       (latestPrescriptionRecord.verificationStatus === 'PENDING_VERIFICATION' ||
-        latestPrescriptionRecord.verificationStatus === 'UNVERIFIED' ||
-        latestPrescriptionRecord.verificationStatus === 'SUBMITTED');
+        latestPrescriptionRecord.verificationStatus === 'UNVERIFIED');
     const isFirstTimePending =
       !previousVerifiedPrescription &&
       Boolean(latestPrescriptionRecord) &&
       (latestPrescriptionRecord.verificationStatus === 'PENDING_VERIFICATION' ||
-        latestPrescriptionRecord.verificationStatus === 'UNVERIFIED' ||
-        latestPrescriptionRecord.verificationStatus === 'SUBMITTED');
+        latestPrescriptionRecord.verificationStatus === 'UNVERIFIED');
 
-    const isHinglishPrescription =
-      !/[\u0900-\u097f]/.test(inputText) &&
-      (requestLanguage === 'hi-Latn' ||
-        requestLanguage === 'hinglish' ||
-        /\b(?:meri|mera|mere|mujhe|batao|dikhao|dawa|dawai|dawayio|parchi|chal|rahi|hai|kripya|kaunsi|kaun|kab|upload)\b/i.test(
-          inputText,
-        ));
-    const isHindiPrescription =
-      (requestLanguage.startsWith('hi') || /[\u0900-\u097f]/.test(inputText)) &&
-      !isHinglishPrescription;
-    const effectiveRxLanguage = isHindiPrescription
-      ? 'hi'
-      : isHinglishPrescription
-        ? 'hi-Latn'
-        : requestLanguage;
+    // Replies follow the profile language; Hinglish questions get Hindi.
+    const isHindiPrescription = requestLanguage.startsWith('hi');
+    const firstPendingMessage = isHindiPrescription
+      ? 'आपकी पर्ची की जाँच कम्युनिटी हेल्थ ऑफिसर (CHO) कर रहे हैं। जाँच पूरी होने के बाद आपकी दवाइयाँ यहाँ दिखेंगी।'
+      : 'The Community Health Officer (CHO) is checking your prescription. Your medicines will show here once it is approved.';
+    // Clinical review: never tell the patient to keep taking the old medicines;
+    // they may already have a new plan from another doctor.
+    const newPendingMessage = isHindiPrescription
+      ? 'आपकी नई पर्ची पहले वाली से अलग है। इसे यहाँ केवल कम्युनिटी हेल्थ ऑफिसर (CHO) की मंज़ूरी के बाद ही अपडेट किया जा सकता है। कम्युनिटी हेल्थ ऑफिसर (CHO) अभी पर्ची की जाँच कर रहे हैं। कृपया कुछ समय बाद दोबारा कोशिश करें। तब तक दवा के बारे में अपने नजदीकी डॉक्टर या CHO से पूछें।'
+      : 'Your new prescription is different from the old one. It can be updated here only after the Community Health Officer (CHO) approves it. The CHO is checking it now. Please try again after some time. Until then, ask your nearest doctor or CHO about your medicines.';
 
     if (prescriptionContextResolution?.kind === 'PRESCRIPTION_STATUS') {
+      const status = latestPrescriptionRecord?.verificationStatus;
       const message = !latestPrescriptionRecord
-        ? (isHindiPrescription
+        ? isHindiPrescription
           ? 'अभी आपकी कोई पर्ची अपलोड नहीं हुई है।'
-          : isHinglishPrescription
-            ? 'Abhi aapki koi parchi upload nahi hui hai.'
-            : 'You have not uploaded a prescription yet.')
+          : 'You have not uploaded a prescription yet.'
         : hasMultipleWithNewPending
-          ? (isHindiPrescription
-            ? 'आपके द्वारा हाल ही में अपलोड की गई नई पर्ची पहले से अलग है। नई दवाइयों को जोड़ने या बदलने के लिए CHO (कम्युनिटी हेल्थ ऑफिसर) द्वारा समीक्षा की जा रही है। जब तक नई पर्ची मंज़ूर नहीं हो जाती, कृपया डॉक्टर द्वारा पहले से बताई गई मान्य दवाइयाँ ही लें।'
-            : isHinglishPrescription
-              ? 'Aapke dwara haal hi mein upload ki gayi nayi parchi pehle se alag hai. Nayi dawaiyon ko jodne ya badalne ke liye CHO (Community Health Officer) dwara review kiya ja raha hai. Jab tak nayi parchi approve nahi ho jaati, kripya doctor dwara pehle se batayi gayi maanya dawaiyan hi lein.'
-              : 'The new prescription you recently uploaded is different from your previously approved one. It is currently being reviewed by the CHO (Community Health Officer) before new medicines can be updated. Until the new prescription is approved, please continue taking your previously prescribed and verified medicines.')
+          ? newPendingMessage
           : isFirstTimePending
-            ? (isHindiPrescription
-              ? 'अभी आपकी पर्ची की CHO (कम्युनिटी हेल्थ ऑफिसर) द्वारा पुष्टि होना बाकी है। पर्ची मंज़ूर होने के बाद ही आपकी दवाइयाँ यहाँ उपलब्ध होंगी।'
-              : isHinglishPrescription
-                ? 'Abhi aapki parchi ki CHO (Community Health Officer) dwara pushti hona baaki hai. Parchi approve hone ke baad hi aapki dawaiyan yahan available hongi.'
-                : 'Your prescription is currently awaiting verification by the CHO (Community Health Officer). Your medicines will appear here once it has been approved.')
-            : latestPrescriptionRecord.verificationStatus === 'VERIFIED'
-              ? (isHindiPrescription
-                ? 'आपकी पर्ची की जाँच पूरी हो गई है और दवाइयाँ सत्यापित हैं।'
-                : isHinglishPrescription
-                  ? 'Aapki parchi verify ho chuki hai aur dawaiyan save hain.'
-                  : 'Your prescription has been verified and your medicines are ready.')
-              : latestPrescriptionRecord.verificationStatus === 'REJECTED'
-                ? (isHindiPrescription
-                  ? 'आपकी पर्ची मंज़ूर नहीं हुई है। कृपया स्वास्थ्य केंद्र या CHO से संपर्क करें या डॉक्टर की पर्ची दोबारा अपलोड करें।'
-                  : isHinglishPrescription
-                    ? 'Aapki parchi approve nahi hui hai. Kripya health centre ya CHO se contact karein ya doctor ki parchi dobara upload karein.'
-                    : 'Your prescription was not approved. Please consult your health centre / CHO or upload your doctor’s prescription again.')
-                : latestPrescriptionRecord.verificationStatus === 'NEEDS_RESUBMISSION'
-                  ? (isHindiPrescription
-                    ? 'आपकी पर्ची की फोटो साफ़ नहीं आई है। कृपया डॉक्टर की पर्ची की स्पष्ट फोटो दोबारा अपलोड करें।'
-                    : isHinglishPrescription
-                      ? 'Aapki parchi ki photo saaf nahi aayi hai. Kripya doctor ki parchi ki clear photo dobara upload karein.'
-                      : 'A clearer photo of your doctor’s prescription is needed. Please take a clear picture and re-upload it.')
-                  : (isHindiPrescription
+            ? firstPendingMessage
+            : status === 'VERIFIED'
+              ? isHindiPrescription
+                ? 'आपकी पर्ची की जाँच पूरी हो गई है। आपकी दवाइयाँ तैयार हैं।'
+                : 'Your prescription has been checked and your medicines are ready.'
+              : status === 'REJECTED'
+                ? isHindiPrescription
+                  ? 'आपकी पर्ची मंज़ूर नहीं हुई। कृपया डॉक्टर की पर्ची दोबारा अपलोड करें, या स्वास्थ्य केंद्र पर बात करें।'
+                  : 'Your prescription was not approved. Please upload your doctor’s prescription again, or talk to your health centre.'
+                : status === 'NEEDS_RESUBMISSION'
+                  ? isHindiPrescription
+                    ? 'पर्ची की फ़ोटो साफ़ नहीं आई। कृपया पर्ची की साफ़ फ़ोटो दोबारा भेजें।'
+                    : 'The prescription photo was not clear. Please send a clear photo again.'
+                  : isHindiPrescription
                     ? 'आपकी पर्ची की जाँच अभी बाकी है।'
-                    : isHinglishPrescription
-                      ? 'Aapki parchi ki jaanch abhi baaki hai.'
-                      : 'Your prescription is still awaiting review.');
+                    : 'Your prescription is still waiting to be checked.';
       return {
         responseType: 'text',
-        content: { summary: message, [requestLanguage]: message, spoken_summary: message },
+        content: {
+          summary: message,
+          [requestLanguage]: message,
+        },
         intent: IntentType.PRESCRIPTION_QUERY,
         selectedAgent: 'prescription-status',
         safetyStatus: 'SAFE',
@@ -1913,48 +2758,13 @@ export class AiOrchestratorService implements IAiOrchestrator {
     }
 
     if (prescriptionContextResolution?.kind === 'MEDICINE_LIST') {
+      // The old list is not shown as an instruction to keep taking it.
       if (hasMultipleWithNewPending) {
-        const verifiedMedicationsSource =
-          prescriptionContext?.medicines?.length
-            ? prescriptionContext.medicines
-            : (previousVerifiedPrescription?.verifiedMedications || []).map((m) => ({
-                name: m.name,
-                strength: m.strength,
-                frequency: m.frequency,
-                timingInstruction: m.timingInstruction,
-                administrationInstruction: m.administrationInstruction,
-              }));
-        const bullets = verifiedMedicationsSource.map((med) =>
-          this.patientPrescriptionMedicineLine(med, isHindiPrescription, isHinglishPrescription),
-        );
-        const summary = isHindiPrescription
-          ? 'आपके द्वारा हाल ही में अपलोड की गई नई पर्ची पहले से अलग है। नई दवाइयों को जोड़ने या बदलने के लिए CHO (कम्युनिटी हेल्थ ऑफिसर) द्वारा समीक्षा की जा रही है। जब तक नई पर्ची मंज़ूर नहीं हो जाती, कृपया डॉक्टर द्वारा पहले से बताई गई मान्य दवाइयाँ ही लें:'
-          : isHinglishPrescription
-            ? 'Aapke dwara haal hi mein upload ki gayi nayi parchi pehle se alag hai. Nayi dawaiyon ko jodne ya badalne ke liye CHO (Community Health Officer) dwara review kiya ja raha hai. Jab tak nayi parchi approve nahi ho jaati, kripya doctor dwara pehle se batayi gayi maanya dawaiyan hi lein:'
-            : 'The new prescription you recently uploaded is different from your previously approved one. It is currently being reviewed by the CHO (Community Health Officer) before new medicines can be updated. Until the new prescription is approved, please continue taking your previously prescribed and verified medicines:';
-        const closing = isHindiPrescription
-          ? 'अगर आप चाहें, तो मैं आपकी दवाइयों के सही समय पर आपको याद दिला सकती हूँ।'
-          : isHinglishPrescription
-            ? 'Agar aap chahein, toh main aapki dawaiyon ke sahi samay par aapko yaad dila sakti hoon.'
-            : 'If you would like, I can remind you when it is time to take your medicines.';
-        const spoken_summary = `${summary} ${bullets.join('. ')}. ${closing}`;
         return {
           responseType: 'text',
           content: {
-            summary,
-            [effectiveRxLanguage]: summary,
-            spoken_summary,
-            sections: [
-              {
-                title: isHindiPrescription
-                  ? 'पहले से मान्य दवाइयाँ'
-                  : isHinglishPrescription
-                    ? 'Pehle se maanya dawaiyan'
-                    : 'Previously verified medicines',
-                bullets,
-              },
-              { body: closing },
-            ],
+            summary: newPendingMessage,
+            [requestLanguage]: newPendingMessage,
           },
           intent: IntentType.MEDICATION_QUERY,
           selectedAgent: 'medication-agent',
@@ -1965,19 +2775,16 @@ export class AiOrchestratorService implements IAiOrchestrator {
 
       if (!prescriptionContext?.medicines.length) {
         const message = isFirstTimePending
-          ? (isHindiPrescription
-            ? 'अभी आपकी पर्ची की CHO (कम्युनिटी हेल्थ ऑफिसर) द्वारा पुष्टि होना बाकी है। पर्ची मंज़ूर होने के बाद ही आपकी दवाइयाँ यहाँ उपलब्ध होंगी।'
-            : isHinglishPrescription
-              ? 'Abhi aapki parchi ki CHO (Community Health Officer) dwara pushti hona baaki hai. Parchi approve hone ke baad hi aapki dawaiyan yahan available hongi.'
-              : 'Your prescription is currently awaiting verification by the CHO (Community Health Officer). Your medicines will appear here once it has been approved.')
-          : (isHindiPrescription
-            ? 'अभी आपकी कोई सत्यापित दवा उपलब्ध नहीं है।'
-            : isHinglishPrescription
-              ? 'Abhi aapki koi verified dawa uplabdh nahi hai.'
-              : 'No verified medicines are available yet.');
+          ? firstPendingMessage
+          : isHindiPrescription
+            ? 'अभी आपकी कोई मंज़ूर दवा नहीं है।'
+            : 'You have no approved medicines yet.';
         return {
           responseType: 'text',
-          content: { summary: message, [effectiveRxLanguage]: message, spoken_summary: message },
+          content: {
+            summary: message,
+            [requestLanguage]: message,
+          },
           intent: IntentType.MEDICATION_QUERY,
           selectedAgent: 'medication-agent',
           safetyStatus: 'SAFE',
@@ -1986,21 +2793,23 @@ export class AiOrchestratorService implements IAiOrchestrator {
       }
     }
 
-    if (prescriptionContextResolution?.kind === 'REMINDER_FACT' && !prescriptionContext?.medicines.length) {
+    if (
+      prescriptionContextResolution?.kind === 'REMINDER_FACT' &&
+      !prescriptionContext?.medicines.length
+    ) {
       const message = isFirstTimePending
-        ? (isHindiPrescription
-          ? 'अभी आपकी पर्ची की CHO (कम्युनिटी हेल्थ ऑफिसर) द्वारा पुष्टि होना बाकी है। पर्ची मंज़ूर होने के बाद रिमाइंडर सेट किए जा सकेंगे।'
-          : isHinglishPrescription
-            ? 'Abhi aapki parchi ki CHO (Community Health Officer) dwara pushti hona baaki hai. Parchi approve hone ke baad reminder set kiye ja sakenge.'
-            : 'Your prescription is currently awaiting verification by the CHO (Community Health Officer). Reminders can be set after it has been approved.')
-        : (isHindiPrescription
-          ? 'अभी कोई सत्यापित दवा या रिमाइंडर समय उपलब्ध नहीं है।'
-          : isHinglishPrescription
-            ? 'Abhi koi verified dawa ya reminder time uplabdh nahi hai.'
-            : 'No verified medicine or reminder time is available yet.');
+        ? isHindiPrescription
+          ? 'आपकी पर्ची की जाँच कम्युनिटी हेल्थ ऑफिसर (CHO) कर रहे हैं। जाँच पूरी होने के बाद रिमाइंडर लगाए जा सकेंगे।'
+          : 'The Community Health Officer (CHO) is checking your prescription. Reminders can be set once it is approved.'
+        : isHindiPrescription
+          ? 'अभी कोई मंज़ूर दवा या रिमाइंडर का समय नहीं है।'
+          : 'There is no approved medicine or reminder time yet.';
       return {
         responseType: 'text',
-        content: { summary: message, [effectiveRxLanguage]: message, spoken_summary: message },
+        content: {
+          summary: message,
+          [requestLanguage]: message,
+        },
         intent: IntentType.MEDICATION_QUERY,
         selectedAgent: 'medication-reminder-service',
         safetyStatus: 'SAFE',
@@ -2011,33 +2820,37 @@ export class AiOrchestratorService implements IAiOrchestrator {
     // Prescription facts and missed-dose clarification are deterministic facts
     // from the server-held sanitized session context.
     if (
-      prescriptionContext
-      && prescriptionContextResolution
-      && (prescriptionContextResolution.kind === 'MEDICINE_LIST'
-        || prescriptionContextResolution.kind === 'MEDICINE_FACT'
-        || prescriptionContextResolution.kind === 'REMINDER_FACT'
-        || prescriptionContextResolution.kind === 'INVESTIGATION_LIST')
+      prescriptionContext &&
+      prescriptionContextResolution &&
+      (prescriptionContextResolution.kind === 'MEDICINE_LIST' ||
+        prescriptionContextResolution.kind === 'MEDICINE_FACT' ||
+        prescriptionContextResolution.kind === 'REMINDER_FACT' ||
+        prescriptionContextResolution.kind === 'INVESTIGATION_LIST')
     ) {
-      const effectiveRxLang =
-        requestLanguage.startsWith('hi') ||
-        /[\u0900-\u097f]|\b(?:meri|mera|mere|mujhe|batao|dikhao|dawa|dawai|kab)\b/i.test(inputText)
-          ? 'hi'
-          : requestLanguage;
+      const effectiveRxLang = requestLanguage.startsWith('hi')
+        ? 'hi'
+        : requestLanguage;
       const content = this.prescriptionContextDirectContent(
         prescriptionContext,
         prescriptionContextResolution,
         effectiveRxLang,
       );
-      if (authorizedPatientName && /\b(?:what is my name|what's my name|who am i)\b|मेरा नाम क्या है|मेरी पहचान क्या है/i.test(inputText)) {
+      if (
+        authorizedPatientName &&
+        /\b(?:what is my name|what's my name|who am i)\b|मेरा नाम क्या है|मेरी पहचान क्या है/i.test(
+          inputText,
+        )
+      ) {
         const namePrefix = requestLanguage.startsWith('hi')
-          ? `आप ${authorizedPatientName} की सत्यापित प्रोफ़ाइल में हैं। `
-          : `You are using ${authorizedPatientName}'s verified profile. `;
+          ? `अभी ${authorizedPatientName} की प्रोफ़ाइल खुली है। `
+          : `You are using ${authorizedPatientName}'s profile. `;
         content['summary'] = `${namePrefix}${content['summary']}`;
         content[requestLanguage] = content['summary'];
       }
-      content['provenance'] = prescriptionContextResolution.kind === 'REMINDER_FACT'
-        ? 'REMINDER'
-        : 'PRESCRIPTION';
+      content['provenance'] =
+        prescriptionContextResolution.kind === 'REMINDER_FACT'
+          ? 'REMINDER'
+          : 'PRESCRIPTION';
       await this.auditService.logEvent({
         tenantId: identity.tenantId,
         subjectAbhaRef: identity.externalId,
@@ -2048,11 +2861,12 @@ export class AiOrchestratorService implements IAiOrchestrator {
         entityId: sessionId,
         details: {
           contextType: prescriptionContextResolution.kind,
-          contextFieldCount: prescriptionContextResolution.kind === 'REMINDER_FACT'
-            ? prescriptionContext.reminders.length
-            : prescriptionContextResolution.kind === 'MEDICINE_LIST'
-              ? prescriptionContext.medicines.length
-              : prescriptionContextResolution.kind === 'MEDICINE_FACT'
+          contextFieldCount:
+            prescriptionContextResolution.kind === 'REMINDER_FACT'
+              ? prescriptionContext.reminders.length
+              : prescriptionContextResolution.kind === 'MEDICINE_LIST'
+                ? prescriptionContext.medicines.length
+                : prescriptionContextResolution.kind === 'MEDICINE_FACT'
                   ? 1
                   : prescriptionContext.investigations.length,
           piiRedacted: true,
@@ -2061,12 +2875,14 @@ export class AiOrchestratorService implements IAiOrchestrator {
       return {
         responseType: 'text',
         content,
-        intent: prescriptionContextResolution.kind === 'INVESTIGATION_LIST'
-          ? IntentType.PRESCRIPTION_QUERY
-          : IntentType.MEDICATION_QUERY,
-        selectedAgent: prescriptionContextResolution.kind === 'REMINDER_FACT'
-          ? 'medication-reminder-service'
-          : 'medication-agent',
+        intent:
+          prescriptionContextResolution.kind === 'INVESTIGATION_LIST'
+            ? IntentType.PRESCRIPTION_QUERY
+            : IntentType.MEDICATION_QUERY,
+        selectedAgent:
+          prescriptionContextResolution.kind === 'REMINDER_FACT'
+            ? 'medication-reminder-service'
+            : 'medication-agent',
         safetyStatus: 'SAFE',
         latencyMs: Date.now() - startTime,
       };
@@ -2075,17 +2891,17 @@ export class AiOrchestratorService implements IAiOrchestrator {
     // The app marks medicine/test questions as prescription-scoped. If the
     // server context is missing or cannot resolve the reference, fail closed
     // rather than falling through to ClinicalContext or FHIR medications.
-    if (prescriptionContextRequired && !prescriptionContextResolution && !labReportQuestion) {
-      const message = requestLanguage.startsWith('hi')
-        ? (prescriptionContext
-          ? 'यह दवा या जांच आपकी अभी सेव की हुई पर्ची में नहीं मिली। कृपया पर्ची में लिखा नाम जांचें।'
-          : 'अभी आपकी कोई सेव की हुई पर्ची नहीं है। दवाइयों या जांच की जानकारी के लिए कृपया अपनी पर्ची अपलोड करें।')
-        : (prescriptionContext
-          ? 'This medicine or test is not in your currently saved prescription. Please check the name on the prescription.'
-          : 'You do not have a saved prescription yet. Please upload one for medicine or test information.');
+    if (
+      prescriptionContextRequired &&
+      !prescriptionContextResolution &&
+      !labReportQuestion
+    ) {
       return {
         responseType: 'text',
-        content: { summary: message, [requestLanguage]: message },
+        content: this.unmatchedPrescriptionContent(
+          prescriptionContext,
+          requestLanguage,
+        ),
         intent: IntentType.PRESCRIPTION_QUERY,
         selectedAgent: 'medication-agent',
         safetyStatus: 'SAFE',
@@ -2099,7 +2915,9 @@ export class AiOrchestratorService implements IAiOrchestrator {
     if (
       isPrescriptionExplanationTurn &&
       (!latestPrescription ||
-        !['EXTRACTED', 'APPROVED'].includes(latestPrescription.extractionStatus) ||
+        !['EXTRACTED', 'APPROVED'].includes(
+          latestPrescription.extractionStatus,
+        ) ||
         !Array.isArray(latestPrescription.medications) ||
         latestPrescription.medications.length === 0)
     ) {
@@ -2167,31 +2985,78 @@ export class AiOrchestratorService implements IAiOrchestrator {
             subjectAbhaRef: identity.externalId,
             vdaConsentArtifactId,
             intent: IntentType.LAB_RESULT_QUERY,
-            requiredRecordCategories: [HealthRecordCategory.LAB_REPORT, HealthRecordCategory.INVESTIGATION],
+            requiredRecordCategories: [
+              HealthRecordCategory.LAB_REPORT,
+              HealthRecordCategory.INVESTIGATION,
+            ],
             correlationId,
           });
         } catch {
           // Missing consent or unavailable records are not evidence of a result.
         }
       }
-      const requestedTest = /hba1c|एच\s*बी\s*ए\s*वन\s*सी/i.test(inputText) ? /hba1c|glycated|glycosylated/i : /glucose|sugar|शुगर/i;
-      const matching = (report?.labResults || []).filter((item) => requestedTest.test(item.testName));
+      const requestedTest = /hba1c|एच\s*बी\s*ए\s*वन\s*सी/i.test(inputText)
+        ? /hba1c|glycated|glycosylated/i
+        : /glucose|sugar|शुगर/i;
+      const matching = (report?.labResults || []).filter((item) =>
+        requestedTest.test(item.testName),
+      );
       const hindi = requestLanguage.startsWith('hi');
-      const markedCritical = matching.some((item) => /critical|panic|गंभीर/i.test(item.interpretation || ''));
+      const markedCritical = matching.some((item) =>
+        /critical|panic|गंभीर/i.test(item.interpretation || ''),
+      );
       const summary = matching.length
-        ? (hindi ? 'आपकी उपलब्ध रिपोर्ट में यह दर्ज है:' : 'Your available report records:')
-        : (hindi ? 'मुझे आपकी शुगर रिपोर्ट का परिणाम नहीं मिला। कृपया रिपोर्ट चुनें या साझा करें।' : 'I could not find your sugar report result. Please select or share the report.');
-      const bullets = matching.slice(0, 5).map((item) => `${item.testName}: ${item.value || (hindi ? 'मान उपलब्ध नहीं' : 'value unavailable')}${item.unit ? ` ${item.unit}` : ''}${item.referenceRange ? ` (${hindi ? 'रिपोर्ट की सीमा' : 'reported range'}: ${item.referenceRange})` : ''}`);
+        ? hindi
+          ? 'आपकी उपलब्ध रिपोर्ट में यह दर्ज है:'
+          : 'Your available report records:'
+        : hindi
+          ? 'मुझे आपकी शुगर रिपोर्ट का परिणाम नहीं मिला। कृपया रिपोर्ट चुनें या साझा करें।'
+          : 'I could not find your sugar report result. Please select or share the report.';
+      const bullets = matching
+        .slice(0, 5)
+        .map(
+          (item) =>
+            `${item.testName}: ${item.value || (hindi ? 'मान उपलब्ध नहीं' : 'value unavailable')}${item.unit ? ` ${item.unit}` : ''}${item.referenceRange ? ` (${hindi ? 'रिपोर्ट की सीमा' : 'reported range'}: ${item.referenceRange})` : ''}`,
+        );
       const guidance = markedCritical
-        ? (hindi ? 'रिपोर्ट में गंभीर परिणाम लिखा है। जल्द डॉक्टर से बात करें; तबीयत बिगड़ रही हो तो 108/112 पर कॉल करें।' : 'The report marks a result as critical. Speak to a doctor promptly; if you feel unwell or worse, call 108/112.')
-        : (hindi ? 'इन मानों का मतलब और इलाज के बारे में डॉक्टर या CHO से बात करें।' : 'Ask a doctor or CHO what these results mean for your care.');
-      const content = { summary, [requestLanguage]: summary, ...(bullets.length ? { sections: [{ title: hindi ? 'रिपोर्ट के दर्ज मान' : 'Recorded results', bullets }, { body: guidance }] } : {}) };
-      return { responseType: 'text', content, intent: IntentType.LAB_RESULT_QUERY, selectedAgent: 'clinical-record-facts', safetyStatus: 'SAFE', latencyMs: Date.now() - startTime };
+        ? hindi
+          ? 'रिपोर्ट में गंभीर परिणाम लिखा है। जल्द डॉक्टर से बात करें; तबीयत बिगड़ रही हो तो 108/112 पर कॉल करें।'
+          : 'The report marks a result as critical. Speak to a doctor promptly; if you feel unwell or worse, call 108/112.'
+        : hindi
+          ? 'इन मानों का मतलब और इलाज के बारे में डॉक्टर या CHO से बात करें।'
+          : 'Ask a doctor or CHO what these results mean for your care.';
+      const content = {
+        summary,
+        [requestLanguage]: summary,
+        ...(bullets.length
+          ? {
+              sections: [
+                {
+                  title: hindi ? 'रिपोर्ट के दर्ज मान' : 'Recorded results',
+                  bullets,
+                },
+                { body: guidance },
+              ],
+            }
+          : {}),
+      };
+      return {
+        responseType: 'text',
+        content,
+        intent: IntentType.LAB_RESULT_QUERY,
+        selectedAgent: 'clinical-record-facts',
+        safetyStatus: 'SAFE',
+        latencyMs: Date.now() - startTime,
+      };
     }
 
     // ─── Step 2: Gemini semantic classification ─────────────────────────────
     let classificationHistory = '';
-    if (this.historyService && !isPrescriptionExplanationTurn && !isPrescriptionContextTurn) {
+    if (
+      this.historyService &&
+      !isPrescriptionExplanationTurn &&
+      !isPrescriptionContextTurn
+    ) {
       try {
         classificationHistory = await this.historyService.getRecentTurnHistory(
           sessionId,
@@ -2206,7 +3071,8 @@ export class AiOrchestratorService implements IAiOrchestrator {
     }
     const intentMeta = isPrescriptionContextTurn
       ? {
-          intent: prescriptionContextResolution?.kind === 'INVESTIGATION_EDUCATION'
+          intent:
+            prescriptionContextResolution?.kind === 'INVESTIGATION_EDUCATION'
               ? IntentType.PRESCRIPTION_QUERY
               : IntentType.MEDICATION_QUERY,
           authorityCategory: AuthorityCategory.MEDICATION_ADHERENCE,
@@ -2219,8 +3085,7 @@ export class AiOrchestratorService implements IAiOrchestrator {
           knowledgeRequired: isPrescriptionGuidelineTurn,
           responseRequirements: [],
         }
-      :
-      traceContext && this.tracer
+      : traceContext && this.tracer
         ? await this.tracer.traceStep(
             traceContext,
             {
@@ -2247,7 +3112,6 @@ export class AiOrchestratorService implements IAiOrchestrator {
             classificationHistory,
           );
 
-
     // Patient conversation never changes prescription extraction or worker
     // verification state. A future authenticated worker API owns verification.
 
@@ -2258,6 +3122,8 @@ export class AiOrchestratorService implements IAiOrchestrator {
       const content = this.clinicalDeflectionContent(
         intentMeta.language,
         intentMeta.authorityCategory === AuthorityCategory.POSSIBLE_EMERGENCY,
+        clinicalQuestionKind(inputText),
+        inputText,
       );
       await this.auditService.logEvent({
         tenantId: identity.tenantId,
@@ -2295,10 +3161,19 @@ export class AiOrchestratorService implements IAiOrchestrator {
     }
 
     const authorityIntentMismatch =
-      (intentMeta.authorityCategory === AuthorityCategory.MEDICATION_ADHERENCE &&
-        ![IntentType.ADHERENCE_QUERY, IntentType.MEDICATION_QUERY, IntentType.PRESCRIPTION_QUERY].includes(intentMeta.intent)) ||
+      (intentMeta.authorityCategory ===
+        AuthorityCategory.MEDICATION_ADHERENCE &&
+        ![
+          IntentType.ADHERENCE_QUERY,
+          IntentType.MEDICATION_QUERY,
+          IntentType.PRESCRIPTION_QUERY,
+        ].includes(intentMeta.intent)) ||
       (intentMeta.authorityCategory === AuthorityCategory.FACILITY_NAVIGATION &&
-        ![IntentType.FACILITY_QUERY, IntentType.REFERRAL_QUERY, IntentType.TELECONSULTATION_QUERY].includes(intentMeta.intent)) ||
+        ![
+          IntentType.FACILITY_QUERY,
+          IntentType.REFERRAL_QUERY,
+          IntentType.TELECONSULTATION_QUERY,
+        ].includes(intentMeta.intent)) ||
       (intentMeta.authorityCategory === AuthorityCategory.SCHEME_ENTITLEMENT &&
         intentMeta.intent !== IntentType.GOVERNMENT_SCHEME_QUERY);
 
@@ -2468,48 +3343,41 @@ export class AiOrchestratorService implements IAiOrchestrator {
                   },
                 },
                 () =>
-                  this.knowledgeRetrievalService!.retrieve(
-                    retrievalQuery,
-                    {
-                      domain: targetDomain,
-                      category: normalizedQuery?.category,
-                      maxResults: normalizedQuery?.maxResults,
-                      intent: intentMeta.intent,
-                      language: intentMeta.language,
-                      tenantId: identity.tenantId,
-                      state: normalizedQuery?.state || targetState,
-                      stateMatchMode:
-                        intentMeta.schemeInformationType ===
-                        'SCHEME_AVAILABILITY'
-                          ? 'EXACT'
-                          : 'INCLUDING_GLOBAL',
-                      district: normalizedQuery?.district,
-                      minRelevanceScore: 0.35,
-                    },
-                  ),
+                  this.knowledgeRetrievalService!.retrieve(retrievalQuery, {
+                    domain: targetDomain,
+                    category: normalizedQuery?.category,
+                    maxResults: normalizedQuery?.maxResults,
+                    intent: intentMeta.intent,
+                    language: intentMeta.language,
+                    tenantId: identity.tenantId,
+                    state: normalizedQuery?.state || targetState,
+                    stateMatchMode:
+                      intentMeta.schemeInformationType === 'SCHEME_AVAILABILITY'
+                        ? 'EXACT'
+                        : 'INCLUDING_GLOBAL',
+                    district: normalizedQuery?.district,
+                    minRelevanceScore: 0.35,
+                  }),
               )
-            : await this.knowledgeRetrievalService.retrieve(
-                retrievalQuery,
-                {
-                  domain: targetDomain,
-                  category: normalizedQuery?.category,
-                  maxResults: normalizedQuery?.maxResults,
-                  intent: intentMeta.intent,
-                  language: intentMeta.language,
-                  tenantId: identity.tenantId,
-                  state: normalizedQuery?.state || targetState,
-                  // State-availability questions must discover state-authorised
-                  // sources, rather than allowing national material to displace
-                  // them in vector ranking. National availability remains supplied
-                  // through the structured Scheme source.
-                  stateMatchMode:
-                    intentMeta.schemeInformationType === 'SCHEME_AVAILABILITY'
-                      ? 'EXACT'
-                      : 'INCLUDING_GLOBAL',
-                  district: normalizedQuery?.district,
-                  minRelevanceScore: 0.35,
-                },
-              );
+            : await this.knowledgeRetrievalService.retrieve(retrievalQuery, {
+                domain: targetDomain,
+                category: normalizedQuery?.category,
+                maxResults: normalizedQuery?.maxResults,
+                intent: intentMeta.intent,
+                language: intentMeta.language,
+                tenantId: identity.tenantId,
+                state: normalizedQuery?.state || targetState,
+                // State-availability questions must discover state-authorised
+                // sources, rather than allowing national material to displace
+                // them in vector ranking. National availability remains supplied
+                // through the structured Scheme source.
+                stateMatchMode:
+                  intentMeta.schemeInformationType === 'SCHEME_AVAILABILITY'
+                    ? 'EXACT'
+                    : 'INCLUDING_GLOBAL',
+                district: normalizedQuery?.district,
+                minRelevanceScore: 0.35,
+              });
         knowledgePrompt = ragRes.formattedKnowledgePrompt;
         knowledgeSources = ragRes.sources;
         retrievalTrace = ragRes;
@@ -2534,10 +3402,20 @@ export class AiOrchestratorService implements IAiOrchestrator {
       );
       const statedDistrict = intentMeta.requirements?.district;
       const statedState = intentMeta.requirements?.state;
-      if (statedDistrict && resolvedInputText.toLocaleLowerCase().includes(statedDistrict.toLocaleLowerCase())) {
+      if (
+        statedDistrict &&
+        resolvedInputText
+          .toLocaleLowerCase()
+          .includes(statedDistrict.toLocaleLowerCase())
+      ) {
         location.district = statedDistrict;
       }
-      if (statedState && resolvedInputText.toLocaleLowerCase().includes(statedState.toLocaleLowerCase())) {
+      if (
+        statedState &&
+        resolvedInputText
+          .toLocaleLowerCase()
+          .includes(statedState.toLocaleLowerCase())
+      ) {
         location.state = statedState;
       }
       // Facility constraints are extracted semantically by Gemini. We only use
@@ -2574,13 +3452,14 @@ export class AiOrchestratorService implements IAiOrchestrator {
             correlationId,
           );
           const explicitlyRequestedLevel = intentMeta.requirements?.iphsLevel;
-          const appropriateLevels = iphsResolution.evidenceStatus !== 'VERIFIED'
-            ? []
-            : explicitlyRequestedLevel
-            ? iphsResolution.levels.filter(
-                (level) => level === explicitlyRequestedLevel,
-              )
-            : iphsResolution.levels;
+          const appropriateLevels =
+            iphsResolution.evidenceStatus !== 'VERIFIED'
+              ? []
+              : explicitlyRequestedLevel
+                ? iphsResolution.levels.filter(
+                    (level) => level === explicitlyRequestedLevel,
+                  )
+                : iphsResolution.levels;
           serviceContext = {
             requestedService,
             appropriateIphsLevels: appropriateLevels,
@@ -2590,7 +3469,10 @@ export class AiOrchestratorService implements IAiOrchestrator {
             iphsEvidenceStatus: iphsResolution.evidenceStatus,
           };
 
-          if (iphsResolution.evidenceStatus === 'VERIFIED' && appropriateLevels.length) {
+          if (
+            iphsResolution.evidenceStatus === 'VERIFIED' &&
+            appropriateLevels.length
+          ) {
             // Service-specific recommendations are intentionally resolved
             // against the read-only NHA directory, never DB facilities or
             // facility_iphs_overlays. The IPHS result selects the level; this
@@ -2619,6 +3501,15 @@ export class AiOrchestratorService implements IAiOrchestrator {
               candidates,
               matchedSourceValues,
             ).slice(0, 5);
+          }
+          // Never leave the patient with nowhere to go. Nearby facilities are
+          // shown by location only, so no service level is claimed for them.
+          if (!results.length && this.facilitySearch) {
+            results = await this.facilitySearch.searchWithSchemes(
+              identity.tenantId,
+              { ...commonFilters, limit: 5 },
+            );
+            serviceContext.appropriateIphsLevels = [];
           }
         } else if (this.facilitySearch) {
           results = await this.facilitySearch.searchWithSchemes(
@@ -2718,29 +3609,37 @@ export class AiOrchestratorService implements IAiOrchestrator {
     }
     // A published, tenant-scoped scheme document is valid evidence even when
     // the separate structured Scheme table has no matching row.
-    if (intentMeta.intent === IntentType.GOVERNMENT_SCHEME_QUERY
-      && !schemeResults.length && !retrievalTrace?.matchedChunks.length) {
+    if (
+      intentMeta.intent === IntentType.GOVERNMENT_SCHEME_QUERY &&
+      !schemeResults.length &&
+      !retrievalTrace?.matchedChunks.length
+    ) {
       const hindi = intentMeta.language.startsWith('hi');
       const aadhaar = /aadhaar|aadhar|आधार/i.test(inputText);
       const operation = /operation|surgery|ऑपरेशन|सर्जरी/i.test(inputText);
       const summary = aadhaar
-        ? (hindi
-          ? 'केवल आधार कार्ड होने की जानकारी से मैं आपकी आयुष्मान योजना की पात्रता तय नहीं कर सकता।'
-          : 'I cannot establish your Ayushman scheme eligibility from Aadhaar possession alone.')
+        ? hindi
+          ? 'सिर्फ़ आधार कार्ड से मैं नहीं बता सकती कि आयुष्मान योजना आपको मिलेगी या नहीं।'
+          : 'I cannot establish your Ayushman scheme eligibility from Aadhaar possession alone.'
         : operation
-          ? (hindi
+          ? hindi
             ? 'किस सरकारी योजना से ऑपरेशन में मदद मिल सकती है, इसकी पुष्टि यहाँ उपलब्ध स्वीकृत जानकारी से नहीं हो रही।'
-            : 'The approved information available here does not confirm which government scheme could help with your operation.')
-          : (hindi
-            ? 'अभी इस योजना की स्वीकृत जानकारी यहाँ उपलब्ध नहीं है, इसलिए इसके लाभ या पात्रता की पुष्टि नहीं कर सकता।'
-            : 'Approved information for this scheme is not available here, so I cannot confirm its benefits or eligibility.');
+            : 'The approved information available here does not confirm which government scheme could help with your operation.'
+          : hindi
+            ? 'इस योजना की पक्की जानकारी अभी मेरे पास नहीं है, इसलिए मैं इसके फ़ायदे या पात्रता नहीं बता सकती।'
+            : 'Approved information for this scheme is not available here, so I cannot confirm its benefits or eligibility.';
       const next = operation
-        ? (hindi ? 'आप किस शहर में हैं और किस तरह का ऑपरेशन बताया गया है? इन बातों के साथ सरकारी योजना हेल्पडेस्क पर पात्रता जाँचें।'
-          : 'Which city are you in, and what operation was recommended? Check eligibility with an official scheme help desk using those details.')
-        : (hindi ? 'पात्रता और इलाज की सुविधा सरकारी योजना हेल्पडेस्क से जाँचें।'
-          : 'Check eligibility and available care with an official scheme help desk.');
-      deterministicSchemeContent = { summary, [intentMeta.language]: summary,
-        sections: [{ bullets: [next] }], spoken_summary: `${summary} ${next}` };
+        ? hindi
+          ? 'आप किस शहर में हैं और किस तरह का ऑपरेशन बताया गया है? इन बातों के साथ सरकारी योजना हेल्पडेस्क पर पात्रता जाँचें।'
+          : 'Which city are you in, and what operation was recommended? Check eligibility with an official scheme help desk using those details.'
+        : hindi
+          ? 'पात्रता और इलाज की सुविधा सरकारी योजना हेल्पडेस्क से जाँचें।'
+          : 'Check eligibility and available care with an official scheme help desk.';
+      deterministicSchemeContent = {
+        summary,
+        [intentMeta.language]: summary,
+        sections: [{ bullets: [next] }],
+      };
     }
 
     let formattedContext = ClinicalAiContextBuilder.formatPromptContext(
@@ -2749,7 +3648,12 @@ export class AiOrchestratorService implements IAiOrchestrator {
     );
 
     const consentId = vdaConsentArtifactId || 'dev-consent-001';
-    if (!isPrescriptionExplanationTurn && !isPrescriptionContextTurn && intentMeta.requiresClinicalContext && consentId) {
+    if (
+      !isPrescriptionExplanationTurn &&
+      !isPrescriptionContextTurn &&
+      intentMeta.requiresClinicalContext &&
+      consentId
+    ) {
       try {
         await this.auditService.logEvent({
           tenantId: identity.tenantId,
@@ -2828,7 +3732,9 @@ export class AiOrchestratorService implements IAiOrchestrator {
     }
 
     // ─── Step 4: Retrieve Bounded Conversation History ───────────────────────
-    const historyPrompt = isPrescriptionExplanationTurn ? '' : classificationHistory;
+    const historyPrompt = isPrescriptionExplanationTurn
+      ? ''
+      : classificationHistory;
 
     // ─── Step 5: Modular Domain-Specific System Prompt & Safety Directives ───
     const systemPrompt = ModularPromptBuilder.buildSystemPrompt({
@@ -2855,10 +3761,15 @@ Selected Profile Reference: ${authorizedPatientRef}
 RBAC POLICY: All clinical context, medications, and records in this prompt belong EXCLUSIVELY to ${authorizedPatient.name}. Address only ${authorizedPatient.name}. If the user asserts a different identity or asks for someone else's personal records, politely refuse and instruct them to switch profiles in the app.
 [/AUTHENTICATED PATIENT IDENTITY]\n\n`;
     }
-    if (!isPrescriptionContextGenerationTurn) userPrompt += `${formattedContext}`;
+    if (!isPrescriptionContextGenerationTurn)
+      userPrompt += `${formattedContext}`;
 
     // Inject uploaded prescription context if available
-    if (!isPrescriptionContextGenerationTurn && latestPrescription && latestPrescription.medications?.length) {
+    if (
+      !isPrescriptionContextGenerationTurn &&
+      latestPrescription &&
+      latestPrescription.medications?.length
+    ) {
       const rxMeds = latestPrescription.medications
         .map((m: any) => {
           const name = m.medicationName || m.normalizedName || 'Unknown';
@@ -2887,7 +3798,9 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
     if (isPrescriptionContextGenerationTurn && prescriptionContextResolution) {
       if (prescriptionContextResolution.kind === 'MEDICINE_EDUCATION') {
         userPrompt += `[SANITIZED MEDICINE EDUCATION]\nmedicineName: ${prescriptionContextResolution.medicine.name}\nquestion: ${prescriptionContextResolution.question}\n[/SANITIZED MEDICINE EDUCATION]`;
-      } else if (prescriptionContextResolution.kind === 'INVESTIGATION_EDUCATION') {
+      } else if (
+        prescriptionContextResolution.kind === 'INVESTIGATION_EDUCATION'
+      ) {
         userPrompt += `[SANITIZED INVESTIGATION EDUCATION]\ninvestigationName: ${prescriptionContextResolution.investigation.name}\nquestion: ${prescriptionContextResolution.question}\n[/SANITIZED INVESTIGATION EDUCATION]`;
       } else if (prescriptionContextResolution.kind === 'MEDICINE_FOR_BP') {
         userPrompt += `[SANITIZED MEDICINE EDUCATION]\nmedicineNames: ${prescriptionContextResolution.medicines.map((medicine) => medicine.name).join(', ')}\nquestion: ${prescriptionContextResolution.question}\n[/SANITIZED MEDICINE EDUCATION]`;
@@ -2897,7 +3810,8 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
     if (!isPrescriptionContextGenerationTurn && historyPrompt) {
       userPrompt += `\n\n${historyPrompt}`;
     }
-    if (!isPrescriptionContextGenerationTurn) userPrompt += `\n\n[PATIENT QUERY]\n${resolvedInputText}`;
+    if (!isPrescriptionContextGenerationTurn)
+      userPrompt += `\n\n[PATIENT QUERY]\n${resolvedInputText}`;
 
     let aiResultText = '';
     let finalResponseType = 'text';
@@ -3069,10 +3983,6 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
           ...generated,
           patient_text: aiResultText,
           [intentMeta.language]: aiResultText,
-          ...(!isPrescriptionExplanationTurn && !isPrescriptionContextGenerationTurn
-            && !(intentMeta.responseRequirements || []).some((requirement) =>
-              ['GROUNDED_GUIDANCE', 'ALL_RECORD_ITEMS', 'VALUE_AND_UNCERTAINTY', 'CARE_PLAN_ITEMS'].includes(requirement))
-            ? { spoken_summary: generated.spoken_summary || generated.summary } : {}),
         };
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -3140,8 +4050,8 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
       safetyStatus = 'WITHHELD_QUALITY';
       finalResponseType = 'text';
       const withheldMessage = intentMeta.language.startsWith('hi')
-        ? 'मैं इस जवाब को सुरक्षित रूप से साझा नहीं कर सकता। कृपया अपना सवाल थोड़े अलग शब्दों में पूछें।'
-        : 'I cannot safely share this answer. Please ask your question in a slightly different way.';
+        ? NO_RELIABLE_ANSWER_HI
+        : NO_RELIABLE_ANSWER_EN;
       contentObj = {
         summary: withheldMessage,
         [intentMeta.language]: withheldMessage,
@@ -3240,8 +4150,8 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
         // RAG quality withholding is not an emergency red-flag result.
         finalResponseType = 'text';
         const holdingMsg = intentMeta.language.startsWith('hi')
-          ? 'उपलब्ध अधिकृत जानकारी से इस सवाल का भरोसेमंद जवाब तैयार नहीं हो सका। कृपया सवाल थोड़े अलग शब्दों में पूछें।'
-          : 'A reliable answer could not be prepared from the available approved information. Please ask the question in a slightly different way.';
+          ? NO_RELIABLE_ANSWER_HI
+          : NO_RELIABLE_ANSWER_EN;
 
         contentObj = {
           reason:
@@ -3255,10 +4165,44 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
             contextPrecision: ragasResult.contextPrecisionScore,
           },
           [intentMeta.language]: holdingMsg,
-          en: 'A reliable answer could not be prepared from the available approved information. Please ask the question in a slightly different way.',
+          en: NO_RELIABLE_ANSWER_EN,
         };
         finalOutputText = holdingMsg;
       }
+    }
+
+    // Clinical review: a scheme answer never opens with "हाँ"/"Yes", since
+    // schemes are only for eligible people; the prompt alone did not hold.
+    if (
+      intentMeta.intent === IntentType.GOVERNMENT_SCHEME_QUERY &&
+      typeof contentObj?.summary === 'string'
+    ) {
+      const trimmed = contentObj.summary.replace(
+        /^\s*(?:हाँ|हां|yes)\s*[,।!.]?\s*/iu,
+        '',
+      );
+      if (trimmed && trimmed !== contentObj.summary) {
+        contentObj = {
+          ...contentObj,
+          summary: trimmed.charAt(0).toLocaleUpperCase() + trimmed.slice(1),
+        };
+      }
+    }
+
+    // The normalizer marks Ayushman card application questions with this category.
+    if (
+      intentMeta.intent === IntentType.GOVERNMENT_SCHEME_QUERY &&
+      normalizedQuery?.category === 'pmjay_operations' &&
+      (safetyStatus === 'SAFE' || safetyStatus === 'WITHHELD_BY_RAGAS')
+    ) {
+      contentObj = this.withBothCardApplicationRoutes(
+        contentObj,
+        intentMeta.language.startsWith('hi'),
+        safetyStatus === 'WITHHELD_BY_RAGAS',
+        /vay\s*vandana|वय\s*वंदना|\b70\s*\+|\bsenior\s*citizen|बुजुर्ग|बुज़ुर्ग/iu.test(
+          inputText,
+        ),
+      );
     }
 
     // ─── Step 8: Apply Response Formatter for Structured Cards ─────────────
@@ -3279,22 +4223,23 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
         language: intentMeta.language,
         // The privacy-isolated medicine-education flow must never pass the
         // patient-authored query to downstream formatters.
-        inputText: isPrescriptionContextGenerationTurn ? resolvedInputText : inputText,
+        inputText: isPrescriptionContextGenerationTurn
+          ? resolvedInputText
+          : inputText,
       });
       contentObj = formatted.content;
       finalResponseType = formatted.response_type;
     }
 
-    if (
-      isPrescriptionContextGenerationTurn &&
-      prescriptionContextResolution
-    ) {
+    if (isPrescriptionContextGenerationTurn && prescriptionContextResolution) {
       if (prescriptionContextResolution.kind === 'MEDICINE_EDUCATION') {
         await this.prescriptionSessionContext.setLastReferencedMedicine(
           sessionId,
           prescriptionContextResolution.medicine.name,
         );
-      } else if (prescriptionContextResolution.kind === 'INVESTIGATION_EDUCATION') {
+      } else if (
+        prescriptionContextResolution.kind === 'INVESTIGATION_EDUCATION'
+      ) {
         await this.prescriptionSessionContext.setLastReferencedInvestigation(
           sessionId,
           prescriptionContextResolution.investigation.name,
@@ -3310,9 +4255,10 @@ ${rxMeds}${rxTests ? `\nInvestigations/Tests from uploaded prescription:\n${rxTe
         entityId: sessionId,
         details: {
           contextType: prescriptionContextResolution.kind,
-          contextFieldCount: prescriptionContextResolution.kind === 'MEDICINE_FOR_BP'
-            ? prescriptionContextResolution.medicines.length + 1
-            : 2,
+          contextFieldCount:
+            prescriptionContextResolution.kind === 'MEDICINE_FOR_BP'
+              ? prescriptionContextResolution.medicines.length + 1
+              : 2,
           piiRedacted: true,
           telemetry: 'disabled',
         },

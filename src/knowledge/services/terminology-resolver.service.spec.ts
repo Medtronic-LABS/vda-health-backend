@@ -53,14 +53,14 @@ describe('Stage 1 TerminologyResolverService & Stage 3 ModularPromptBuilder', ()
         'hi',
       ),
     ).toBe(
-      'आप अधिकृत सरकारी और प्राइवेट अस्पतालों में आयुष्मान मित्र से मिल सकते हैं।',
+      'आप अधिकृत सरकारी और प्राइवेट अस्पतालों में आरोग्य मित्र से मिल सकते हैं।',
     );
     expect(
       resolver.sanitizeBureaucraticTerms(
         'Visit Empanelled Health Care Providers (EHCP) or any EHCP helpdesk.',
         'en',
       ),
-    ).toBe('Visit empanelled hospitals or any empanelled hospitals helpdesk.');
+    ).toBe('Visit approved hospitals or any approved hospitals helpdesk.');
   });
 
   it('builds domain-scoped prompts without forcing a 30-word limit on visual answers', () => {
@@ -69,10 +69,15 @@ describe('Stage 1 TerminologyResolverService & Stage 3 ModularPromptBuilder', ()
       intent: IntentType.GOVERNMENT_SCHEME_QUERY,
       schemeInformationType: 'SCHEME_OVERVIEW',
     });
-    expect(schemePrompt).toContain('do NOT restrict the visual answer to 30 words');
-    expect(schemePrompt).toContain('spoken_summary');
+    // Short answers, read aloud as shown, in a woman ASHA's simple spoken Hindi.
+    expect(schemePrompt).toContain('under 60 words');
+    expect(schemePrompt).toContain('at most 3');
+    expect(schemePrompt).toContain('feminine forms');
+    expect(schemePrompt).toContain('simple spoken Hindi');
+    expect(schemePrompt).not.toContain('spoken_summary');
     expect(schemePrompt).toContain('Scheme Information (SCHEME_OVERVIEW)');
-    expect(schemePrompt).not.toContain('Uploaded Prescription Source Isolation');
+    expect(schemePrompt).not.toContain(
+      'Uploaded Prescription Source Isolation',
+    );
   });
 });
-

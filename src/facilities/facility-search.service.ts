@@ -10,6 +10,11 @@ import {
   DemoCapabilityItem,
 } from './facility-demo-capabilities.loader';
 
+// Source data spells government hospitals as PUBLIC, Public, GOI or "...Government...".
+const GOVERNMENT_HOSPITAL_SQL = `(LOWER(facility."hospitalType") LIKE '%public%' OR LOWER(facility."hospitalType") LIKE '%government%' OR UPPER(facility."hospitalType") = 'GOI')`;
+const isGovernmentHospital = (hospitalType?: string | null): boolean =>
+  /public|government|^goi$/i.test(hospitalType || '');
+
 export type FacilitySearch = {
   state?: string;
   district?: string;
@@ -50,7 +55,8 @@ export class FacilitySearchService {
     private readonly iphsOverlays: Repository<FacilityIphsOverlay>,
     @InjectRepository(FacilityScheme)
     private readonly facilitySchemes: Repository<FacilityScheme>,
-    @Optional() private readonly demoCapabilitiesLoader?: FacilityDemoCapabilitiesLoader,
+    @Optional()
+    private readonly demoCapabilitiesLoader?: FacilityDemoCapabilitiesLoader,
   ) {}
   async search(tenantId: string, filters: FacilitySearch): Promise<Facility[]> {
     const state = this.normalizeState(filters.state);
@@ -75,9 +81,7 @@ export class FacilitySearchService {
         pmjay: filters.pmjay,
       });
     if (filters.hospitalType?.toUpperCase() === 'PUBLIC') {
-      query.andWhere(
-        `(LOWER(facility."hospitalType") LIKE '%public%' OR LOWER(facility."hospitalType") LIKE '%government%' OR UPPER(facility."hospitalType") = 'GOI')`,
-      );
+      query.andWhere(GOVERNMENT_HOSPITAL_SQL);
     } else if (filters.hospitalType) {
       query.andWhere(
         'LOWER(facility."hospitalType") LIKE LOWER(:hospitalType)',
@@ -144,10 +148,9 @@ export class FacilitySearchService {
           'iphs_service_level',
           'iphs_service_level."facilityId" = facility.id AND iphs_service_level."tenantId" = facility."tenantId" AND iphs_service_level.active = true',
         )
-        .andWhere(
-          'iphs_service_level."iphsLevel" IN (:...serviceIphsLevels)',
-          { serviceIphsLevels: filters.serviceIphsLevels },
-        )
+        .andWhere('iphs_service_level."iphsLevel" IN (:...serviceIphsLevels)', {
+          serviceIphsLevels: filters.serviceIphsLevels,
+        })
         .distinct(true);
     }
     const requestedLimit = Math.min(Math.max(filters.limit || 10, 1), 50);
@@ -157,7 +160,19 @@ export class FacilitySearchService {
       filters.travelTimeMinutesByFacilityId
         ? 50
         : requestedLimit;
-    return query.orderBy('facility.name', 'ASC').take(candidateLimit).getMany();
+    // Clinical review: government hospitals are listed first. This must happen
+    // before take(), or the cut-off would keep private hospitals by name.
+    // The rank is a selected alias: with joins, take() paginates in a
+    // subquery that only accepts properties or selected aliases as sort keys.
+    return query
+      .addSelect(
+        `CASE WHEN ${GOVERNMENT_HOSPITAL_SQL} THEN 0 ELSE 1 END`,
+        'government_rank',
+      )
+      .orderBy('government_rank', 'ASC')
+      .addOrderBy('facility.name', 'ASC')
+      .take(candidateLimit)
+      .getMany();
   }
 
   /** Source-preserving aliases for common state spellings. */
@@ -227,13 +242,14 @@ export class FacilitySearchService {
     const overlaysByFacility = new Map(
       overlays.map((overlay) => [overlay.facilityId, overlay]),
     );
-    const demoCapabilities = (filters.serviceIphsLevels?.length && this.demoCapabilitiesLoader?.isEnabled())
-      ? this.demoCapabilitiesLoader.getCapabilitiesForState(filters.state || 'HARYANA')
-      : [];
-    const demoCapabilitiesByFacility = new Map<
-      string,
-      DemoCapabilityItem[]
-    >();
+    const demoCapabilities =
+      filters.serviceIphsLevels?.length &&
+      this.demoCapabilitiesLoader?.isEnabled()
+        ? this.demoCapabilitiesLoader.getCapabilitiesForState(
+            filters.state || 'HARYANA',
+          )
+        : [];
+    const demoCapabilitiesByFacility = new Map<string, DemoCapabilityItem[]>();
     for (const capability of demoCapabilities) {
       const existing =
         demoCapabilitiesByFacility.get(capability.facilityId) || [];
@@ -321,6 +337,10 @@ export class FacilitySearchService {
       const capabilityDifference = capabilityRank(left) - capabilityRank(right);
       if (capabilityDifference) return capabilityDifference;
     }
+    const governmentDifference =
+      Number(!isGovernmentHospital(left.facility.hospitalType)) -
+      Number(!isGovernmentHospital(right.facility.hospitalType));
+    if (governmentDifference) return governmentDifference;
     const travelDifference =
       (left.travelTimeMinutes ?? Number.POSITIVE_INFINITY) -
       (right.travelTimeMinutes ?? Number.POSITIVE_INFINITY);

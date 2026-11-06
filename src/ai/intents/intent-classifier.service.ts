@@ -17,6 +17,43 @@ import { AuditService } from '../../audit/audit.service';
 import { SemanticContextPlannerService } from '../context/semantic-context-planner.service';
 import { TerminologyResolverService } from '../../knowledge/services/terminology-resolver.service';
 
+const DIAGNOSTIC_SERVICES: Array<{
+  pattern: RegExp;
+  service: string;
+  aliases?: string[];
+  imaging?: boolean;
+}> = [
+  {
+    pattern: /x[\s-]*ray|radiograph|एक्स[\s-]*रे/i,
+    service: 'X-ray',
+    imaging: true,
+  },
+  {
+    pattern: /ultrasound|usg|sonography|अल्ट्रासाउंड|सोनोग्राफी/i,
+    service: 'Ultrasound',
+    imaging: true,
+  },
+  {
+    pattern:
+      /\b(?:e\.?c\.?g\.?|electrocardiogram|electrocardiography)\b|ई\s*सी\s*जी/i,
+    service: 'ECG',
+    aliases: ['Electrocardiogram', 'Electrocardiography'],
+    imaging: true,
+  },
+  { pattern: /\bmri\b|एमआरआई|एम\s+आर\s+आई/i, service: 'MRI', imaging: true },
+  { pattern: /\bct\s*scan\b|सीटी\s*स्कैन/i, service: 'CT scan', imaging: true },
+  { pattern: /hba1c|glycosylated/i, service: 'HbA1c' },
+  { pattern: /cbc|complete blood count/i, service: 'CBC' },
+  {
+    pattern: /blood glucose|blood sugar|sugar test/i,
+    service: 'Blood glucose',
+  },
+  { pattern: /blood test|blood/i, service: 'Blood test' },
+];
+
+const GENERIC_PLACE_SERVICE =
+  /^(?:(?:abdm|ab|pm-?jay|sarkari|government|govt|nearby|nearest|najdiki|paas|nazdeeki)\s+)*(?:hospitals?|aspatal|अस्पताल|clinics?|health\s*(?:centres?|centers?|facilit(?:y|ies)))$/i;
+
 @Injectable()
 export class IntentClassifierService implements IIntentClassifier {
   private readonly logger = new Logger(IntentClassifierService.name);
@@ -75,26 +112,40 @@ export class IntentClassifierService implements IIntentClassifier {
         semanticLanguage = aiResult.language;
         knowledgeRequired = aiResult.requirements?.knowledgeRequired;
         responseRequirements = aiResult.requirements?.responseRequirements;
-        schemeInformationType = aiResult.requirements?.schemeInformationType as SchemeInformationType | undefined;
-        authorityCategory = aiResult.authorityCategory || this.fallbackAuthority(aiCategory);
+        schemeInformationType = aiResult.requirements?.schemeInformationType as
+          SchemeInformationType | undefined;
+        authorityCategory =
+          aiResult.authorityCategory || this.fallbackAuthority(aiCategory);
       }
 
-      if (aiCategory === IntentType.FACILITY_QUERY || aiCategory === IntentType.REFERRAL_QUERY) {
+      if (
+        aiCategory === IntentType.FACILITY_QUERY ||
+        aiCategory === IntentType.REFERRAL_QUERY
+      ) {
         if (!requirements) requirements = {};
-        if (!requirements.service) {
-          const lower = text.toLowerCase();
-          if (/x[\s-]*ray|radiograph|एक्स[\s-]*रे/i.test(lower)) requirements.service = 'X-ray';
-          else if (/ultrasound|usg|sonography/i.test(lower)) requirements.service = 'Ultrasound';
-          else if (/\b(?:e\.?c\.?g\.?|electrocardiogram|electrocardiography)\b|ई\s*सी\s*जी/i.test(lower)) {
-            requirements.service = 'ECG';
-            requirements.serviceAliases = ['Electrocardiogram', 'Electrocardiography'];
-          }
-          else if (/hba1c|glycosylated/i.test(lower)) requirements.service = 'HbA1c';
-          else if (/cbc|complete blood count/i.test(lower)) requirements.service = 'CBC';
-          else if (/blood glucose|blood sugar|sugar test/i.test(lower)) requirements.service = 'Blood glucose';
-          else if (/blood test|blood/i.test(lower)) requirements.service = 'Blood test';
+        // A place ("ABDM hospital") is not a medical service to look up in IPHS.
+        if (
+          requirements.service &&
+          GENERIC_PLACE_SERVICE.test(requirements.service.trim())
+        ) {
+          delete requirements.service;
         }
-        if (/x[\s-]*ray|radiograph|एक्स[\s-]*रे/i.test(text)) requirements.service = 'X-ray';
+        // ABDM is the digital health mission, not a payment scheme hospitals are listed under.
+        if (requirements.scheme && /^abdm$/i.test(requirements.scheme.trim())) {
+          delete requirements.scheme;
+        }
+        if (!requirements.service) {
+          const detected = DIAGNOSTIC_SERVICES.find(({ pattern }) =>
+            pattern.test(text),
+          );
+          if (detected) {
+            requirements.service = detected.service;
+            if (detected.aliases)
+              requirements.serviceAliases = detected.aliases;
+          }
+        }
+        if (/x[\s-]*ray|radiograph|एक्स[\s-]*रे/i.test(text))
+          requirements.service = 'X-ray';
         if (
           !requirements.costPreference &&
           /\b(?:low\s*cost|affordable|free|cheap|less\s*(?:money|cost|expense)|kam\s*(?:paise|paiso|kharch)|sasta)\b|कम\s*(?:पैसे|पैसो|खर्च)|सस्ता|कम\s*खर्च/i.test(
@@ -111,8 +162,30 @@ export class IntentClassifierService implements IIntentClassifier {
       );
     }
 
+    // A bare test name ("Xray scan", "MRI") is a request for where to get it.
+    const namedTest = DIAGNOSTIC_SERVICES.find(
+      ({ pattern, imaging }) => imaging && pattern.test(text),
+    );
+    if (
+      namedTest &&
+      (aiCategory === IntentType.UNKNOWN ||
+        aiCategory === IntentType.CLARIFICATION ||
+        authorityCategory === AuthorityCategory.UNCERTAIN ||
+        confidence < 0.65)
+    ) {
+      aiCategory = IntentType.FACILITY_QUERY;
+      authorityCategory = AuthorityCategory.FACILITY_NAVIGATION;
+      confidence = Math.max(confidence, 0.8);
+      requirements = {
+        ...requirements,
+        service: namedTest.service,
+        ...(namedTest.aliases ? { serviceAliases: namedTest.aliases } : {}),
+      };
+    }
+
     // ─── Stage 1 Terminology & Canonical Scheme Pre-Processor ──────────────
-    const canonicalScheme = this.terminologyResolver.resolveCanonicalScheme(text);
+    const canonicalScheme =
+      this.terminologyResolver.resolveCanonicalScheme(text);
     const asksUniversalHospitalCoverage =
       Boolean(canonicalScheme) &&
       /\b(?:every\s+hospital|all\s+hospitals?|any\s+hospital|har\s+hospital|sabhi\s+hospital|kisi\s+bhi\s+hospital)\b|हर\s+अस्पताल|सभी\s+अस्पताल|किसी\s+भी\s+अस्पताल/iu.test(
@@ -136,10 +209,11 @@ export class IntentClassifierService implements IIntentClassifier {
 
     if (aiCategory === IntentType.GOVERNMENT_SCHEME_QUERY) {
       if (!requirements) requirements = {};
-      const resolvedScheme = this.terminologyResolver.normalizeSchemeLookupQuery(
-        requirements.scheme,
-        text,
-      );
+      const resolvedScheme =
+        this.terminologyResolver.normalizeSchemeLookupQuery(
+          requirements.scheme,
+          text,
+        );
       if (resolvedScheme) {
         requirements.scheme = resolvedScheme;
       }
@@ -157,7 +231,8 @@ export class IntentClassifierService implements IIntentClassifier {
       aiCategory,
       authorityCategory,
       confidence,
-      semanticLanguage || detectedLang,
+      // The profile language sent by the app decides the reply language.
+      language || semanticLanguage || detectedLang,
       'AI_MODEL',
     );
     const authorityAllowsService = [
@@ -179,11 +254,19 @@ export class IntentClassifierService implements IIntentClassifier {
         ? schemeInformationType
         : undefined,
     });
-    metadata.requiredRecordCategories = authorityAllowsService ? plan.categories : [];
-    metadata.requiresClinicalContext = authorityAllowsService && plan.categories.length > 0;
-    metadata.knowledgeRequired = authorityAllowsService && plan.knowledgeRequired;
-    metadata.responseRequirements = authorityAllowsService ? plan.responseRequirements : [];
-    metadata.schemeInformationType = authorityAllowsService ? plan.schemeInformationType : undefined;
+    metadata.requiredRecordCategories = authorityAllowsService
+      ? plan.categories
+      : [];
+    metadata.requiresClinicalContext =
+      authorityAllowsService && plan.categories.length > 0;
+    metadata.knowledgeRequired =
+      authorityAllowsService && plan.knowledgeRequired;
+    metadata.responseRequirements = authorityAllowsService
+      ? plan.responseRequirements
+      : [];
+    metadata.schemeInformationType = authorityAllowsService
+      ? plan.schemeInformationType
+      : undefined;
     if (providerUsage) {
       // Telemetry only: preserve Gemini's reported usage for the tracing
       // wrapper without changing the serialized intent or routing contract.
@@ -287,7 +370,11 @@ export class IntentClassifierService implements IIntentClassifier {
   }
 }
 
-function aiResultRequirements(value: IntentMetadata['requirements']): string[] | undefined {
-  const candidate = value as (IntentMetadata['requirements'] & { recordCategories?: string[] }) | undefined;
+function aiResultRequirements(
+  value: IntentMetadata['requirements'],
+): string[] | undefined {
+  const candidate = value as
+    | (IntentMetadata['requirements'] & { recordCategories?: string[] })
+    | undefined;
   return candidate?.recordCategories;
 }
