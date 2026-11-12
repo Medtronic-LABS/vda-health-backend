@@ -100,17 +100,17 @@ export const STOP_ALL_MEDICINES_MESSAGE = {
 };
 
 /**
- * Round 3: side effects of BP or sugar medicines (Dr. Garima's wording). When
- * BP or sugar stays high on medicines, the same advice without the opening
- * sentence about side effects.
+ * Round 3: side effects of BP or sugar medicines (Dr. Garima's wording). BP or
+ * sugar still high on medicines is not a side effect and has its own wording
+ * (Dr. Garima, 8 Nov 2026).
  */
 export const SIDE_EFFECT_MESSAGE = {
   hi: 'कभी-कभी मरीजों को बीपी/शुगर की कुछ दवाओं से दुष्प्रभाव हो सकते हैं। घबराएं नहीं, लेकिन जल्द से जल्द नजदीकी डॉक्टर या सीएचओ से मिलें। वे जरूरत के अनुसार दवा बदल सकते हैं और दवा के सही इस्तेमाल के बारे में सलाह दे सकते हैं। बीपी/शुगर का नियमित इलाज जरूरी है। बिना डॉक्टर की सलाह के दवा न बंद करें, न बदलें।',
   en: 'Sometimes BP or sugar medicines can cause side effects. Do not panic, but see your nearest doctor or CHO as soon as possible. They can change the medicine if needed and advise you on using it correctly. Regular treatment of BP and sugar is important. Do not stop or change your medicine without a doctor’s advice.',
 };
 export const STILL_HIGH_ON_MEDICINES_MESSAGE = {
-  hi: 'घबराएं नहीं, लेकिन जल्द से जल्द नजदीकी डॉक्टर या सीएचओ से मिलें। वे जरूरत के अनुसार दवा बदल सकते हैं और दवा के सही इस्तेमाल के बारे में सलाह दे सकते हैं। बीपी/शुगर का नियमित इलाज जरूरी है। बिना डॉक्टर की सलाह के दवा न बंद करें, न बदलें।',
-  en: 'Do not panic, but see your nearest doctor or CHO as soon as possible. They can change the medicine if needed and advise you on using it correctly. Regular treatment of BP and sugar is important. Do not stop or change your medicine without a doctor’s advice.',
+  hi: 'अगर दवा लेने के बाद भी आपका बीपी/शुगर ज़्यादा है, तो नज़दीकी डॉक्टर या सीएचओ से मिलें। वे आपकी स्थिति के अनुसार दवा या उसकी खुराक बदल सकते हैं। डॉक्टर की सलाह के बिना दवा न बदलें, न बंद करें और न ही खुराक बढ़ाएँ।',
+  en: 'If your BP or sugar is still high after taking your medicine, please visit your nearest doctor or CHO. They can change your medicine or adjust the dose for your condition. Do not change or stop your medicine, or increase the dose, without a doctor’s advice.',
 };
 
 // Round 3: warning signs of heart attack and stroke from the Module for ASHA on
@@ -175,19 +175,23 @@ const CALL_EN =
   'Do not wait. Call 108 or 112 for an ambulance right away, or go to the nearest hospital.';
 
 // Written without nukta (see withoutNukta) and matched against lower-case text.
-// Common, non-specific complaints (vomiting, back pain, dizziness or a headache
-// on their own) do not count: they need "sudden", "one side" or the chest.
+// Dr. Garima (8 Nov 2026): the heart-attack or stroke message only for alarming
+// signs. General complaints on their own (vomiting, back or arm pain, getting
+// breathless, dizziness or a headache) need "sudden", "one side" or the chest.
 const HEART_SIGNS = [
   /heart\s*attack|हार्ट\s*अटैक|दिल\s*(?:का|के)\s*दौर|dil\s*(?:ka|ke)\s*daur/u,
   /(?:सीने|सीना|छाती|chest|seene|seena|sine|chhati|chati).{0,30}(?:दर्द|दबाव|कसाव|जकड|भारी|pain|pressure|tight|dard|dabav|dabaav|kasav|bhari)/u,
-  /(?:साँस|सांस|श्वास).{0,25}(?:नहीं|मुश्किल|दिक्कत|तकलीफ|रुक|अटक|फूल)|दम\s*घुट/u,
-  /\b(?:saans|saas)\b.{0,30}(?:nahi|nahin|ruk|atak|mushkil|dikkat|taklif|takleef|phool|ghut)|dam\s*ghut/u,
-  /can(?:not|'t| not) breathe|unable to breathe|not breathing|struggling to breathe|hard to breathe|trouble breathing|short(?:ness)? of breath|gasping/u,
-  /(?:बाएं|बायें|बाये|left)\s*(?:हाथ|बांह|बाँह|arm|haath|hath).{0,20}(?:दर्द|pain|dard)/u,
+];
+// Severe breathing difficulty is an emergency but not specific to the heart,
+// so on its own it gets the general emergency message.
+const BREATHING_SIGNS = [
+  /(?:साँस|सांस|श्वास).{0,25}(?:नहीं|मुश्किल|दिक्कत|तकलीफ|रुक|अटक)|दम\s*घुट/u,
+  /\b(?:saans|saas)\b.{0,30}(?:nahi|nahin|ruk|atak|mushkil|dikkat|taklif|takleef|ghut)|dam\s*ghut/u,
+  /can(?:not|'t| not) breathe|unable to breathe|not breathing|struggling to breathe|hard to breathe|trouble breathing|gasping/u,
 ];
 const STROKE_SIGNS = [
   /stroke|स्ट्रोक|लकवा|लकवे|lakwa|lakva|paralys|फालिज|falij/u,
-  /(?:अचानक|achanak|sudden(?:ly)?|बहुत\s*तेज|bahut\s*tez|severe).{0,25}(?:सिरदर्द|सिर\s*(?:में\s*)?दर्द|sir\s*(?:me|mein)?\s*dard|sirdard|headache)/u,
+  /(?:अचानक|achanak|sudden(?:ly)?).{0,25}(?:तेज\s*)?(?:सिरदर्द|सिर\s*(?:में\s*)?दर्द|sir\s*(?:me|mein)?\s*dard|sirdard|headache)/u,
   /(?:संतुलन|santulan|balance).{0,20}(?:बिगड|खो|bigad|kho|lost|loss|losing)|(?:अचानक|achanak|sudden(?:ly)?).{0,15}(?:गिर|gir|fell|fall|चक्कर|chakkar|dizz)/u,
   /(?:अचानक|achanak|sudden(?:ly)?).{0,25}(?:धुंधला|dhundhla|blur|दिखाई\s*(?:देना\s*)?बंद|dikhai\s*(?:dena\s*)?band|vision)|(?:एक\s*(?:आँख|आंख)|ek\s*aankh|one\s*eye).{0,25}(?:दिख|dikh|see|vision|धुंधला|dhundhla|blur)|दिखाई\s*देना\s*बंद|lost.{0,10}vision/u,
   /(?:आवाज|awaz|awaaz|aawaz).{0,10}(?:चली|बंद|chali|band)|बोलने\s*में\s*(?:कठिनाई|दिक्कत|तकलीफ|परेशानी)|bolne\s*(?:me|mein)\s*(?:dikkat|taklif|pareshani|mushkil)|बोली\s*लडखडा|boli\s*ladkhad|slurred|trouble speaking|difficulty speaking|can'?t speak|बात\s*समझने\s*में|samajhne\s*(?:me|mein)\s*(?:dikkat|pareshani)/u,
@@ -197,15 +201,20 @@ const ASKS_ABOUT_SIGNS =
   /लक्षण|संकेत|पहचान|symptoms?|signs?|lakshan|sanket|nishani|pehchan/u;
 
 /**
- * HEART_ATTACK or STROKE when the text names one of that condition's warning
- * signs; OTHER when it names both (VDA cannot tell which); null for neither.
+ * HEART_ATTACK or STROKE when the text names one of that condition's alarming
+ * signs; OTHER when it names both (VDA cannot tell which) or only severe
+ * breathing difficulty; null for none.
  */
 export function emergencyKind(text: string): EmergencyKind | null {
   const input = withoutNukta(text.toLowerCase());
   const heart = HEART_SIGNS.some((pattern) => pattern.test(input));
   const stroke = STROKE_SIGNS.some((pattern) => pattern.test(input));
   if (heart && stroke) return 'OTHER';
-  return heart ? 'HEART_ATTACK' : stroke ? 'STROKE' : null;
+  if (heart) return 'HEART_ATTACK';
+  if (stroke) return 'STROKE';
+  return BREATHING_SIGNS.some((pattern) => pattern.test(input))
+    ? 'OTHER'
+    : null;
 }
 
 /**

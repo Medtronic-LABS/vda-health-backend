@@ -87,6 +87,12 @@ const QUESTIONS = [
   ['r3-side-effect', 'medicine', 'Mujhe BP ki dawai se side effect ho raha hai, kya karun?'],
   ['r3-still-high', 'medicine', 'Dawai lene ke baad bhi meri sugar zyada aa rahi hai'],
   ['r3-dialysis', 'scheme', 'Faridabad mein muft dialysis kahan hota hai?'],
+  // Dr. Garima, 8 Nov 2026: general signs alone must not get the heart-attack or stroke reply.
+  ['r4-breathless-walk', 'education', 'Chalne par meri saans phool jati hai'],
+  ['r4-left-arm', 'education', 'Mere left arm mein dard hai'],
+  ['r4-headache', 'education', 'Bahut tez sir dard ho raha hai'],
+  ['r4-cannot-breathe', 'emergency', 'Mujhe saans lene mein bahut dikkat ho rahi hai'],
+  ['r4-still-high-bp', 'medicine', 'Dawai lene ke baad bhi mera BP high rehta hai'],
 ];
 
 const DEAD_ENDS = [

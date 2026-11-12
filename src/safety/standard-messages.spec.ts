@@ -4,6 +4,7 @@ import {
   emergencyKind,
   emergencyMessage,
   medicineChangeMessage,
+  STILL_HIGH_ON_MEDICINES_MESSAGE,
 } from './standard-messages';
 
 describe('standard medicine messages (clinical review)', () => {
@@ -52,7 +53,9 @@ describe('heart attack and stroke warning signs (clinical review round 3)', () =
   it.each([
     ['मेरे सीने में दबाव है', 'HEART_ATTACK'],
     ['Chest mein bahut dard ho raha hai', 'HEART_ATTACK'],
-    ['मुझे साँस लेने में तकलीफ हो रही है', 'HEART_ATTACK'],
+    ['Saans lene mein dikkat aur seene mein dard', 'HEART_ATTACK'],
+    // Severe breathlessness alone is an emergency, but not specific to the heart.
+    ['मुझे साँस लेने में तकलीफ हो रही है', 'OTHER'],
     ['Heart attack ke symptoms kya hain?', 'HEART_ATTACK'],
     ['Dil ke daure ke lakshan batao', 'HEART_ATTACK'],
     ['Lakwa ke symptoms kya hain?', 'STROKE'],
@@ -72,12 +75,23 @@ describe('heart attack and stroke warning signs (clinical review round 3)', () =
     'Kabhi kabhi chakkar aate hain',
     'Back pain since yesterday',
     'Meri aankhon se dhundhla dikhta hai',
+    // General signs Dr. Garima ruled out on 8 Nov 2026.
+    'चलने पर साँस फूल जाती है',
+    'Mere left arm mein dard hai',
+    'Bahut tez sir dard ho raha hai',
   ])(
     'does not treat a common complaint alone as heart attack or stroke: %s',
     (text) => {
       expect(emergencyKind(text)).toBeNull();
     },
   );
+
+  it('gives her wording when BP or sugar stays high on medicines', () => {
+    expect(STILL_HIGH_ON_MEDICINES_MESSAGE.hi).toBe(
+      'अगर दवा लेने के बाद भी आपका बीपी/शुगर ज़्यादा है, तो नज़दीकी डॉक्टर या सीएचओ से मिलें। वे आपकी स्थिति के अनुसार दवा या उसकी खुराक बदल सकते हैं। डॉक्टर की सलाह के बिना दवा न बदलें, न बंद करें और न ही खुराक बढ़ाएँ।',
+    );
+    expect(STILL_HIGH_ON_MEDICINES_MESSAGE.hi).not.toContain('दुष्प्रभाव');
+  });
 
   it('gives her heart attack reply, number first', () => {
     expect(emergencyMessage('मेरे सीने में बहुत दर्द है', true)).toBe(
